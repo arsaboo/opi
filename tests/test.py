@@ -225,7 +225,7 @@ class ApiTestCase(unittest.TestCase):
 
     @patch('api.Api.connectClient', MockConnectClientCoverageApi)
     @patch('alert.botAlert', 'console')
-    @patch('api.ameritradeAccountId', '11111')
+    @patch('api.SchwabAccountID', '11111')
     def test_coverage_api(self):
         apiObj = api.Api('123', '456')
 

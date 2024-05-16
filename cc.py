@@ -1,4 +1,5 @@
-from configuration import configuration, dbName, debugEverythingNeedsRolling
+from configuration import configuration, dbName, debugEverythingNeedsRolling, AutoTrade
+from support import ccExpDaysOffset
 from optionChain import OptionChain
 from statistics import median
 from tinydb import TinyDB, Query
@@ -136,8 +137,7 @@ def writeCcs(api):
             if not api.checkAccountHasEnoughToCover(asset, existingSymbol, amountToBuyBack, amountToSell, new['contract']['strike'], new['date']):
                 return alert.botFailed(asset, 'The account doesn\'t have enough shares or options to cover selling '
                                        + str(amountToSell) + ' cc(\'s)')
-
-            writeCc(api, asset, new, existing, existingPremium, amountToBuyBack, amountToSell)
+            writeCc(api, asset, new, existing, existingPremium, amountToBuyBack, amountToSell, autoTrade=AutoTrade)
         else:
             print('Nothing to write ...')
 
@@ -147,15 +147,20 @@ def needsRolling(cc):
         return True
 
     # needs rolling on date BEFORE expiration (if the market is closed, it will trigger ON expiration date)
-    nowPlusOffset = (datetime.datetime.utcnow() + datetime.timedelta(days=support.ccExpDaysOffset)).strftime('%Y-%m-%d')
+    nowPlusOffset = (datetime.datetime() + datetime.timedelta(days=ccExpDaysOffset)).strftime('%Y-%m-%d')
 
     return nowPlusOffset >= cc['expiration']
 
 
-def writeCc(api, asset, new, existing, existingPremium, amountToBuyBack, amountToSell, retry=0, partialContractsSold=0):
+def writeCc(api, asset, new, existing, existingPremium, amountToBuyBack, amountToSell, retry=0, partialContractsSold=0, autoTrade = True):
     maxRetries = 75
     # lower the price by 1% for each retry if we couldn't get filled
     orderPricePercentage = 100 - retry
+    if not autoTrade:
+        confirmation = input("Do you want to place the trade? (yes/no): ")
+        if confirmation.lower() != "yes":
+            print("Trade cancelled.")
+            return
 
     if retry > maxRetries:
         return alert.botFailed(asset, 'Order cant be filled, tried with ' + str(orderPricePercentage + 1) + '% of the price.')

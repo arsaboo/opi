@@ -7,13 +7,14 @@ import alert
 from configuration import dbName
 
 # how many days before expiration we close the contracts
-ccExpDaysOffset = 1
+ccExpDaysOffset = 0
 
 defaultWaitTime = 3600
 
+
 def validDateFormat(date):
     try:
-        datetime.datetime.strptime(date, '%Y-%m-%d')
+        datetime.datetime.strptime(date, "%Y-%m-%d")
 
         return True
     except ValueError:
@@ -21,7 +22,7 @@ def validDateFormat(date):
 
 
 def getNewCcExpirationDate():
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now()
     now = now.replace(tzinfo=datetime.timezone.utc)
 
     third = getThirdFridayOfMonth(now)
@@ -48,9 +49,11 @@ def getThirdFridayOfMonth(monthDate):
 
 
 def getDeltaDiffNowTomorrow1Am():
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now()
 
-    tomorrow = datetime.datetime.combine(now.date(), datetime.time(0, 0)) + datetime.timedelta(days=1, hours=1)
+    tomorrow = datetime.datetime.combine(
+        now.date(), datetime.time(1, 0)
+    ) + datetime.timedelta(days=1)
 
     delta = tomorrow - now
 
@@ -65,15 +68,21 @@ def getDeltaDiffNowNextRollDate1Am():
     if not soldCalls:
         return None
 
-    soldCalls = sorted(soldCalls, key=lambda d: d['expiration'])
+    soldCalls = sorted(soldCalls, key=lambda d: d["expiration"])
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime()
 
-    if now.strftime('%Y-%m-%d') >= soldCalls[0]['expiration']:
+    if now.strftime("%Y-%m-%d") >= soldCalls[0]["expiration"]:
         # This call should've been rolled (this should never happen)
-        return alert.botFailed(None, 'Unrolled cc found in database, manual review required.')
+        return alert.botFailed(
+            None, "Unrolled cc found in database, manual review required."
+        )
 
-    expDate = datetime.datetime.strptime(soldCalls[0]['expiration'], '%Y-%m-%d') - datetime.timedelta(days=ccExpDaysOffset) + datetime.timedelta(hours=1)
+    expDate = (
+        datetime.datetime.strptime(soldCalls[0]["expiration"], "%Y-%m-%d")
+        - datetime.timedelta(days=ccExpDaysOffset)
+        + datetime.timedelta(hours=1)
+    )
 
     delta = expDate - now
 

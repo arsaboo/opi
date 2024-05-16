@@ -1,11 +1,14 @@
-apiKey = ''  # create an app on https://developer.tdameritrade.com/ to get one
+apiKey = ''  # create an app on https://developer.schwab.com/ to get one
 apiRedirectUri = 'https://localhost'
-ameritradeAccountId = ''
+SchwabAccountID = ''
+appSecret = ''
 
 dbName = 'db.json'
 
 # console, email ### where to alert regarding errors or order fills
 botAlert = 'console'
+loggingLevel = 'ERROR'
+AutoTrade = False
 
 configuration = {
     'QQQ': {
