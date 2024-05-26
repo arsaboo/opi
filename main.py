@@ -1,11 +1,18 @@
-from cc import writeCcs
+from cc import writeCcs, RollSPX
 import time
-from configuration import apiKey, apiRedirectUri, appSecret, debugMarketOpen, loggingLevel
+from configuration import (
+    apiKey,
+    apiRedirectUri,
+    appSecret,
+    debugMarketOpen,
+    loggingLevel,
+)
 from api import Api
-import datetime
+from datetime import datetime
 import alert
 import support
 import logging
+from optionChain import OptionChain
 
 logger = logging.getLogger(__name__)
 stream_handler = logging.StreamHandler()
@@ -27,40 +34,64 @@ try:
         execWindow = api.getOptionExecutionWindow()
         rollDate1Am = support.getDeltaDiffNowNextRollDate1Am()
         tomorrow1Am = support.getDeltaDiffNowTomorrow1Am()
-        logger.info(f"Execution Window: {execWindow}, Roll Date: {rollDate1Am}, Tomorrow: {tomorrow1Am}")
+        shorts = api.updateShortPosition()
+        logger.info(
+            f"Execution Window: {execWindow}, Roll Date: {rollDate1Am}, Tomorrow: {tomorrow1Am}"
+        )
+        for short in shorts:
+            # check if any option is expiring today
+            dte = (
+                datetime.strptime(short["expiration"], "%Y-%m-%d") - datetime.now()
+            ).days
+            # short = {'stockSymbol': '$SPX', 'optionSymbol': 'SPXW  240528C05250000', 'expiration': '2024-05-28', 'count': 1.0, 'strike': '5250', 'receivedPremium': 72.4897}
+
+            if short["stockSymbol"] == "$SPX" and dte <= 1:
+                RollSPX(api, short)
+            elif short["stockSymbol"] != "$SPX":
+                # end the program
+                break
+
+
+        if execWindow["openDate"]:
+
+            break
 
         if rollDate1Am is not None and tomorrow1Am < rollDate1Am:
             # we don't need to do anything, but we are making a call every day to make sure the refresh token stays valid
-            print('Token refreshed, waiting for roll date in %s' % rollDate1Am)
+            print("Token refreshed, waiting for roll date in %s" % rollDate1Am)
 
             time.sleep(tomorrow1Am.total_seconds())
         else:
-            if debugMarketOpen or execWindow['open']:
-                print('Market open, running the program now ...')
-                writeCcs(api)
+            if debugMarketOpen or execWindow["open"]:
+                print("Market open, running the program now ...")
+
+                # writeCcs(api)
 
                 nextRollDate = support.getDeltaDiffNowNextRollDate1Am()
 
-                print('All done. The next roll date is in %s' % nextRollDate)
+                print("All done. The next roll date is in %s" % nextRollDate)
 
                 # we are making a call every day to make sure the refresh token stays valid
                 time.sleep(tomorrow1Am.total_seconds())
             else:
-                if execWindow['openDate']:
-                    print('Waiting for execution window to open ...')
+                if execWindow["openDate"]:
+                    print("Waiting for execution window to open ...")
 
-                    delta = execWindow['openDate'] - execWindow['nowDate']
+                    delta = execWindow["openDate"] - execWindow["nowDate"]
 
                     if delta > datetime.timedelta(0):
-                        print('Window open in: %s. waiting ...' % delta)
+                        print("Window open in: %s. waiting ..." % delta)
                         time.sleep(delta.total_seconds())
                     else:
                         # we are past open date, but the market is not open
-                        print('Market closed already. Rechecking tomorrow (in %s)' % tomorrow1Am)
+                        print(
+                            "Market closed already. Rechecking tomorrow (in %s)"
+                            % tomorrow1Am
+                        )
 
                         time.sleep(tomorrow1Am.total_seconds())
                 else:
-                    print('The market is closed today, rechecking in 1 hour ...')
+                    print("The market is closed today, rechecking in 1 hour ...")
                     time.sleep(support.defaultWaitTime)
 except Exception as e:
-    alert.botFailed(None, 'Uncaught exception: ' + str(e))
+    alert.botFailed(None, "Uncaught exception: " + str(e))

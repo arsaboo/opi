@@ -1,15 +1,17 @@
 import math
 import os
 import pytz
+import json
 from dateutil import tz
+from tinydb import TinyDB, Query
 import schwab
 from schwab import auth
 from schwab.utils import Utils
-from configuration import SchwabAccountID, debugCanSendOrders
+from configuration import SchwabAccountID, debugCanSendOrders, dbName
 import datetime
 from statistics import median
 import alert
-from support import validDateFormat
+from support import validDateFormat, extract_date, extract_strike_price
 
 
 class Api:
@@ -33,7 +35,12 @@ class Api:
                 app_secret=self.appSecret,
                 token_path=self.tokenPath,
             )
-        except FileNotFoundError:
+            self.connectClient.get_account_numbers()
+        except Exception:  # Catch all exceptions
+            # Delete the existing token file
+            if os.path.exists(self.tokenPath):  # Corrected here
+                os.remove(self.tokenPath)  # And here
+            # Initiate the manual flow
             self.connectClient = auth.client_from_manual_flow(
                 api_key=self.apiKey,
                 app_secret=self.appSecret,
@@ -66,12 +73,13 @@ class Api:
 
         data = r.json()
         lastPrice = 0
+        print(data)
 
         try:
-            if data[asset]["assetType"] == "OPTION":
+            if data[asset]["assetMainType"] == "OPTION":
                 lastPrice = median([data[asset]["bidPrice"], data[asset]["askPrice"]])
             else:
-                lastPrice = data[asset]["lastPrice"]
+                lastPrice = data[asset]["quote"]["lastPrice"]
         except KeyError:
             return alert.botFailed(asset, "Wrong data from api when getting ATM price")
 
@@ -85,7 +93,6 @@ class Api:
             asset,
             contract_type=self.connectClient.Options.ContractType.CALL,
             strike_count=strikes,
-            include_quotes="TRUE",
             strategy=self.connectClient.Options.Strategy.SINGLE,
             interval=None,
             strike=None,
@@ -117,7 +124,11 @@ class Api:
         data = r.json()
 
         try:
+            if not data.get("option").get("option").get("isOpen"):
+                return {"open": False, "openDate": None, "nowDate": now}
+
             marketKey = list(data["option"].keys())[0]
+
 
             sessionHours = data["option"][marketKey]["sessionHours"]
 
@@ -287,7 +298,7 @@ class Api:
         # we check here if the user has
         # amountOfHundreds * 100 shares or amountOfHundreds options lower than new strike in acc (and further out)
         r = self.connectClient.get_account(
-            SchwabAccountID, fields=schwab.client.Client.Account.Fields.POSITIONS
+            self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
         )
 
         assert r.status_code == 200, r.raise_for_status()
@@ -368,16 +379,16 @@ class Api:
             return False
 
     def getOptionExpirationDateAndStrike(self, asset):
-        r = self.connectClient.get_quote(asset)
+        r = self.connectClient.get_quotes(asset)
 
         assert r.status_code == 200, r.raise_for_status()
 
         data = r.json()
 
         try:
-            year = str(data[asset]["expirationYear"])
-            month = str(data[asset]["expirationMonth"]).zfill(2)
-            day = str(data[asset]["expirationDay"]).zfill(2)
+            year = str(data[asset]["reference"]["expirationYear"])
+            month = str(data[asset]["reference"]["expirationMonth"]).zfill(2)
+            day = str(data[asset]["reference"]["expirationDay"]).zfill(2)
             expiration = year + "-" + month + "-" + day
 
             if not validDateFormat(expiration):
@@ -385,8 +396,36 @@ class Api:
                     asset, "Incorrect date format from api: " + expiration
                 )
 
-            return {"strike": data[asset]["strikePrice"], "expiration": expiration}
+            return {
+                "strike": data[asset]["reference"]["strikePrice"],
+                "expiration": expiration,
+            }
         except KeyError:
             return alert.botFailed(
                 asset, "Wrong data from api when getting option expiry data"
             )
+
+    def updateShortPosition(self):
+        #get account positions
+        r = self.connectClient.get_account(
+            self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
+        )
+        return(self.optionPositions(r.text))
+
+    def optionPositions(self, data):
+        data = json.loads(data)
+        positions = data["securitiesAccount"]["positions"]
+        shortPositions = []
+        for position in positions:
+            if position["instrument"]["assetType"] != "OPTION" and position["instrument"].get("putCall") != "CALL" and position["shortQuantity"] == 0:
+                continue
+            entry = {
+                "stockSymbol": position["instrument"].get("underlyingSymbol"),
+                "optionSymbol": position["instrument"]["symbol"],
+                "expiration": extract_date(position["instrument"]["description"]),
+                "count": position["shortQuantity"],
+                "strike": extract_strike_price(position["instrument"]["description"]),
+                "receivedPremium": position["averagePrice"],
+            }
+            shortPositions.append(entry)
+        return shortPositions

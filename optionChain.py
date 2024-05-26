@@ -1,6 +1,7 @@
 from statistics import median
 from support import validDateFormat
 import alert
+from datetime import datetime, timedelta
 
 
 class OptionChain:
@@ -13,8 +14,9 @@ class OptionChain:
         self.daysLessAllowed = daysLessAllowed
 
     def get(self):
-        apiData = self.api.getOptionChain(self.asset, self.strikes, self.date, self.daysLessAllowed)
-
+        apiData = self.api.getOptionChain(
+            self.asset, self.strikes, self.date, self.daysLessAllowed
+        )
         return self.mapApiData(apiData)
 
     def mapApiData(self, data):
@@ -22,54 +24,54 @@ class OptionChain:
         map = []
 
         try:
-            tmp = data['callExpDateMap']
+            tmp = data["callExpDateMap"]
             for key, value in tmp.items():
-                split = key.split(':')
+                split = key.split(":")
 
                 date = split[0]
                 days = int(split[1])
 
                 if not validDateFormat(date):
-                    return alert.botFailed(self.asset, 'Incorrect date format from api: ' + date)
+                    return alert.botFailed(
+                        self.asset, "Incorrect date format from api: " + date
+                    )
 
                 contracts = []
 
                 for contractKey, contractValue in value.items():
-                    contracts.extend([
-                        {
-                            'symbol': contractValue[0]['symbol'],
-                            'strike': contractValue[0]['strikePrice'],
-                            'bid': contractValue[0]['bid'],
-                            'ask': contractValue[0]['ask'],
-                        }
-                    ])
+                    contracts.extend(
+                        [
+                            {
+                                "symbol": contractValue[0]["symbol"],
+                                "strike": contractValue[0]["strikePrice"],
+                                "bid": contractValue[0]["bid"],
+                                "ask": contractValue[0]["ask"],
+                                "delta": contractValue[0]["delta"],
+                                "optionRoot": contractValue[0]["optionRoot"],
+                            }
+                        ]
+                    )
 
-                map.extend([
-                    {
-                        'date': date,
-                        'days': days,
-                        'contracts': contracts
-                    }
-                ])
+                map.extend([{"date": date, "days": days, "contracts": contracts}])
 
         except KeyError:
-            return alert.botFailed(self.asset, 'Wrong data from api')
+            return alert.botFailed(self.asset, "Wrong data from api")
 
         if map:
-            map = sorted(map, key=lambda d: d['days'])
+            map = sorted(map, key=lambda d: d["days"])
 
         return map
 
     def sortDateChain(self, chain):
         # ensure this is sorted by strike
-        return sorted(chain, key=lambda d: d['strike'])
+        return sorted(chain, key=lambda d: d["strike"])
 
     def getContractFromDateChain(self, strike, chain):
         chain = self.sortDateChain(chain)
 
         # get first contract at or above strike
         for contract in chain:
-            if contract['strike'] >= strike:
+            if contract["strike"] >= strike:
                 return contract
 
         return None
@@ -79,13 +81,13 @@ class OptionChain:
 
         # highest strike to lowest
         for contract in reversed(chain):
-            if contract['strike'] > maxStrike:
+            if contract["strike"] > maxStrike:
                 continue
 
-            if contract['strike'] < minStrike:
+            if contract["strike"] < minStrike:
                 break
 
-            if median([contract['bid'], contract['ask']]) >= minYield:
+            if median([contract["bid"], contract["ask"]]) >= minYield:
                 return contract
 
         return None

@@ -1,3 +1,4 @@
+import re
 import datetime
 from dateutil.relativedelta import relativedelta
 from tinydb import TinyDB
@@ -12,6 +13,14 @@ ccExpDaysOffset = 0
 defaultWaitTime = 3600
 
 
+def extract_date(s):
+    match = re.search(r'\d{2}/\d{2}/\d{4}', s)
+    if match:
+        date = datetime.datetime.strptime(match.group(), '%m/%d/%Y')
+        return date.strftime('%Y-%m-%d')
+    else:
+        return None
+
 def validDateFormat(date):
     try:
         datetime.datetime.strptime(date, "%Y-%m-%d")
@@ -20,6 +29,9 @@ def validDateFormat(date):
     except ValueError:
         return False
 
+def extract_strike_price(s):
+    match = re.search(r'\$\d+', s)
+    return match.group()[1:] if match else None
 
 def getNewCcExpirationDate():
     now = datetime.datetime.now()
