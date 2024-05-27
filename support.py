@@ -10,7 +10,7 @@ from configuration import dbName
 # how many days before expiration we close the contracts
 ccExpDaysOffset = 0
 
-defaultWaitTime = 3600
+defaultWaitTime = 1799
 
 
 def extract_date(s):

@@ -48,6 +48,7 @@ class OptionChain:
                                 "ask": contractValue[0]["ask"],
                                 "delta": contractValue[0]["delta"],
                                 "optionRoot": contractValue[0]["optionRoot"],
+                                "underlying": contractValue[0]["optionDeliverablesList"][0]["symbol"],
                             }
                         ]
                     )

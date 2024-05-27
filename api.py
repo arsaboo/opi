@@ -73,11 +73,12 @@ class Api:
 
         data = r.json()
         lastPrice = 0
-        print(data)
 
         try:
             if data[asset]["assetMainType"] == "OPTION":
-                lastPrice = median([data[asset]["bidPrice"], data[asset]["askPrice"]])
+                lastPrice = median(
+                    [data[asset]["quote"]["bidPrice"], data[asset]["quote"]["askPrice"]]
+                )
             else:
                 lastPrice = data[asset]["quote"]["lastPrice"]
         except KeyError:
@@ -128,7 +129,6 @@ class Api:
                 return {"open": False, "openDate": None, "nowDate": now}
 
             marketKey = list(data["option"].keys())[0]
-
 
             sessionHours = data["option"][marketKey]["sessionHours"]
 
@@ -247,11 +247,12 @@ class Api:
         return order_id
 
     def checkOrder(self, orderId):
-        r = self.connectClient.get_order(orderId, SchwabAccountID)
+        r = self.connectClient.get_order(orderId, self.getAccountHash())
 
         assert r.status_code == 200, r.raise_for_status()
 
         data = r.json()
+        print("Order fill data: ", data)
         complexOrderStrategyType = None
 
         try:
@@ -281,7 +282,7 @@ class Api:
         }
 
     def cancelOrder(self, orderId):
-        r = self.connectClient.cancel_order(orderId, SchwabAccountID)
+        r = self.connectClient.cancel_order(orderId, self.getAccountHash())
 
         # throws error if cant cancel (code 400 - 404)
         assert r.status_code == 200, r.raise_for_status()
@@ -372,7 +373,6 @@ class Api:
                         position["shortQuantity"] >= amount
                         and position["longQuantity"] == 0
                     )
-
             return False
 
         except KeyError:
@@ -406,18 +406,22 @@ class Api:
             )
 
     def updateShortPosition(self):
-        #get account positions
+        # get account positions
         r = self.connectClient.get_account(
             self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
         )
-        return(self.optionPositions(r.text))
+        return self.optionPositions(r.text)
 
     def optionPositions(self, data):
         data = json.loads(data)
         positions = data["securitiesAccount"]["positions"]
         shortPositions = []
         for position in positions:
-            if position["instrument"]["assetType"] != "OPTION" and position["instrument"].get("putCall") != "CALL" and position["shortQuantity"] == 0:
+            if (
+                position["instrument"]["assetType"] != "OPTION"
+                and position["instrument"].get("putCall") != "CALL"
+                and position["shortQuantity"] == 0
+            ):
                 continue
             entry = {
                 "stockSymbol": position["instrument"].get("underlyingSymbol"),
@@ -429,3 +433,50 @@ class Api:
             }
             shortPositions.append(entry)
         return shortPositions
+
+    def rollOver(self, oldSymbol, newSymbol, amount, price):
+        # init a new position, sell to open,
+        # price is the net amount to be credited (received) for the roll
+        order = schwab.orders.generic.OrderBuilder()
+
+        orderType = schwab.orders.common.OrderType.NET_CREDIT
+
+        if price < 0:
+            price = -price
+            orderType = schwab.orders.common.OrderType.NET_DEBIT
+
+        order.add_option_leg(
+            schwab.orders.common.OptionInstruction.BUY_TO_CLOSE,
+            oldSymbol,
+            amount,
+        ).add_option_leg(
+            schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
+            newSymbol,
+            amount,
+        ).set_duration(
+            schwab.orders.common.Duration.DAY
+        ).set_session(
+            schwab.orders.common.Session.NORMAL
+        ).set_price(
+            str(price)
+        ).set_order_type(
+            orderType
+        ).set_order_strategy_type(
+            schwab.orders.common.OrderStrategyType.SINGLE
+        ).set_complex_order_strategy_type(
+            schwab.orders.common.ComplexOrderStrategyType.DIAGONAL
+        )
+
+        if not debugCanSendOrders:
+            print("Order not placed: ", order.build())
+            exit()
+        try:
+            r = self.connectClient.place_order(self.getAccountHash(), order)
+        except Exception as e:
+            print(e)
+            return alert.botFailed(None, "Error while placing the roll order")
+
+        order_id = Utils(self.connectClient, self.getAccountHash()).extract_order_id(r)
+        assert order_id is not None
+
+        return order_id

@@ -1,4 +1,4 @@
-from cc import writeCcs, RollSPX
+from cc import RollSPX, RollCalls
 import time
 from configuration import (
     apiKey,
@@ -43,14 +43,16 @@ try:
             dte = (
                 datetime.strptime(short["expiration"], "%Y-%m-%d") - datetime.now()
             ).days
-            # short = {'stockSymbol': '$SPX', 'optionSymbol': 'SPXW  240528C05250000', 'expiration': '2024-05-28', 'count': 1.0, 'strike': '5250', 'receivedPremium': 72.4897}
-
-            if short["stockSymbol"] == "$SPX" and dte <= 1:
-                RollSPX(api, short)
-            elif short["stockSymbol"] != "$SPX":
-                # end the program
-                break
-
+            #short = {'stockSymbol': 'WELL', 'optionSymbol': 'WELL  240528C05250000', 'expiration': '2024-05-28', 'count': 1.0, 'strike': '5250', 'receivedPremium': 72.4897}
+            # short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00400000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '400', 'receivedPremium': 72.4897}
+            if dte <= 1:
+                print("Option expiring today: ", short)
+                if short["stockSymbol"] == "$SPX":
+                    RollSPX(api, short)
+                else:
+                    RollCalls(api, short)
+                    # end the program
+                    continue
 
         if execWindow["openDate"]:
 
@@ -91,7 +93,7 @@ try:
 
                         time.sleep(tomorrow1Am.total_seconds())
                 else:
-                    print("The market is closed today, rechecking in 1 hour ...")
+                    print("The market is closed today, rechecking in 30 minutes ...")
                     time.sleep(support.defaultWaitTime)
 except Exception as e:
     alert.botFailed(None, "Uncaught exception: " + str(e))
