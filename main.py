@@ -38,62 +38,41 @@ try:
         logger.info(
             f"Execution Window: {execWindow}, Roll Date: {rollDate1Am}, Tomorrow: {tomorrow1Am}"
         )
-        for short in shorts:
-            # check if any option is expiring today
-            dte = (
-                datetime.strptime(short["expiration"], "%Y-%m-%d") - datetime.now()
-            ).days
-            #short = {'stockSymbol': 'WELL', 'optionSymbol': 'WELL  240528C05250000', 'expiration': '2024-05-28', 'count': 1.0, 'strike': '5250', 'receivedPremium': 72.4897}
-            # short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00400000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '400', 'receivedPremium': 72.4897}
-            if dte <= 1:
-                print("Option expiring today: ", short)
-                if short["stockSymbol"] == "$SPX":
-                    RollSPX(api, short)
-                else:
-                    RollCalls(api, short)
-                    # end the program
-                    continue
-
-        if execWindow["openDate"]:
-
-            break
-
-        if rollDate1Am is not None and tomorrow1Am < rollDate1Am:
-            # we don't need to do anything, but we are making a call every day to make sure the refresh token stays valid
-            print("Token refreshed, waiting for roll date in %s" % rollDate1Am)
-
-            time.sleep(tomorrow1Am.total_seconds())
-        else:
-            if debugMarketOpen or execWindow["open"]:
-                print("Market open, running the program now ...")
-
-                # writeCcs(api)
-
-                nextRollDate = support.getDeltaDiffNowNextRollDate1Am()
-
-                print("All done. The next roll date is in %s" % nextRollDate)
-
-                # we are making a call every day to make sure the refresh token stays valid
-                time.sleep(tomorrow1Am.total_seconds())
+        if debugMarketOpen or execWindow["open"]:
+            if not execWindow["open"]:
+                print("Market is closed, but the program will work in debug mode.")
             else:
-                if execWindow["openDate"]:
-                    print("Waiting for execution window to open ...")
-
-                    delta = execWindow["openDate"] - execWindow["nowDate"]
-
-                    if delta > datetime.timedelta(0):
-                        print("Window open in: %s. waiting ..." % delta)
-                        time.sleep(delta.total_seconds())
+                print("Market open, running the program now ...")
+            for short in shorts:
+                # check if any option is expiring today
+                dte = (
+                    datetime.strptime(short["expiration"], "%Y-%m-%d") - datetime.now()
+                ).days
+                #short = {'stockSymbol': 'WELL', 'optionSymbol': 'WELL  240528C05250000', 'expiration': '2024-05-28', 'count': 1.0, 'strike': '5250', 'receivedPremium': 72.4897}
+                #short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00250000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '250', 'receivedPremium': 72.4897}
+                if dte <= 1:
+                    print(f"{short['count']} {short['stockSymbol']} expiring today: {short['optionSymbol']}")
+                    if short["stockSymbol"] == "$SPX":
+                        RollSPX(api, short)
                     else:
-                        # we are past open date, but the market is not open
-                        print(
-                            "Market closed already. Rechecking tomorrow (in %s)"
-                            % tomorrow1Am
-                        )
-
-                        time.sleep(tomorrow1Am.total_seconds())
+                        RollCalls(api, short)
+        else:
+            if execWindow["openDate"]:
+                print("Waiting for execution window to open ...")
+                delta = execWindow["openDate"] - execWindow["nowDate"]
+                if delta > datetime.timedelta(0):
+                    print("Window open in: %s. waiting ..." % delta)
+                    time.sleep(delta.total_seconds())
                 else:
-                    print("The market is closed today, rechecking in 30 minutes ...")
-                    time.sleep(support.defaultWaitTime)
+                    print(
+                        "Market closed already. Rechecking tomorrow (in %s)" % tomorrow1Am
+                    )
+                    time.sleep(tomorrow1Am.total_seconds())
+            else:
+                print("The market is closed today, rechecking in 30 minutes ...")
+                time.sleep(support.defaultWaitTime)
+                execWindow = api.getOptionExecutionWindow()
+        print("Sleeping for 60 seconds...")
+        time.sleep(60)
 except Exception as e:
     alert.botFailed(None, "Uncaught exception: " + str(e))

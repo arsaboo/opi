@@ -1,3 +1,4 @@
+from inputimeout import inputimeout, TimeoutOccurred
 from configuration import configuration
 from datetime import datetime, timedelta
 from optionChain import OptionChain
@@ -12,8 +13,10 @@ class Cc:
         self.asset = asset
 
     def find_new_contract(self, api, existing):
-        toDate = datetime.today() + timedelta(days=90)
-        option_chain = OptionChain(api, self.asset, toDate, 90)
+        days = configuration[self.asset]["maxRollOutWindow"]
+        print(f"Finding new contract for {self.asset} with {days} days to expiry")
+        toDate = datetime.today() + timedelta(days=days)
+        option_chain = OptionChain(api, self.asset, toDate, days)
         chain = option_chain.get()
         roll = find_best_rollover(chain, existing)
         if roll is None:
@@ -51,8 +54,6 @@ def RollSPX(api, short):
     toDate = datetime.today() + timedelta(days=90)
     optionChain = OptionChain(api, short["stockSymbol"], toDate, 90)
     chain = optionChain.get()
-
-    print("Rolling SPX contract: ", short["optionSymbol"])
     prem_short_contract = get_median_price(short["optionSymbol"], chain)
 
     if prem_short_contract is None:
@@ -67,11 +68,24 @@ def RollSPX(api, short):
 
     roll_premium = get_median_price(roll["symbol"], chain)
     increase = round(roll_premium - prem_short_contract, 2)
+    ret = api.getOptionExpirationDateAndStrike(roll["symbol"])
+    ret_expiration = datetime.strptime(ret["expiration"], "%Y-%m-%d")
+    short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d")
+    roll_out_time = ret_expiration - short_expiration
     print(
-        f"Best rollover contract: {roll['symbol']} with premium: {roll_premium} and increase: {increase}"
+        f"Roll: {short['optionSymbol']} -> {roll['symbol']}"
+        f"\n Credit: ${increase}\n Roll-up: ${float(roll['strike']) - float(short['strike'])}"
+        f"\n Roll-out: {roll_out_time.days} days\n Expiration: {ret['expiration']}"
     )
 
-    if input("Do you want to roll over? (yes/no): ").lower() == "yes":
+    try:
+        user_input = inputimeout(
+            prompt="Do you want to place the trade? (yes/no): ", timeout=60
+        ).lower()
+    except TimeoutOccurred:
+        user_input = "no"
+
+    if user_input == "yes":
         roll_contract(api, short, roll, round(increase + 5, 2))
     else:
         print("Roll over cancelled")
@@ -92,11 +106,18 @@ def RollCalls(api, short):
         return
 
     print("The bot wants to write the following contract:")
-    print(new)
     roll_premium = statistics.median([new["bid"], new["ask"]])
     increase = round(roll_premium - existingPremium, 2)
 
     ret = api.getOptionExpirationDateAndStrike(new["symbol"])
+    ret_expiration = datetime.strptime(ret["expiration"], "%Y-%m-%d")
+    short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d")
+    roll_out_time = ret_expiration - short_expiration
+    print(
+        f"Roll: {existingSymbol} -> {new['symbol']}"
+        f"\n Credit: ${increase}\n Roll-up: ${float(new['strike']) - float(short['strike'])}"
+        f"\n Roll-out: {roll_out_time.days} days\n Expiration: {ret['expiration']}"
+    )
 
     if not api.checkAccountHasEnoughToCover(
         short["stockSymbol"],
@@ -111,7 +132,14 @@ def RollCalls(api, short):
             f"The account doesn't have enough shares or options to cover selling {amountToBuyBack} cc(s)",
         )
 
-    if input("Do you want to place the trade? (yes/no): ").lower() == "yes":
+    try:
+        user_input = inputimeout(
+            prompt="Do you want to place the trade? (yes/no): ", timeout=60
+        ).lower()
+    except TimeoutOccurred:
+        user_input = "no"
+
+    if user_input == "yes":
         roll_contract(api, short, new, round(increase + 5, 2))
     else:
         print("Roll over cancelled")

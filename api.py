@@ -252,7 +252,6 @@ class Api:
         assert r.status_code == 200, r.raise_for_status()
 
         data = r.json()
-        print("Order fill data: ", data)
         complexOrderStrategyType = None
 
         try:
