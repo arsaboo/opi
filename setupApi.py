@@ -1,5 +1,5 @@
-from configuration import apiKey, apiRedirectUri, appSecret
 from api import Api
+from configuration import apiKey, apiRedirectUri, appSecret
 
 api = Api(apiKey, apiRedirectUri, appSecret)
 

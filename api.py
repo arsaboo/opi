@@ -1,17 +1,20 @@
+import datetime
+import json
 import math
 import os
-import pytz
-import json
-from dateutil import tz
-from tinydb import TinyDB, Query
+from statistics import median
+
 import schwab
+from dateutil import tz
 from schwab import auth
 from schwab.utils import Utils
-from configuration import SchwabAccountID, debugCanSendOrders, dbName
-import datetime
-from statistics import median
+
 import alert
-from support import validDateFormat, extract_date, extract_strike_price
+from configuration import SchwabAccountID, debugCanSendOrders
+from logger_config import get_logger
+from support import extract_date, extract_strike_price, validDateFormat
+
+logger = get_logger()
 
 
 class Api:
@@ -123,6 +126,7 @@ class Api:
         assert r.status_code == 200, r.raise_for_status()
 
         data = r.json()
+        logger.debug(f"Execution Window: {data}")
 
         try:
             if not data.get("option").get("option").get("isOpen"):
@@ -295,8 +299,6 @@ class Api:
         optionStrikeToCover,
         optionDateToCover,
     ):
-        # we check here if the user has
-        # amountOfHundreds * 100 shares or amountOfHundreds options lower than new strike in acc (and further out)
         r = self.connectClient.get_account(
             self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
         )
@@ -335,9 +337,7 @@ class Api:
                     and position["instrument"]["underlyingSymbol"] == asset
                     and position["instrument"]["putCall"] == "CALL"
                 ):
-                    optionData = self.getOptionExpirationDateAndStrike(
-                        position["instrument"]["symbol"]
-                    )
+                    optionData = self.getOptionDetails(position["instrument"]["symbol"])
                     strike = optionData["strike"]
                     optionDate = optionData["expiration"]
                     amountOpen = int(position["longQuantity"]) - int(
@@ -377,7 +377,7 @@ class Api:
         except KeyError:
             return False
 
-    def getOptionExpirationDateAndStrike(self, asset):
+    def getOptionDetails(self, asset):
         r = self.connectClient.get_quotes(asset)
 
         assert r.status_code == 200, r.raise_for_status()
@@ -398,6 +398,7 @@ class Api:
             return {
                 "strike": data[asset]["reference"]["strikePrice"],
                 "expiration": expiration,
+                "delta": data[asset]["quote"]["delta"],
             }
         except KeyError:
             return alert.botFailed(

@@ -1,11 +1,10 @@
-import re
 import datetime
+import re
+
 from dateutil.relativedelta import relativedelta
-from tinydb import TinyDB
-from configuration import debugEverythingNeedsRolling
 
 import alert
-from configuration import dbName
+
 
 # how many days before expiration we close the contracts
 ccExpDaysOffset = 0
@@ -14,12 +13,13 @@ defaultWaitTime = 1799
 
 
 def extract_date(s):
-    match = re.search(r'\d{2}/\d{2}/\d{4}', s)
+    match = re.search(r"\d{2}/\d{2}/\d{4}", s)
     if match:
-        date = datetime.datetime.strptime(match.group(), '%m/%d/%Y')
-        return date.strftime('%Y-%m-%d')
+        date = datetime.datetime.strptime(match.group(), "%m/%d/%Y")
+        return date.strftime("%Y-%m-%d")
     else:
         return None
+
 
 def validDateFormat(date):
     try:
@@ -29,9 +29,11 @@ def validDateFormat(date):
     except ValueError:
         return False
 
+
 def extract_strike_price(s):
-    match = re.search(r'\$\d+', s)
+    match = re.search(r"\$\d+", s)
     return match.group()[1:] if match else None
+
 
 def getNewCcExpirationDate():
     now = datetime.datetime.now()
@@ -68,37 +70,5 @@ def getDeltaDiffNowTomorrow1Am():
     ) + datetime.timedelta(days=1)
 
     delta = tomorrow - now
-
-    return delta
-
-
-def getDeltaDiffNowNextRollDate1Am():
-    db = TinyDB(dbName)
-    soldCalls = db.all()
-    db.close()
-
-    if not soldCalls:
-        return None
-
-    soldCalls = sorted(soldCalls, key=lambda d: d["expiration"])
-
-    now = datetime.datetime()
-
-    if now.strftime("%Y-%m-%d") >= soldCalls[0]["expiration"]:
-        # This call should've been rolled (this should never happen)
-        return alert.botFailed(
-            None, "Unrolled cc found in database, manual review required."
-        )
-
-    expDate = (
-        datetime.datetime.strptime(soldCalls[0]["expiration"], "%Y-%m-%d")
-        - datetime.timedelta(days=ccExpDaysOffset)
-        + datetime.timedelta(hours=1)
-    )
-
-    delta = expDate - now
-
-    if debugEverythingNeedsRolling:
-        return datetime.timedelta(0)
 
     return delta

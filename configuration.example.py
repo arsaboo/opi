@@ -44,7 +44,9 @@ mailConfig = {
     'password': None,
 }
 
-# don't touch these
+# DEBUG MODES
+
+# To run the program in debug mode. If set to True, the program will run even if the market is closed.
 debugMarketOpen = False
-debugEverythingNeedsRolling = False
+# Can actually place orders. If set to False, the program will only print the orders that would be placed.
 debugCanSendOrders = True

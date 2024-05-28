@@ -1,6 +1,7 @@
-from configuration import botAlert, mailConfig
 import smtplib
 from email.message import EmailMessage
+
+from configuration import botAlert, mailConfig
 
 
 class Mail:
@@ -8,12 +9,12 @@ class Mail:
         msg = EmailMessage()
         msg.set_content(message)
 
-        msg['Subject'] = subject
-        msg['From'] = mailConfig['from']
-        msg['To'] = mailConfig['to']
+        msg["Subject"] = subject
+        msg["From"] = mailConfig["from"]
+        msg["To"] = mailConfig["to"]
 
-        s = smtplib.SMTP(mailConfig['smtp'], mailConfig['port'], None, 3)
-        s.login(mailConfig['username'], mailConfig['password'])
+        s = smtplib.SMTP(mailConfig["smtp"], mailConfig["port"], None, 3)
+        s.login(mailConfig["username"], mailConfig["password"])
 
         try:
             s.send_message(msg)
@@ -23,17 +24,17 @@ class Mail:
 
 
 def alert(asset, message, isError=False):
-    if botAlert == 'email':
+    if botAlert == "email":
         msg = EmailMessage()
         msg.set_content(message)
 
         if isError:
-            subj = 'OPI Error'
+            subj = "OPI Error"
         else:
-            subj = 'OPI Alert'
+            subj = "OPI Alert"
 
         if asset:
-            subj = subj + ', Asset: ' + asset
+            subj = subj + ", Asset: " + asset
 
         mail = Mail()
         mail.send(subj, message)
@@ -42,7 +43,7 @@ def alert(asset, message, isError=False):
             exit(1)
     else:
         if asset:
-            print('Asset: ' + asset)
+            print("Asset: " + asset)
 
         print(message)
 

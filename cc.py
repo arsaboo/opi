@@ -1,11 +1,13 @@
-from inputimeout import inputimeout, TimeoutOccurred
-from configuration import configuration
-from datetime import datetime, timedelta
-from optionChain import OptionChain
 import math
-import time
-import alert
 import statistics
+import time
+from datetime import datetime, timedelta
+
+from inputimeout import TimeoutOccurred, inputimeout
+
+import alert
+from configuration import configuration
+from optionChain import OptionChain
 
 
 class Cc:
@@ -39,7 +41,9 @@ def roll_contract(api, short, roll, order_premium):
             time.sleep(5)
             checkedOrder = api.checkOrder(roll_order_id)
             if checkedOrder["filled"]:
-                print("Order has been filled!")
+                print(
+                    f"Order filled: {roll_order_id}\n Order details: {api.checkOrder(roll_order_id)}"
+                )
                 return
         api.cancelOrder(roll_order_id)
         print("Can't fill order, retrying with lower price ...")
@@ -51,8 +55,9 @@ def roll_contract(api, short, roll, order_premium):
 
 
 def RollSPX(api, short):
-    toDate = datetime.today() + timedelta(days=90)
-    optionChain = OptionChain(api, short["stockSymbol"], toDate, 90)
+    days = configuration[short["stockSymbol"]]["maxRollOutWindow"]
+    toDate = datetime.today() + timedelta(days=days)
+    optionChain = OptionChain(api, short["stockSymbol"], toDate, days)
     chain = optionChain.get()
     prem_short_contract = get_median_price(short["optionSymbol"], chain)
 
@@ -68,7 +73,7 @@ def RollSPX(api, short):
 
     roll_premium = get_median_price(roll["symbol"], chain)
     increase = round(roll_premium - prem_short_contract, 2)
-    ret = api.getOptionExpirationDateAndStrike(roll["symbol"])
+    ret = api.getOptionDetails(roll["symbol"])
     ret_expiration = datetime.strptime(ret["expiration"], "%Y-%m-%d")
     short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d")
     roll_out_time = ret_expiration - short_expiration
@@ -76,6 +81,8 @@ def RollSPX(api, short):
         f"Roll: {short['optionSymbol']} -> {roll['symbol']}"
         f"\n Credit: ${increase}\n Roll-up: ${float(roll['strike']) - float(short['strike'])}"
         f"\n Roll-out: {roll_out_time.days} days\n Expiration: {ret['expiration']}"
+        f"\n Delta: {get_option_delta(short['optionSymbol'], chain)}"
+        f"\n Trade Delta: {get_option_delta(roll['symbol'], chain) - ret['delta']}"
     )
 
     try:
@@ -93,10 +100,12 @@ def RollSPX(api, short):
 
 def RollCalls(api, short):
     cc = Cc(short["stockSymbol"])
+    print("short: ", short)
 
     existingSymbol = short["optionSymbol"]
     amountToBuyBack = short["count"]
     existingPremium = api.getATMPrice(short["optionSymbol"])
+    short["delta"] = api.getOptionDetails(short["optionSymbol"])["delta"]
     print(
         f"Existing symbol: {existingSymbol} Amount to buy back: {amountToBuyBack} Existing premium: {existingPremium}"
     )
@@ -109,7 +118,7 @@ def RollCalls(api, short):
     roll_premium = statistics.median([new["bid"], new["ask"]])
     increase = round(roll_premium - existingPremium, 2)
 
-    ret = api.getOptionExpirationDateAndStrike(new["symbol"])
+    ret = api.getOptionDetails(new["symbol"])
     ret_expiration = datetime.strptime(ret["expiration"], "%Y-%m-%d")
     short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d")
     roll_out_time = ret_expiration - short_expiration
@@ -117,6 +126,8 @@ def RollCalls(api, short):
         f"Roll: {existingSymbol} -> {new['symbol']}"
         f"\n Credit: ${increase}\n Roll-up: ${float(new['strike']) - float(short['strike'])}"
         f"\n Roll-out: {roll_out_time.days} days\n Expiration: {ret['expiration']}"
+        f"\n Delta: {short['delta']}"
+        f"\n Trade Delta: {short['delta'] - ret['delta']}"
     )
 
     if not api.checkAccountHasEnoughToCover(
@@ -164,8 +175,19 @@ def find_best_rollover(data, short_option):
     if short_strike is None or short_median is None or short_expiry is None:
         return None
 
+    # entries = sorted(
+    #     data, key=lambda entry: datetime.strptime(entry["date"], "%Y-%m-%d")
+    # )
     entries = sorted(
-        data, key=lambda entry: datetime.strptime(entry["date"], "%Y-%m-%d")
+        data,
+        key=lambda entry: (
+            datetime.strptime(entry["date"], "%Y-%m-%d"),
+            -max(
+                contract["strike"]
+                for contract in entry["contracts"]
+                if "strike" in contract
+            ),
+        ),
     )
 
     best_option = None
@@ -245,4 +267,12 @@ def get_median_price(symbol, data):
                 bid = contract["bid"]
                 ask = contract["ask"]
                 return (bid + ask) / 2
+    return None
+
+
+def get_option_delta(symbol, data):
+    for entry in data:
+        for contract in entry["contracts"]:
+            if contract["symbol"] == symbol:
+                return contract["delta"]
     return None

@@ -1,7 +1,7 @@
 from statistics import median
-from support import validDateFormat
+
 import alert
-from datetime import datetime, timedelta
+from support import validDateFormat
 
 
 class OptionChain:
