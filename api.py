@@ -3,7 +3,7 @@ import json
 import math
 import os
 from statistics import median
-
+import pytz
 import schwab
 from dateutil import tz
 from schwab import auth
@@ -116,8 +116,7 @@ class Api:
         return r.json()
 
     def getOptionExecutionWindow(self):
-        now = datetime.datetime.now()
-        now = now.replace(tzinfo=tz.tzutc()).astimezone(tz.tzlocal())
+        now = datetime.datetime.now(pytz.UTC)
 
         r = self.connectClient.get_market_hours(
             self.connectClient.MarketHours.Market.OPTION
@@ -126,10 +125,10 @@ class Api:
         assert r.status_code == 200, r.raise_for_status()
 
         data = r.json()
-        logger.debug(f"Execution Window: {data}")
 
         try:
-            if not data.get("option").get("option").get("isOpen"):
+            marketKey = list(data["option"].keys())[0]
+            if not data.get("option")[marketKey].get("isOpen"):
                 return {"open": False, "openDate": None, "nowDate": now}
 
             marketKey = list(data["option"].keys())[0]
@@ -146,7 +145,7 @@ class Api:
             end = datetime.datetime.fromisoformat(end)
 
             # execute after 10 minutes to let volatility settle a bit and prevent exceptions due to api overload
-            windowStart = start + datetime.timedelta(minutes=10)
+            windowStart = start + datetime.timedelta(minutes=0)
 
             if windowStart <= now <= end:
                 return {"open": True, "openDate": windowStart, "nowDate": now}

@@ -60,15 +60,3 @@ def getThirdFridayOfMonth(monthDate):
         third = third.replace(day=(15 + (4 - w) % 7))
 
     return third
-
-
-def getDeltaDiffNowTomorrow1Am():
-    now = datetime.datetime.now()
-
-    tomorrow = datetime.datetime.combine(
-        now.date(), datetime.time(1, 0)
-    ) + datetime.timedelta(days=1)
-
-    delta = tomorrow - now
-
-    return delta
