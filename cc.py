@@ -285,8 +285,7 @@ def find_best_rollover(api, data, short_option):
                 break  # Avoid going negative on the premium
     return best_option
 
-
-def find_best_rollover_old(api, data, short_option):
+def find_best_rollover_old_v1(api, data, short_option):
     def parse_option_details(data, short_option):
         for entry in data:
             for contract in entry["contracts"]:
