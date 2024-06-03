@@ -38,7 +38,7 @@ Please note: The creation of new covered calls is a manual process and must be d
 
 A 'rollup' is the process of rolling to a higher strike price than the current one.
 
-You can use `minRollupGap` and `maxRollupGap` to configure the roll, you should have some spare cash in the account to pay for rollup costs, because the new contract can have less premium than the current one,
+You can use `minRollupGap` to configure the roll, you should have some spare cash in the account to pay for rollup costs, because the new contract can have less premium than the current one,
 if the asset price went up.
 
 ### Risks

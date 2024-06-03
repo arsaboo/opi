@@ -19,7 +19,52 @@ class OptionChain:
         )
         return self.mapApiData(apiData)
 
-    def mapApiData(self, data):
+    def mapApiData(self, data, put=False):
+        # convert api response to data the application can read
+        map = []
+
+        try:
+            tmp = data["callExpDateMap"] if not put else data["putExpDateMap"]
+            for key, value in tmp.items():
+                split = key.split(":")
+
+                date = split[0]
+                days = int(split[1])
+
+                if not validDateFormat(date):
+                    return alert.botFailed(
+                        self.asset, "Incorrect date format from api: " + date
+                    )
+
+                contracts = []
+
+                for contractKey, contractValue in value.items():
+                    contracts.extend(
+                        [
+                            {
+                                "symbol": contractValue[0]["symbol"],
+                                "strike": contractValue[0]["strikePrice"],
+                                "bid": contractValue[0]["bid"],
+                                "ask": contractValue[0]["ask"],
+                                "delta": contractValue[0]["delta"],
+                                "optionRoot": contractValue[0]["optionRoot"],
+                                "underlying": contractValue[0]["optionDeliverablesList"][0]["symbol"],
+                                "putCall": contractValue[0]["putCall"],
+                            }
+                        ]
+                    )
+
+                map.extend([{"date": date, "days": days, "contracts": contracts}])
+
+        except KeyError:
+            return alert.botFailed(self.asset, "Wrong data from api")
+
+        if map:
+            map = sorted(map, key=lambda d: d["days"])
+
+        return map
+
+    def mapApiData_working(self, data):
         # convert api response to data the application can read
         map = []
 
@@ -49,6 +94,7 @@ class OptionChain:
                                 "delta": contractValue[0]["delta"],
                                 "optionRoot": contractValue[0]["optionRoot"],
                                 "underlying": contractValue[0]["optionDeliverablesList"][0]["symbol"],
+                                "putCall": contractValue[0]["putCall"],
                             }
                         ]
                     )

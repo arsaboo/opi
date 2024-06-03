@@ -2,14 +2,17 @@ import datetime
 import json
 import math
 import os
+import time
 from statistics import median
+
 import pytz
 import schwab
-from dateutil import tz
 from schwab import auth
+from schwab.orders.options import OptionSymbol
 from schwab.utils import Utils
 
 import alert
+from cc import round_to_nearest_five_cents
 from configuration import SchwabAccountID, debugCanSendOrders
 from logger_config import get_logger
 from support import extract_date, extract_strike_price, validDateFormat
@@ -96,6 +99,32 @@ class Api:
         r = self.connectClient.get_option_chain(
             asset,
             contract_type=self.connectClient.Options.ContractType.CALL,
+            strike_count=strikes,
+            strategy=self.connectClient.Options.Strategy.SINGLE,
+            interval=None,
+            strike=None,
+            strike_range=None,
+            from_date=fromDate,
+            to_date=toDate,
+            volatility=None,
+            underlying_price=None,
+            interest_rate=None,
+            days_to_expiration=None,
+            exp_month=None,
+            option_type=None,
+        )
+
+        assert r.status_code == 200, r.raise_for_status()
+
+        return r.json()
+
+    def getPutOptionChain(self, asset, strikes, date, daysLessAllowed):
+        fromDate = date - datetime.timedelta(days=daysLessAllowed)
+        toDate = date
+
+        r = self.connectClient.get_option_chain(
+            asset,
+            contract_type=self.connectClient.Options.ContractType.PUT,
             strike_count=strikes,
             strategy=self.connectClient.Options.Strategy.SINGLE,
             interval=None,
@@ -376,6 +405,11 @@ class Api:
         except KeyError:
             return False
 
+    def get_quote(self, asset):
+        r = self.connectClient.get_quotes([asset])
+        assert r.status_code == 200 or r.status_code == 201, r.raise_for_status()
+        return r.json()
+
     def getOptionDetails(self, asset):
         r = self.connectClient.get_quotes(asset)
 
@@ -479,3 +513,79 @@ class Api:
         assert order_id is not None
 
         return order_id
+
+    def vertical_call_order(
+        self, symbol, expiration, strike_low, strike_high, amount, price
+    ):
+
+        if "$" in symbol:
+            # remove $ from symbol
+            symbol = symbol[1:]
+        long_call_sym = OptionSymbol(symbol, expiration, "C", str(strike_low)).build()
+        short_call_sym = OptionSymbol(symbol, expiration, "C", str(strike_high)).build()
+
+        order = schwab.orders.generic.OrderBuilder()
+
+        orderType = schwab.orders.common.OrderType.NET_DEBIT
+
+        order.add_option_leg(
+            schwab.orders.common.OptionInstruction.BUY_TO_OPEN,
+            long_call_sym,
+            amount,
+        ).add_option_leg(
+            schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
+            short_call_sym,
+            amount,
+        ).set_duration(
+            schwab.orders.common.Duration.DAY
+        ).set_session(
+            schwab.orders.common.Session.NORMAL
+        ).set_price(
+            str(price)
+        ).set_order_type(
+            orderType
+        ).set_order_strategy_type(
+            schwab.orders.common.OrderStrategyType.SINGLE
+        ).set_complex_order_strategy_type(
+            schwab.orders.common.ComplexOrderStrategyType.VERTICAL
+        )
+
+        if not debugCanSendOrders:
+            print("Order not placed: ", order.build())
+            exit()
+        hash = self.getAccountHash()
+        try:
+            r = self.connectClient.place_order(hash, order)
+        except Exception as e:
+            print(e)
+            return alert.botFailed(None, "Error while placing the vertical call order")
+
+        order_id = Utils(self.connectClient, hash).extract_order_id(r)
+        assert order_id is not None
+
+        return order_id
+
+    def place_order(api, order_func, order_params, price=None):
+        maxRetries = 75
+        checkFillXTimes = 12
+
+        # Ensure that price is not included in order_params
+        order_params = [param for param in order_params if param != price]
+
+        order_id = order_func(*order_params, price=price)
+
+        for retry in range(maxRetries):
+            for x in range(checkFillXTimes):
+                print("Waiting for order to be filled ...")
+                time.sleep(60)
+                checkedOrder = api.checkOrder(order_id)
+                if checkedOrder["filled"]:
+                    print(
+                        f"Order filled: {order_id}\n Order details: {api.checkOrder(order_id)}"
+                    )
+                    return
+            api.cancelOrder(order_id)
+            print("Can't fill order, retrying with lower price ...")
+            new_price = price * (100 - retry) / 100
+            rounded_price = round_to_nearest_five_cents(new_price)
+            order_id = order_func(*order_params, rounded_price)

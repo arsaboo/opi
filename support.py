@@ -30,6 +30,7 @@ def validDateFormat(date):
         return False
 
 
+
 def extract_strike_price(s):
     match = re.search(r"\$\d+", s)
     return match.group()[1:] if match else None
@@ -60,3 +61,19 @@ def getThirdFridayOfMonth(monthDate):
         third = third.replace(day=(15 + (4 - w) % 7))
 
     return third
+
+
+def calculate_cagr(total_investment, returns, days):
+    try:
+        cagr = ((returns / total_investment) ** (365 / days)) - 1
+        if isinstance(cagr, complex):
+            raise ValueError("CAGR calculation resulted in a complex number")
+        cagr_percentage = round(cagr * 100, 2)  # Convert CAGR to percentage
+    except OverflowError:
+        cagr = 0
+        cagr_percentage = round(cagr, 2)
+    except ValueError as e:
+        print(e)
+        cagr = None
+        cagr_percentage = None
+    return cagr, cagr_percentage
