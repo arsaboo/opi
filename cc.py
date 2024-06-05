@@ -86,7 +86,6 @@ def RollSPX(api, short):
     toDate = datetime.today() + timedelta(days=days)
     optionChain = OptionChain(api, short["stockSymbol"], toDate, days)
     chain = optionChain.get()
-    print(f"chain: {chain}")
     prem_short_contract = get_median_price(short["optionSymbol"], chain)
 
     if prem_short_contract is None:
@@ -274,7 +273,6 @@ def find_best_rollover(api, data, short_option):
                     statistics.median([contract["bid"], contract["ask"]]), 2
                 )
                 premium_diff = contract_price - short_price
-
                 if short_status in ["deep_OTM", "OTM", "just_ITM"]:
                     if (
                         contract["strike"] >= short_strike + minRollupGap

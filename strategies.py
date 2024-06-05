@@ -8,6 +8,8 @@ from prettytable import PrettyTable
 from configuration import spreads
 from optionChain import OptionChain
 from support import calculate_cagr
+from cc import round_to_nearest_five_cents
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def BoxSpread(api, asset="$SPX"):
@@ -49,16 +51,17 @@ def BoxSpread(api, asset="$SPX"):
     best_overall_spread = None
     best_overall_cagr = float("-inf")
 
-    for spread in range(100, 500, 50):  # Adjust the range and step as needed
-        best_spread = calculate_box_spread(
-            spread, json.dumps(calls), json.dumps(puts), trade="sell"
-        )
-        if (
-            best_spread is not None
-            and best_spread["cagr_percentage"] > best_overall_cagr
-        ):
-            best_overall_spread = best_spread
-            best_overall_cagr = best_spread["cagr_percentage"]
+    with ThreadPoolExecutor() as executor:
+        futures = {
+            executor.submit(calculate_box_spread_wrapper, spread, calls, puts): spread
+            for spread in range(100, 500, 50)
+        }
+
+        for future in as_completed(futures):
+            result, spread = future.result()
+            if result is not None and result["cagr_percentage"] > best_overall_cagr:
+                best_overall_spread = result
+                best_overall_cagr = result["cagr_percentage"]
 
     if best_overall_spread is not None:
         # Create a dictionary mapping the original column names to the new labels
@@ -92,6 +95,13 @@ def BoxSpread(api, asset="$SPX"):
         print(table)
     else:
         print("No best spread found.")
+
+
+def calculate_box_spread_wrapper(spread, calls, puts):
+    return (
+        calculate_box_spread(spread, json.dumps(calls), json.dumps(puts), trade="sell"),
+        spread,
+    )
 
 
 def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
@@ -446,22 +456,44 @@ def synthetic_covered_call_spread(
         return None
 
 
-# let us use the bull_call_spread function to calculate the spreads for the indices in the list specified in spreads
+def calculate_spread(
+    api, asset, spread, days, downsideProtection, price_method, synthetic
+):
+    if synthetic:
+        return asset, synthetic_covered_call_spread(
+            api, asset, spread, days, downsideProtection, price_method
+        )
+    else:
+        return asset, bull_call_spread(
+            api, asset, spread, days, downsideProtection, price_method
+        )
+
+
 def find_spreads(api, synthetic=False):
     spread_dict = {}
-    for asset in spreads:
-        spread = spreads[asset]["spread"]
-        days = spreads[asset]["days"]
-        downsideProtection = spreads[asset]["downsideProtection"]
-        price_method = spreads[asset].get("price", "mid")
-        if synthetic:
-            spread_dict[asset] = synthetic_covered_call_spread(
-                api, asset, spread, days, downsideProtection, price_method
+    futures_to_asset = {}
+
+    with ThreadPoolExecutor() as executor:
+        for asset in spreads:
+            spread = spreads[asset]["spread"]
+            days = spreads[asset]["days"]
+            downsideProtection = spreads[asset]["downsideProtection"]
+            price_method = spreads[asset].get("price", "mid")
+            future = executor.submit(
+                calculate_spread,
+                api,
+                asset,
+                spread,
+                days,
+                downsideProtection,
+                price_method,
+                synthetic,
             )
-        else:
-            spread_dict[asset] = bull_call_spread(
-                api, asset, spread, days, downsideProtection, price_method
-            )
+            futures_to_asset[future] = asset
+
+        for future in as_completed(futures_to_asset):
+            asset, result = future.result()
+            spread_dict[asset] = result
     index = 1
     # Define the table
     table = PrettyTable()
@@ -542,10 +574,17 @@ def find_spreads(api, synthetic=False):
             user_input = "no"
         if user_input == "yes":
             selected_date = datetime.strptime(selected_date, "%Y-%m-%d")
-            api.place_order(
-                api.vertical_call_order,
-                [selected_asset, selected_date, strike_low, strike_high, 1],
-                price - 25,
-            )
+            if synthetic:
+                api.place_order(
+                    api.synthetic_covered_call_order,
+                    [selected_asset, selected_date, strike_low, strike_high, 1],
+                    round_to_nearest_five_cents(price - 5),
+                )
+            else:
+                api.place_order(
+                    api.vertical_call_order,
+                    [selected_asset, selected_date, strike_low, strike_high, 1],
+                    round_to_nearest_five_cents(price - 5),
+                )
         else:
             print("Order not placed")

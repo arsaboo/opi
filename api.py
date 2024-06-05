@@ -565,6 +565,62 @@ class Api:
 
         return order_id
 
+    def synthetic_covered_call_order(
+        self, symbol, expiration, strike_low, strike_high, amount, price
+    ):
+
+        if "$" in symbol:
+            # remove $ from symbol
+            symbol = symbol[1:]
+        long_call_sym = OptionSymbol(symbol, expiration, "C", str(strike_low)).build()
+        short_put_sym = OptionSymbol(symbol, expiration, "P", str(strike_low)).build()
+        short_call_sym = OptionSymbol(symbol, expiration, "C", str(strike_high)).build()
+
+        order = schwab.orders.generic.OrderBuilder()
+
+        orderType = schwab.orders.common.OrderType.NET_DEBIT
+
+        order.add_option_leg(
+            schwab.orders.common.OptionInstruction.BUY_TO_OPEN,
+            long_call_sym,
+            amount,
+        ).add_option_leg(
+            schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
+            short_call_sym,
+            amount,
+        ).add_option_leg(
+            schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
+            short_put_sym,
+            amount,
+        ).set_duration(
+            schwab.orders.common.Duration.DAY
+        ).set_session(
+            schwab.orders.common.Session.NORMAL
+        ).set_price(
+            str(price)
+        ).set_order_type(
+            orderType
+        ).set_order_strategy_type(
+            schwab.orders.common.OrderStrategyType.SINGLE
+        ).set_complex_order_strategy_type(
+            schwab.orders.common.ComplexOrderStrategyType.VERTICAL
+        )
+
+        if not debugCanSendOrders:
+            print("Order not placed: ", order.build())
+            exit()
+        hash = self.getAccountHash()
+        try:
+            r = self.connectClient.place_order(hash, order)
+        except Exception as e:
+            print(e)
+            return alert.botFailed(None, "Error while placing the vertical call order")
+
+        order_id = Utils(self.connectClient, hash).extract_order_id(r)
+        assert order_id is not None
+
+        return order_id
+
     def place_order(api, order_func, order_params, price=None):
         maxRetries = 75
         checkFillXTimes = 12

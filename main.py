@@ -20,14 +20,18 @@ api = Api(apiKey, apiRedirectUri, appSecret)
 
 
 def roll_short_positions(api, shorts):
+    any_expiring = False  # flag to track if any options are expiring within 7 days
+
     for short in shorts:
-        # short = {"optionSymbol": "SPX   240606C05315000", "expiration": "2024-06-03", "strike": "5315", "count": 1.0, "stockSymbol": "$SPX", "receivedPremium": 72.4897}
-        # short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00350000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '350', 'receivedPremium': 72.4897}
         dte = (
             datetime.strptime(short["expiration"], "%Y-%m-%d").date()
             - datetime.now(pytz.UTC).date()
         ).days
+        # short = {"optionSymbol": "SPX   240606C05315000", "expiration": "2024-06-03", "strike": "5315", "count": 1.0, "stockSymbol": "$SPX", "receivedPremium": 72.4897}
+        # short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00350000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '350', 'receivedPremium': 72.4897}
         if dte <= 7:
+            any_expiring = True  # set the flag to True
+
             if dte == 0:
                 print(
                     f"{short['count']} {short['stockSymbol']} expiring {Fore.RED}TODAY{Style.RESET_ALL}: {short['optionSymbol']}"
@@ -36,10 +40,12 @@ def roll_short_positions(api, shorts):
                 print(
                     f"{short['count']} {short['stockSymbol']} expiring in {Fore.GREEN}{dte} day(s){Style.RESET_ALL}: {short['optionSymbol']}"
                 )
+
             roll_function = RollSPX if short["stockSymbol"] == "$SPX" else RollCalls
             roll_function(api, short)
-        else:
-            print("No options expiring within 7 days.")
+
+    if not any_expiring:  # if the flag is still False after the loop, print the message
+        print("No options expiring within 7 days.")
 
 
 def wait_for_execution_window(execWindow):
@@ -72,7 +78,7 @@ def present_menu(default="1"):
         "2": "Check Box Spreads",
         "3": "Check Vertical Spreads",
         "4": "Check Synthetic Covered Calls",
-        "5": "Exit"
+        "5": "Exit",
     }
 
     while True:
