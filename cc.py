@@ -26,6 +26,7 @@ class Cc:
             return None
         return roll
 
+
 def vertical_contract(
     api, symbol, expiration, strike_low, strike_high, price, amount=1
 ):
@@ -53,6 +54,7 @@ def vertical_contract(
         order_id = api.vertical_call_order(
             symbol, expiration, strike_low, strike_high, rounded_price, amount
         )
+
 
 def roll_contract(api, short, roll, order_premium):
     maxRetries = 75
@@ -92,7 +94,7 @@ def RollSPX(api, short):
         print("Short contract not found in chain")
         return
 
-    print("Premium of short contract: ", prem_short_contract)
+    print("Premium of short contract: ", round(prem_short_contract, 2))
     roll = find_best_rollover(api, chain, short)
     if roll is None:
         print("No rollover contract found")

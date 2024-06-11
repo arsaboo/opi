@@ -1,20 +1,20 @@
 import json
 import statistics
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 from inputimeout import TimeoutOccurred, inputimeout
 from prettytable import PrettyTable
 
+from cc import round_to_nearest_five_cents
 from configuration import spreads
 from optionChain import OptionChain
 from support import calculate_cagr
-from cc import round_to_nearest_five_cents
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def BoxSpread(api, asset="$SPX"):
-    days = 2000
-    strikes = 500
+    days = spreads[asset].get("days", 2000)
+    strikes = spreads[asset].get("strikes", 500)
     toDate = datetime.today() + timedelta(days=days)
     try:
         calls = api.getOptionChain(asset, strikes, toDate, days - 120)
@@ -501,14 +501,14 @@ def find_spreads(api, synthetic=False):
         "Index",
         "Asset",
         "Expiration Date",
-        "Contract 1",
-        "Contract 2",
-        "Bid 1",
-        "Ask 1",
-        "Bid 2",
-        "Ask 2",
+        "Strike Low",
+        "Strike High",
+        "Bid Call Low",
+        "Ask Call Low",
+        "Bid Call High",
+        "Ask Call High",
         "Total Investment",
-        "Return",
+        "Max Profit",
         "CAGR",
         "Protection",
     ]
@@ -530,13 +530,17 @@ def find_spreads(api, synthetic=False):
                     best_spread["ask2"],
                     best_spread["total_investment"],
                     best_spread["total_return"],
-                    str(round(best_spread["cagr_percentage"], 2)) + "%",
+                    round(best_spread["cagr_percentage"], 2),  # keep as float for now
                     str(round(best_spread["downside_protection"], 2)) + "%",
                 ]
             )
 
     # Sort the rows by CAGR
     rows.sort(key=lambda x: x[10], reverse=True)
+
+    # Convert the cagr_percentage to string after sorting
+    for row in rows:
+        row[10] = str(row[10]) + "%"
 
     # Add the sorted rows to the table with their index
     for index, row in enumerate(rows, start=1):

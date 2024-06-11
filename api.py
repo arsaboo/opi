@@ -4,6 +4,8 @@ import math
 import os
 import time
 from statistics import median
+from operator import itemgetter
+
 
 import pytz
 import schwab
@@ -448,6 +450,7 @@ class Api:
     def optionPositions(self, data):
         data = json.loads(data)
         positions = data["securitiesAccount"]["positions"]
+        logger.debug("Positions: ", positions)
         shortPositions = []
         for position in positions:
             if (
@@ -465,6 +468,7 @@ class Api:
                 "receivedPremium": position["averagePrice"],
             }
             shortPositions.append(entry)
+        shortPositions = sorted(shortPositions, key=itemgetter('expiration'))
         return shortPositions
 
     def rollOver(self, oldSymbol, newSymbol, amount, price):

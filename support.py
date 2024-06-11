@@ -64,6 +64,21 @@ def getThirdFridayOfMonth(monthDate):
 
 
 def calculate_cagr(total_investment, returns, days):
+    """
+    Calculate Compound Annual Growth Rate (CAGR) based on total investment, returns, and number of days.
+
+    Args:
+        total_investment (float): Total investment amount.
+        returns (float): Total returns (this is the total inflow not just the profit).
+        days (int): Number of days.
+
+    Returns:
+        tuple: A tuple containing the CAGR and CAGR percentage.
+
+    Raises:
+        ValueError: If CAGR calculation results in a complex number.
+
+    """
     try:
         cagr = ((returns / total_investment) ** (365 / days)) - 1
         if isinstance(cagr, complex):
