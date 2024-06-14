@@ -582,7 +582,7 @@ def find_spreads(api, synthetic=False):
                 api.place_order(
                     api.synthetic_covered_call_order,
                     [selected_asset, selected_date, strike_low, strike_high, 1],
-                    round_to_nearest_five_cents(price - 5),
+                    round_to_nearest_five_cents(price),
                 )
             else:
                 api.place_order(

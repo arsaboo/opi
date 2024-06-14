@@ -8,7 +8,10 @@ from inputimeout import TimeoutOccurred, inputimeout
 
 import alert
 from configuration import configuration
+from logger_config import get_logger
 from optionChain import OptionChain
+
+logger = get_logger()
 
 
 class Cc:
@@ -191,6 +194,146 @@ def RollCalls(api, short):
 
 
 def find_best_rollover(api, data, short_option):
+    short_strike, short_price, short_expiry, underlying_price = parse_option_details(
+        api, data, short_option["optionSymbol"]
+    )
+    if short_strike is None or short_price is None or short_expiry is None:
+        return None
+
+    # Configuration variables
+    ITMLimit = configuration[short_option["stockSymbol"]].get("ITMLimit", 10)
+    deepITMLimit = configuration[short_option["stockSymbol"]].get("deepITMLimit", 25)
+    deepOTMLimit = configuration[short_option["stockSymbol"]].get("deepOTMLimit", 10)
+    minPremium = configuration[short_option["stockSymbol"]].get("minPremium", 1)
+    idealPremium = configuration[short_option["stockSymbol"]].get("idealPremium", 15)
+    minRollupGap = configuration[short_option["stockSymbol"]].get("minRollupGap", 5)
+    maxRollOutWindow = configuration[short_option["stockSymbol"]].get(
+        "maxRollOutWindow", 30
+    )
+    minRollOutWindow = configuration[short_option["stockSymbol"]].get(
+        "minRollOutWindow", 7
+    )
+
+    logger.debug(f"Initial Ideal Premium: {idealPremium}")
+
+    # Determine the short status
+    short_status = None
+    if short_strike > underlying_price + deepOTMLimit:
+        short_status = "deep_OTM"
+    elif short_strike > underlying_price:
+        short_status = "OTM"
+    elif short_strike + ITMLimit > underlying_price:
+        short_status = "just_ITM"
+    elif short_strike + deepITMLimit > underlying_price:
+        short_status = "ITM"
+    else:
+        short_status = "deep_ITM"
+
+    value = round(short_strike - underlying_price, 2)
+
+    if value > 0:
+        print(
+            f"Short status: {Fore.GREEN}{short_status}{Style.RESET_ALL}. Strike - Underlying: {Fore.GREEN}{value}{Style.RESET_ALL}"
+        )
+    elif value < 0:
+        print(
+            f"Short status: {Fore.RED}{short_status}{Style.RESET_ALL}. Strike - Underlying: {Fore.RED}{value}{Style.RESET_ALL}"
+        )
+    else:
+        print(f"Short status: {short_status}. Strike - Underlying: {value}")
+
+    # Sort entries
+    entries = sorted(
+        data,
+        key=lambda entry: (
+            datetime.strptime(entry["date"], "%Y-%m-%d"),
+            -max(
+                contract["strike"]
+                for contract in entry["contracts"]
+                if "strike" in contract
+            ),
+        ),
+    )
+
+    # Initialize best option
+    best_option = None
+    closest_days_diff = float("inf")
+    highest_strike = float("-inf")
+
+    # Iterate to find the best rollover option
+    while short_status and best_option is None:
+
+        for entry in entries:
+            expiry_date = datetime.strptime(entry["date"], "%Y-%m-%d")
+            days_diff = (expiry_date - short_expiry).days
+            if days_diff > maxRollOutWindow or days_diff < minRollOutWindow:
+                continue
+            for contract in entry["contracts"]:
+                if (
+                    contract["strike"] <= short_strike
+                    or contract["optionRoot"] != contract["symbol"].split()[0]
+                ):
+                    continue
+                contract_price = round(
+                    statistics.median([contract["bid"], contract["ask"]]), 2
+                )
+                premium_diff = contract_price - short_price
+                if short_status in ["deep_OTM", "OTM", "just_ITM"]:
+                    if (
+                        contract["strike"] >= short_strike + minRollupGap
+                        and premium_diff >= idealPremium
+                    ):
+                        logger.debug(
+                            f"Contract: {contract['symbol']}, Premium: {contract_price}, Days: {days_diff}, Premium Diff: {premium_diff}, Ideal Premium: {idealPremium}, Strike: {contract['strike']}"
+                        )
+                        if days_diff < closest_days_diff:
+                            closest_days_diff = days_diff
+                            best_option = contract
+
+                elif short_status == "ITM":
+                    if premium_diff >= minPremium and (
+                        contract["strike"] > highest_strike
+                        or (
+                            contract["strike"] == highest_strike
+                            and days_diff < closest_days_diff
+                        )
+                    ):
+                        highest_strike = contract["strike"]
+                        closest_days_diff = days_diff
+                        best_option = contract
+
+                elif short_status == "deep_ITM":
+                    # Roll to the highest strike without paying a premium
+                    if premium_diff >= 0.1 and contract["strike"] > highest_strike:
+                        highest_strike = contract["strike"]
+                        closest_days_diff = days_diff
+                        best_option = contract
+
+        # Adjust criteria if no best option found
+        if best_option is None and short_status in ["deep_OTM", "OTM", "just_ITM"]:
+            logger.debug(
+                f"Before adjustment - IdealPremium: {idealPremium}, MinRollupGap: {minRollupGap}"
+            )
+            if idealPremium > minPremium:
+                idealPremium -= 0.5
+                if idealPremium < minPremium:
+                    idealPremium = minPremium
+            elif minRollupGap > 0:
+                minRollupGap -= 5
+                if minRollupGap < 0:
+                    minRollupGap = 0
+            logger.debug(
+                f"After adjustment - IdealPremium: {idealPremium}, MinRollupGap: {minRollupGap}"
+            )
+        if best_option is None and short_status in ["ITM", "deep_ITM"]:
+            minPremium -= 0.25
+            if minPremium < 0:
+                break  # Avoid going negative on the premium
+
+    return best_option
+
+
+def find_best_rollover_old(api, data, short_option):
 
     short_strike, short_price, short_expiry, underlying_price = parse_option_details(
         api, data, short_option["optionSymbol"]
@@ -280,6 +423,9 @@ def find_best_rollover(api, data, short_option):
                         contract["strike"] >= short_strike + minRollupGap
                         and premium_diff >= idealPremium
                     ):
+                        logger.debug(
+                            f"Contract: {contract['symbol']}, Premium: {contract_price}, Days: {days_diff}, Premium Diff: {premium_diff}, Ideal Premium: {idealPremium}, Strike: {contract['strike']}"
+                        )
                         if days_diff < closest_days_diff:
                             closest_days_diff = days_diff
                             best_option = contract
@@ -314,6 +460,9 @@ def find_best_rollover(api, data, short_option):
                     minRollupGap -= 5
                     if minRollupGap < 0:
                         minRollupGap = 0
+                logger.debug(
+                    f"Adjusting criteria - IdealPremium: {idealPremium}, MinRollupGap: {minRollupGap}"
+                )
         if best_option is None and short_status in ["ITM", "deep_ITM"]:
             minPremium -= 0.25
             if minPremium < 0:

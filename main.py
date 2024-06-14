@@ -1,7 +1,6 @@
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import time as time_module
-from datetime import timedelta
 
 import pytz
 from colorama import Fore, Style
@@ -29,7 +28,7 @@ def roll_short_positions(api, shorts):
         ).days
         # short = {"optionSymbol": "SPX   240606C05315000", "expiration": "2024-06-03", "strike": "5315", "count": 1.0, "stockSymbol": "$SPX", "receivedPremium": 72.4897}
         # short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00350000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '350', 'receivedPremium': 72.4897}
-        if dte <= 7:
+        if 0 < dte < 7:
             any_expiring = True  # set the flag to True
 
             if dte == 0:
@@ -123,7 +122,7 @@ def main():
     while True:
         try:
             option = present_menu()
-            if option == "5":  # Assuming 4 is the option to exit
+            if option == "5":
                 break
             while True:
                 try:

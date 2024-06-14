@@ -5,7 +5,6 @@ from dateutil.relativedelta import relativedelta
 
 import alert
 
-
 # how many days before expiration we close the contracts
 ccExpDaysOffset = 0
 

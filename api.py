@@ -450,7 +450,7 @@ class Api:
     def optionPositions(self, data):
         data = json.loads(data)
         positions = data["securitiesAccount"]["positions"]
-        logger.debug("Positions: ", positions)
+        logger.debug("Positions: %s", positions)
         shortPositions = []
         for position in positions:
             if (
