@@ -47,8 +47,14 @@ class OptionChain:
                                 "bid": contractValue[0]["bid"],
                                 "ask": contractValue[0]["ask"],
                                 "delta": contractValue[0]["delta"],
+                                "theta": contractValue[0]["theta"],
+                                "vega": contractValue[0]["vega"],
+                                "gamma": contractValue[0]["gamma"],
+                                "rho": contractValue[0]["rho"],
                                 "optionRoot": contractValue[0]["optionRoot"],
-                                "underlying": contractValue[0]["optionDeliverablesList"][0]["symbol"],
+                                "underlying": contractValue[0][
+                                    "optionDeliverablesList"
+                                ][0]["symbol"],
                                 "putCall": contractValue[0]["putCall"],
                             }
                         ]
@@ -93,7 +99,9 @@ class OptionChain:
                                 "ask": contractValue[0]["ask"],
                                 "delta": contractValue[0]["delta"],
                                 "optionRoot": contractValue[0]["optionRoot"],
-                                "underlying": contractValue[0]["optionDeliverablesList"][0]["symbol"],
+                                "underlying": contractValue[0][
+                                    "optionDeliverablesList"
+                                ][0]["symbol"],
                                 "putCall": contractValue[0]["putCall"],
                             }
                         ]

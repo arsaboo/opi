@@ -26,9 +26,9 @@ def roll_short_positions(api, shorts):
             datetime.strptime(short["expiration"], "%Y-%m-%d").date()
             - datetime.now(pytz.UTC).date()
         ).days
-        # short = {"optionSymbol": "SPX   240606C05315000", "expiration": "2024-06-03", "strike": "5315", "count": 1.0, "stockSymbol": "$SPX", "receivedPremium": 72.4897}
+        # short = {"optionSymbol": "SPXW  240622C05100000", "expiration": "2024-06-22", "strike": "5100", "count": 1.0, "stockSymbol": "$SPX", "receivedPremium": 72.4897}
         # short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00350000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '350', 'receivedPremium': 72.4897}
-        if 0 < dte < 7:
+        if -1 < dte < 7:
             any_expiring = True  # set the flag to True
 
             if dte == 0:
@@ -44,7 +44,7 @@ def roll_short_positions(api, shorts):
             roll_function(api, short)
 
     if not any_expiring:  # if the flag is still False after the loop, print the message
-        print("No options expiring within 7 days.")
+        print("No options expiring soon.")
 
 
 def wait_for_execution_window(execWindow):
@@ -77,7 +77,7 @@ def present_menu(default="1"):
         "2": "Check Box Spreads",
         "3": "Check Vertical Spreads",
         "4": "Check Synthetic Covered Calls",
-        "5": "Exit",
+        "0": "Exit",
     }
 
     while True:
@@ -122,7 +122,7 @@ def main():
     while True:
         try:
             option = present_menu()
-            if option == "5":
+            if option == "0":
                 break
             while True:
                 try:

@@ -18,6 +18,7 @@ from cc import round_to_nearest_five_cents
 from configuration import SchwabAccountID, debugCanSendOrders
 from logger_config import get_logger
 from support import extract_date, extract_strike_price, validDateFormat
+from authlib.integrations.base_client.errors import OAuthError
 
 logger = get_logger()
 
@@ -43,18 +44,21 @@ class Api:
                 app_secret=self.appSecret,
                 token_path=self.tokenPath,
             )
-            self.connectClient.get_account_numbers()
-        except Exception:  # Catch all exceptions
-            # Delete the existing token file
-            if os.path.exists(self.tokenPath):  # Corrected here
-                os.remove(self.tokenPath)  # And here
-            # Initiate the manual flow
+            response = self.connectClient.get_account_numbers()
+            response.raise_for_status()
+        except OAuthError.TokenExpiredError:
+            # Handle token expiration specifically
+            if os.path.exists(self.tokenPath):
+                os.remove(self.tokenPath)
             self.connectClient = auth.client_from_manual_flow(
                 api_key=self.apiKey,
                 app_secret=self.appSecret,
                 callback_url=self.apiRedirectUri,
                 token_path=self.tokenPath,
             )
+        except Exception as e:
+            # Handle other exceptions differently
+            print(f"An error occurred during setup: {e}")
 
     def get_hash_value(self, account_number, data):
         for item in data:
@@ -286,9 +290,12 @@ class Api:
         assert r.status_code == 200, r.raise_for_status()
 
         data = r.json()
+        if data["status"] == "FILLED":
+            print(f"Check Order details: {data}")
         complexOrderStrategyType = None
 
         try:
+            status = data["status"]
             filled = data["status"] == "FILLED"
             price = data["price"]
             partialFills = data["filledQuantity"]
@@ -306,6 +313,7 @@ class Api:
             return alert.botFailed(None, "Error while checking working order")
 
         return {
+            "status": status,
             "filled": filled,
             "price": price,
             "partialFills": partialFills,
@@ -468,7 +476,7 @@ class Api:
                 "receivedPremium": position["averagePrice"],
             }
             shortPositions.append(entry)
-        shortPositions = sorted(shortPositions, key=itemgetter('expiration'))
+        shortPositions = sorted(shortPositions, key=itemgetter("expiration"))
         return shortPositions
 
     def rollOver(self, oldSymbol, newSymbol, amount, price):
@@ -639,10 +647,11 @@ class Api:
                 print("Waiting for order to be filled ...")
                 time.sleep(60)
                 checkedOrder = api.checkOrder(order_id)
+                if checkedOrder["status"] == "CANCELED":
+                    print(f"Order canceled: {order_id}\n Order details: {checkedOrder}")
+                    return
                 if checkedOrder["filled"]:
-                    print(
-                        f"Order filled: {order_id}\n Order details: {api.checkOrder(order_id)}"
-                    )
+                    print(f"Order filled: {order_id}\n Order details: {checkedOrder}")
                     return
             api.cancelOrder(order_id)
             print("Can't fill order, retrying with lower price ...")
