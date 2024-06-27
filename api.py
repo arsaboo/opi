@@ -46,7 +46,7 @@ class Api:
             )
             response = self.connectClient.get_account_numbers()
             response.raise_for_status()
-        except OAuthError.TokenExpiredError:
+        except Exception:
             # Handle token expiration specifically
             if os.path.exists(self.tokenPath):
                 os.remove(self.tokenPath)
@@ -56,9 +56,6 @@ class Api:
                 callback_url=self.apiRedirectUri,
                 token_path=self.tokenPath,
             )
-        except Exception as e:
-            # Handle other exceptions differently
-            print(f"An error occurred during setup: {e}")
 
     def get_hash_value(self, account_number, data):
         for item in data:

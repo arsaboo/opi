@@ -100,7 +100,8 @@ def roll_contract(api, short, roll, order_premium):
 
 def RollSPX(api, short):
     days = configuration[short["stockSymbol"]]["maxRollOutWindow"]
-    toDate = datetime.today() + timedelta(days=days)
+    short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d")
+    toDate = short_expiration + timedelta(days=days)
     optionChain = OptionChain(api, short["stockSymbol"], toDate, days)
     chain = optionChain.get()
     prem_short_contract = get_median_price(short["optionSymbol"], chain)
@@ -119,7 +120,6 @@ def RollSPX(api, short):
     credit = round(roll_premium - prem_short_contract, 2)
     ret = api.getOptionDetails(roll["symbol"])
     ret_expiration = datetime.strptime(ret["expiration"], "%Y-%m-%d")
-    short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d")
     roll_out_time = ret_expiration - short_expiration
     short_delta = get_option_delta(short["optionSymbol"], chain)
     print(
@@ -254,18 +254,6 @@ def find_best_rollover(api, data, short_option):
     else:
         print(f"Short status: {short_status}. Strike - Underlying: {value}")
 
-    # Sort entries
-    # entries = sorted(
-    #     data,
-    #     key=lambda entry: (
-    #         datetime.strptime(entry["date"], "%Y-%m-%d"),
-    #         -max(
-    #             contract["strike"]
-    #             for contract in entry["contracts"]
-    #             if "strike" in contract
-    #         ),
-    #     ),
-    # )
     if short_status == "deep_ITM":
         # sorts data first by date in descending order (farthest first, earliest last) and then by strike price in descending order (highest strike first)
         entries = sorted(

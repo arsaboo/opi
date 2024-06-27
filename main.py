@@ -20,25 +20,19 @@ api = Api(apiKey, apiRedirectUri, appSecret)
 
 def roll_short_positions(api, shorts):
     any_expiring = False  # flag to track if any options are expiring within 7 days
+    today = datetime.now(pytz.UTC).date()
 
     for short in shorts:
-        dte = (
-            datetime.strptime(short["expiration"], "%Y-%m-%d").date()
-            - datetime.now(pytz.UTC).date()
-        ).days
+        dte = (datetime.strptime(short["expiration"], "%Y-%m-%d").date() - today).days
         # short = {"optionSymbol": "SPXW  240622C05100000", "expiration": "2024-06-22", "strike": "5100", "count": 1.0, "stockSymbol": "$SPX", "receivedPremium": 72.4897}
         # short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00350000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '350', 'receivedPremium': 72.4897}
         if -1 < dte < 7:
             any_expiring = True  # set the flag to True
 
-            if dte == 0:
-                print(
-                    f"{short['count']} {short['stockSymbol']} expiring {Fore.RED}TODAY{Style.RESET_ALL}: {short['optionSymbol']}"
-                )
-            else:
-                print(
-                    f"{short['count']} {short['stockSymbol']} expiring in {Fore.GREEN}{dte} day(s){Style.RESET_ALL}: {short['optionSymbol']}"
-                )
+            message_color = Fore.RED if dte == 0 else Fore.GREEN
+            print(
+                f"{short['count']} {short['stockSymbol']} expiring in {message_color}{dte} day(s){Style.RESET_ALL}: {short['optionSymbol']}"
+            )
 
             roll_function = RollSPX if short["stockSymbol"] == "$SPX" else RollCalls
             roll_function(api, short)
@@ -94,23 +88,27 @@ def present_menu(default="1"):
             print("Invalid option. Please enter a valid option.")
 
 
-def execute_option(api, option, execWindow, shorts=None):
-    if not execWindow["open"]:
+def execute_option(api, option, exec_window, shorts=None):
+    if not exec_window["open"]:
         print("Market is closed, but the program will work in debug mode.")
     else:
         print("Market open, running the program now ...")
 
-    if option == "1":
-        roll_short_positions(api, shorts)
-    elif option == "2":
-        BoxSpread(api, "$SPX")
-    elif option == "3":
-        find_spreads(api)
-    elif option == "4":
-        find_spreads(api, synthetic=True)
+    option_mapping = {
+        "1": lambda: roll_short_positions(api, shorts),
+        "2": lambda: BoxSpread(api, "$SPX"),
+        "3": lambda: find_spreads(api),
+        "4": lambda: find_spreads(api, synthetic=True),
+    }
+
+    if option in option_mapping:
+        option_mapping[option]()
+    else:
+        print(f"Invalid option: {option}")
+
     sleep_time = (
         5
-        if execWindow["open"]
+        if exec_window["open"]
         and datetime.now(get_localzone()).time() >= time_module(15, 30)
         else 30
     )
