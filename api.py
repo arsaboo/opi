@@ -3,9 +3,9 @@ import json
 import math
 import os
 import time
+import requests
 from statistics import median
 from operator import itemgetter
-
 
 import pytz
 import schwab
@@ -18,7 +18,6 @@ from cc import round_to_nearest_five_cents
 from configuration import SchwabAccountID, debugCanSendOrders
 from logger_config import get_logger
 from support import extract_date, extract_strike_price, validDateFormat
-from authlib.integrations.base_client.errors import OAuthError
 
 logger = get_logger()
 
@@ -37,25 +36,38 @@ class Api:
         self.apiRedirectUri = apiRedirectUri
         self.appSecret = appSecret
 
-    def setup(self):
-        try:
-            self.connectClient = auth.client_from_token_file(
-                api_key=self.apiKey,
-                app_secret=self.appSecret,
-                token_path=self.tokenPath,
-            )
-            response = self.connectClient.get_account_numbers()
-            response.raise_for_status()
-        except Exception:
-            # Handle token expiration specifically
-            if os.path.exists(self.tokenPath):
-                os.remove(self.tokenPath)
-            self.connectClient = auth.client_from_manual_flow(
-                api_key=self.apiKey,
-                app_secret=self.appSecret,
-                callback_url=self.apiRedirectUri,
-                token_path=self.tokenPath,
-            )
+    def setup(self, retries=3, delay=5):
+        attempt = 0
+        while attempt < retries:
+            try:
+                self.connectClient = auth.client_from_token_file(
+                    api_key=self.apiKey,
+                    app_secret=self.appSecret,
+                    token_path=self.tokenPath,
+                )
+                response = self.connectClient.get_account_numbers()
+                response.raise_for_status()
+                return  # Exit if successful
+            except requests.exceptions.HTTPError as http_err:
+                logger.error(f"HTTP error occurred: {http_err}")
+                if http_err.response.status_code == 401:  # 401 Unauthorized
+                    if os.path.exists(self.tokenPath):
+                        os.remove(self.tokenPath)
+                    self.connectClient = auth.client_from_manual_flow(
+                        api_key=self.apiKey,
+                        app_secret=self.appSecret,
+                        callback_url=self.apiRedirectUri,
+                        token_path=self.tokenPath,
+                    )
+                    return  # Exit after manual flow
+            except Exception as e:
+                logger.error(f"Error while setting up the api: {e}")
+                attempt += 1
+                if attempt < retries:
+                    logger.info(f"Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                else:
+                    raise
 
     def get_hash_value(self, account_number, data):
         for item in data:
@@ -77,7 +89,6 @@ class Api:
     def getATMPrice(self, asset):
         # client can be None
         r = self.connectClient.get_quote(asset)
-
         assert r.status_code == 200, r.raise_for_status()
 
         data = r.json()
@@ -159,32 +170,94 @@ class Api:
         data = r.json()
 
         try:
-            marketKey = list(data["option"].keys())[0]
-            if not data.get("option")[marketKey].get("isOpen"):
+            market_data = data["option"]
+            logger.debug("Market data: %s", market_data)
+            if not market_data or not next(iter(market_data.values())).get("isOpen"):
                 return {"open": False, "openDate": None, "nowDate": now}
 
-            marketKey = list(data["option"].keys())[0]
+            session_hours = next(iter(market_data.values()))["sessionHours"]
 
-            sessionHours = data["option"][marketKey]["sessionHours"]
-
-            if sessionHours is None:
-                # the market is closed today
+            if not session_hours:
                 return {"open": False, "openDate": None, "nowDate": now}
 
-            start = sessionHours["regularMarket"][0]["start"]
-            start = datetime.datetime.fromisoformat(start)
-            end = sessionHours["regularMarket"][0]["end"]
-            end = datetime.datetime.fromisoformat(end)
+            regular_market_hours = session_hours.get("regularMarket")
+            if not regular_market_hours:
+                return {"open": False, "openDate": None, "nowDate": now}
 
-            # execute after 10 minutes to let volatility settle a bit and prevent exceptions due to api overload
-            windowStart = start + datetime.timedelta(minutes=0)
+            start = datetime.datetime.fromisoformat(regular_market_hours[0]["start"])
+            end = datetime.datetime.fromisoformat(regular_market_hours[0]["end"])
 
-            if windowStart <= now <= end:
-                return {"open": True, "openDate": windowStart, "nowDate": now}
+            window_start = start + datetime.timedelta(minutes=10)
+
+            if window_start <= now <= end:
+                return {"open": True, "openDate": window_start, "nowDate": now}
             else:
-                return {"open": False, "openDate": windowStart, "nowDate": now}
+                return {"open": False, "openDate": window_start, "nowDate": now}
         except (KeyError, TypeError, ValueError):
             return alert.botFailed(None, "Error getting the market hours for today.")
+
+    def display_margin_requirements(api, shorts):
+        if not shorts:
+            print("No short options positions found.")
+            return
+
+        # Get account data for margin information
+        r = api.connectClient.get_account(
+            api.getAccountHash(), fields=api.connectClient.Account.Fields.POSITIONS
+        )
+        data = r.json()
+
+        # Get margin data for all shorts
+        margin_data = []
+        total_margin = 0
+
+        for short in shorts:
+            margin = 0
+            option_type = "Call" if "C" in short["optionSymbol"] else "Put"
+
+            for position in data["securitiesAccount"]["positions"]:
+                if position["instrument"]["symbol"] == short["optionSymbol"]:
+                    if "maintenanceRequirement" in position:
+                        margin = position["maintenanceRequirement"]
+                    break
+
+            # Only include positions with non-zero margin
+            if margin > 0:
+                total_margin += margin
+                margin_data.append({
+                    "symbol": short["stockSymbol"],
+                    "type": f"Short {option_type}",
+                    "strike": short["strike"],
+                    "expiration": short["expiration"],
+                    "count": int(short["count"]),
+                    "margin": margin
+                })
+
+        # Sort by margin in descending order
+        margin_data.sort(key=lambda x: x["margin"], reverse=True)
+
+        if not margin_data:
+            print("No positions with margin requirements found.")
+            return
+
+        # Print total margin requirement
+        print(f"\nTotal Margin Requirement: ${total_margin:,.2f}")
+
+        print("\nDetailed Margin Requirements (Sorted by Margin):")
+        print("-" * 95)
+        print(f"{'Symbol':<15} {'Type':<12} {'Strike':<10} {'Expiration':<12} {'Count':<8} {'Margin':<15}")
+        print("-" * 95)
+
+        for position in margin_data:
+            print(
+                f"{position['symbol']:<15} "
+                f"{position['type']:<12} "
+                f"{position['strike']:<10} "
+                f"{position['expiration']:<12} "
+                f"{position['count']:<8} "
+                f"${position['margin']:<14,.2f}"
+            )
+        print("-" * 95)
 
     def writeNewContracts(
         self,
@@ -612,7 +685,7 @@ class Api:
         ).set_order_strategy_type(
             schwab.orders.common.OrderStrategyType.SINGLE
         ).set_complex_order_strategy_type(
-            schwab.orders.common.ComplexOrderStrategyType.VERTICAL
+            schwab.orders.common.ComplexOrderStrategyType.CUSTOM
         )
 
         if not debugCanSendOrders:
@@ -629,6 +702,7 @@ class Api:
         assert order_id is not None
 
         return order_id
+
 
     def place_order(api, order_func, order_params, price=None):
         maxRetries = 75

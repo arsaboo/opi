@@ -68,11 +68,27 @@ def calculate_cagr(total_investment: float, returns: float, days: int) -> tuple:
         tuple: A tuple containing the CAGR and CAGR percentage.
     """
     try:
-        cagr = ((returns / total_investment) ** (365 / days)) - 1
-        if isinstance(cagr, complex):
-            raise ValueError("CAGR calculation resulted in a complex number")
+        # Add validation to prevent division by zero or negative numbers
+        if total_investment <= 0 or returns <= 0 or days <= 0:
+            return 0, 0
+
+        # Limit the maximum ratio to prevent overflow
+        ratio = min(returns / total_investment, 1e6)
+
+        # Calculate CAGR with protection against extreme values
+        cagr = (ratio ** (365 / max(days, 1))) - 1
+
+        # Handle potential overflow or invalid results
+        if isinstance(cagr, complex) or cagr > 1e6:
+            return 0, 0
+
         cagr_percentage = round(cagr * 100, 2)  # Convert CAGR to percentage
-    except OverflowError:
-        cagr = 0
-        cagr_percentage = round(cagr, 2)
-    return cagr, cagr_percentage
+
+        # Sanity check on the final percentage
+        if cagr_percentage > 1000:  # Cap at 1000%
+            return 10, 1000
+
+        return cagr, cagr_percentage
+
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return 0, 0

@@ -11,22 +11,25 @@ loggingLevel = 'ERROR'
 AutoTrade = False
 
 configuration = {
-    'QQQ': {
-        # how many cc's to write
-        'amountOfHundreds': 1,
-
-        # write cc's at or over current asset price + this value
-        'minGapToATM': 1,
-
-        # If our strike is below current asset price - this value, we consider it deep ITM and want to rollup for debit
-        'deepITMLimit': 10,
-
-        # How much are we allowed to reduce the strike from last month? (flash crash protection)
-        # If the underlying f.ex. drops by 30 in value, this is the max we are gonna drop our cc strike
-        'maxDrawdownGap': 10,
-
+    '$SPX': {
+        # minumum rollup gap for rolling up the strike. We will try to roll up by this amount if possible, but if not, we will reduce the gap until we are able to fetch minPremium
+        "minRollupGap": 50,
         # don't write cc's with strikes below this value (set this f.ex. to breakeven)
-        'minStrike': 0
+        "minStrike": 5000,
+        # Max DTE for rolling the calls.
+        "maxRollOutWindow": 30,
+        # Min DTE for rolling the calls.
+        "minRollOutWindow": 7,
+        # Ideal premium desired for writing the cc's
+        "idealPremium": 10,
+        # minimum premium desired for writing the cc's
+        "minPremium": 5,
+        # If our short strike is below current asset price - this value, we consider it ITM and want to rollup for minPremium
+        "ITMLimit": 75,
+        # If our strike is below current asset price - this value, we consider it deep ITM and want to rollup without credit
+        "deepITMLimit": 150,
+        # If our strike is above current asset price + this value, we consider it deep OTM and don't want to rollup. Instead, we wait for the short option to expire worthless
+        "deepOTMLimit": 10,
     }
 }
 

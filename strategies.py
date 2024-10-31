@@ -1,5 +1,7 @@
 import json
 import statistics
+import keyboard
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
@@ -11,6 +13,44 @@ from configuration import spreads
 from optionChain import OptionChain
 from support import calculate_cagr
 
+
+# Global flag for order cancellation
+cancel_order = False
+
+def handle_cancel(e):
+    global cancel_order
+    if e.name == 'c':
+        cancel_order = True
+        print("\nCancelling order...")
+
+def monitor_order(api, order_id):
+    """Monitor order status and handle cancellation"""
+    global cancel_order
+
+    while True:
+        if cancel_order:
+            try:
+                api.cancelOrder(order_id)
+                print("Order cancelled successfully.")
+                return False
+            except Exception as e:
+                print(f"Error cancelling order: {e}")
+                return False
+
+        # Check order status
+        try:
+            order_status = api.checkOrder(order_id)
+            if order_status["filled"]:
+                print("Order filled successfully!")
+                return True
+            elif order_status["status"] == "CANCELED":
+                print("Order was cancelled.")
+                return False
+            print("Waiting for order to be filled ...")
+            time.sleep(2)  # Wait before checking again
+        except Exception as e:
+            print(f"Error checking order status: {e}")
+            return False
 
 def BoxSpread(api, asset="$SPX"):
     days = spreads[asset].get("days", 2000)
@@ -120,8 +160,6 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
     for entry in zip(calls_chain, puts_chain):
         call_contracts = sorted(entry[0]["contracts"], key=lambda c: c["strike"])
         put_contracts = sorted(entry[1]["contracts"], key=lambda c: c["strike"])
-        # print(f"Call Contracts: {call_contracts}")
-        # print(f"Put Contracts: {put_contracts}")
         for i in range(len(call_contracts)):
             low_call = low_put = high_call = high_put = None
             # Find the next contract with a strike that is 'spread' above this one
@@ -154,7 +192,6 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
                             high_call = call_contracts[j]["ask"]
                             high_put = put_contracts[j]["bid"]
                     if None not in [low_call, high_put, high_call, low_put]:
-                        # print(f"Low Call: {low_call}, Low Put: {low_put}, High Call: {high_call}, High Put: {high_put}")
                         if trade.lower() == "buy":  # debit
                             trade_price = low_put + high_call - high_put - low_call
                             trade_price = -trade_price
@@ -162,7 +199,7 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
                             trade_price = low_call + high_put - high_call - low_put
                     else:
                         continue
-                    # print(f"Trade Price: {trade_price}. Strike 1: {call_contracts[i]['strike']}, Strike 2: {call_contracts[j]['strike']}, date: {entry[0]['date']}")
+
                     low_strike = call_contracts[i]["strike"]
                     high_strike = call_contracts[j]["strike"]
 
@@ -179,7 +216,6 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
                             cagr, cagr_percentage = calculate_cagr(
                                 spread, trade_price, days
                             )
-                        # print(f"Trade Price: {trade_price}, CAGR: {cagr}, CAGR Percentage: {cagr_percentage}")
                         if trade.lower() == "buy" and (
                             highest_cagr is None or cagr > highest_cagr
                         ):
@@ -265,12 +301,16 @@ def bull_call_spread(
     # Iterate over each date's options
     for entry in entries:
         contracts = sorted(entry["contracts"], key=lambda c: c["strike"])
+
+        # Verify the underlying symbol matches
+        if not contracts or contracts[0]["underlying"] != asset:
+            continue
+
         for i in range(len(contracts)):
             # Find the next contract with a strike that is 'spread' above this one
             for j in range(i + 1, len(contracts)):
                 if contracts[j]["strike"] - contracts[i]["strike"] == spread:
                     # Calculate net credit received by buying and selling options
-                    #
                     if price.lower() in ["mid", "market"]:
                         net_debit = statistics.median(
                             [contracts[i]["bid"], contracts[i]["ask"]]
@@ -330,7 +370,7 @@ def synthetic_covered_call_spread(
     api, asset, spread=100, days=90, downsideProtection=0.25, price="mid"
 ):
     """
-    This function calculates the best bull call spread for a given asset
+    This function calculates the best synthetic covered call spread for a given asset
     :param api: the API object
     :param asset: the asset for which the spread is to be calculated
     :param spread: the spread between the two strikes
@@ -379,17 +419,38 @@ def synthetic_covered_call_spread(
     )
     best_spread = None
     highest_cagr = float("-inf")
+
+    # Create a dictionary to map dates to put contracts for easier lookup
+    put_contracts_by_date = {}
+    for put_entry in puts:
+        put_contracts_by_date[put_entry["date"]] = {
+            contract["strike"]: contract
+            for contract in put_entry["contracts"]
+        }
+
     # Iterate over each date's options
-    for entry in zip(entries, puts):
-        contracts = sorted(entry[0]["contracts"], key=lambda c: c["strike"])
-        put_contracts = sorted(entry[1]["contracts"], key=lambda c: c["strike"])
+    for entry in entries:
+        contracts = sorted(entry["contracts"], key=lambda c: c["strike"])
+
+        # Verify the underlying symbol matches
+        if not contracts or contracts[0]["underlying"] != asset:
+            continue
+
+        put_contracts_map = put_contracts_by_date.get(entry["date"], {})
+
+        if not put_contracts_map:
+            continue
 
         for i in range(len(contracts)):
             # Find the next contract with a strike that is 'spread' above this one
             for j in range(i + 1, len(contracts)):
                 if contracts[j]["strike"] - contracts[i]["strike"] == spread:
+                    # Get corresponding put contract for the lower strike
+                    put_contract = put_contracts_map.get(contracts[i]["strike"])
+                    if not put_contract:
+                        continue
+
                     # Calculate net credit received by buying and selling options
-                    #
                     if price.lower() in ["mid", "market"]:
                         net_debit = (
                             statistics.median(
@@ -399,21 +460,21 @@ def synthetic_covered_call_spread(
                                 [contracts[j]["bid"], contracts[j]["ask"]]
                             )
                             - statistics.median(
-                                [put_contracts[i]["bid"], put_contracts[i]["ask"]]
+                                [put_contract["bid"], put_contract["ask"]]
                             )
                         )
                     else:
                         net_debit = (
                             contracts[i]["ask"]
                             - contracts[j]["bid"]
-                            - put_contracts[i]["bid"]
+                            - put_contract["bid"]
                         )
                     # calculate break even for this spread
                     break_even = contracts[i]["strike"] + net_debit
                     downside_protection = 1 - (break_even / underlying_price)
                     # Calculate CAGR for this spread
                     days = (
-                        datetime.strptime(entry[0]["date"], "%Y-%m-%d")
+                        datetime.strptime(entry["date"], "%Y-%m-%d")
                         - datetime.today()
                     ).days
                     if (
@@ -435,12 +496,14 @@ def synthetic_covered_call_spread(
                     if cagr > highest_cagr:
                         best_spread = {
                             "asset": asset,
-                            "date": entry[0]["date"],
+                            "date": entry["date"],
                             "strike1": contracts[i]["strike"],
                             "bid1": contracts[i]["bid"],
                             "ask1": contracts[i]["ask"],
                             "bid2": contracts[j]["bid"],
                             "ask2": contracts[j]["ask"],
+                            "put_bid": put_contract["bid"],
+                            "put_ask": put_contract["ask"],
                             "strike2": contracts[j]["strike"],
                             "net_debit": round(net_debit, 2),
                             "cagr": round(cagr, 2),
@@ -494,101 +557,152 @@ def find_spreads(api, synthetic=False):
         for future in as_completed(futures_to_asset):
             asset, result = future.result()
             spread_dict[asset] = result
-    index = 1
+
     # Define the table
     table = PrettyTable()
-    table.field_names = [
-        "Index",
-        "Asset",
-        "Expiration Date",
-        "Strike Low",
-        "Strike High",
-        "Bid Call Low",
-        "Ask Call Low",
-        "Bid Call High",
-        "Ask Call High",
-        "Total Investment",
-        "Max Profit",
-        "CAGR",
-        "Protection",
-    ]
+    if synthetic:
+        table.field_names = [
+            "Index",
+            "Asset",
+            "Expiration",
+            "Strike Low",
+            "Strike High",
+            "Call Low B/A",
+            "Call High B/A",
+            "Put Low B/A",
+            "Investment",
+            "Max Profit",
+            "CAGR",
+            "Protection",
+        ]
+    else:
+        table.field_names = [
+            "Index",
+            "Asset",
+            "Expiration",
+            "Strike Low",
+            "Strike High",
+            "Call Low B/A",
+            "Call High B/A",
+            "Investment",
+            "Max Profit",
+            "CAGR",
+            "Protection",
+        ]
 
     # Create a list to store the rows
     rows = []
 
     for asset, best_spread in spread_dict.items():
         if best_spread is not None:
-            rows.append(
-                [
-                    asset,
-                    best_spread["date"],
-                    best_spread["strike1"],
-                    best_spread["strike2"],
-                    best_spread["bid1"],
-                    best_spread["ask1"],
-                    best_spread["bid2"],
-                    best_spread["ask2"],
-                    best_spread["total_investment"],
-                    best_spread["total_return"],
-                    round(best_spread["cagr_percentage"], 2),  # keep as float for now
-                    str(round(best_spread["downside_protection"], 2)) + "%",
-                ]
-            )
+            row = [
+                asset,
+                best_spread["date"],
+                best_spread["strike1"],
+                best_spread["strike2"],
+                f"{best_spread['bid1']}/{best_spread['ask1']}",
+                f"{best_spread['bid2']}/{best_spread['ask2']}",
+            ]
+            if synthetic:
+                row.append(f"{best_spread['put_bid']}/{best_spread['put_ask']}")
+            row.extend([
+                best_spread["total_investment"],
+                best_spread["total_return"],
+                round(best_spread["cagr_percentage"], 2),
+                str(round(best_spread["downside_protection"], 2)) + "%",
+            ])
+            rows.append(row)
 
     # Sort the rows by CAGR
-    rows.sort(key=lambda x: x[10], reverse=True)
+    rows.sort(key=lambda x: x[-2], reverse=True)  # -2 is the CAGR column before converting to string
 
     # Convert the cagr_percentage to string after sorting
     for row in rows:
-        row[10] = str(row[10]) + "%"
+        row[-2] = str(row[-2]) + "%"
 
     # Add the sorted rows to the table with their index
     for index, row in enumerate(rows, start=1):
         table.add_row([index] + row)
 
     print(table)
-    index = None
 
     try:
         index = inputimeout(
             prompt="Enter the index of the row you're interested in: ",
             timeout=30,
         )
-        index = int(index)
-    except ValueError:
-        print("Invalid input. Please enter an integer.")
-    except TimeoutOccurred:
-        index = 0
-    if index >= 1 and index <= len(rows):
-        selected_row = table.get_string(start=index - 1, end=index)
-        print("You selected the following row:")
-        print(selected_row)
-        # get the corresponding values from the spread_dict
-        selected_asset = rows[index - 1][0]
-        selected_date = rows[index - 1][1]
-        selected_spread = spread_dict[selected_asset]
-        price = selected_spread["net_debit"]
-        strike_low = selected_spread["strike1"]
-        strike_high = selected_spread["strike2"]
         try:
-            user_input = inputimeout(
-                prompt="Do you want to place the trade? (yes/no): ", timeout=30
-            ).lower()
-        except TimeoutOccurred:
-            user_input = "no"
-        if user_input == "yes":
-            selected_date = datetime.strptime(selected_date, "%Y-%m-%d")
-            if synthetic:
-                api.place_order(
-                    api.synthetic_covered_call_order,
-                    [selected_asset, selected_date, strike_low, strike_high, 1],
-                    round_to_nearest_five_cents(price),
-                )
+            index = int(index)
+            if 1 <= index <= len(rows):
+                selected_row = table.get_string(start=index - 1, end=index)
+                print("You selected the following row:")
+                print(selected_row)
+                # get the corresponding values from the spread_dict
+                selected_asset = rows[index - 1][0]
+                selected_date = rows[index - 1][1]
+                selected_spread = spread_dict[selected_asset]
+                price = selected_spread["net_debit"]
+                strike_low = selected_spread["strike1"]
+                strike_high = selected_spread["strike2"]
+                try:
+                    user_input = inputimeout(
+                        prompt="Do you want to place the trade? (yes/no): ", timeout=30
+                    ).lower()
+                except TimeoutOccurred:
+                    user_input = "no"
+                if user_input == "yes":
+                    selected_date = datetime.strptime(selected_date, "%Y-%m-%d")
+
+                    # Print order details
+                    print("\nOrder Details:")
+                    print(f"Asset: {selected_asset}")
+                    print(f"Expiration: {selected_date.strftime('%Y-%m-%d')}")
+                    print(f"Low Strike: {strike_low}")
+                    print(f"High Strike: {strike_high}")
+                    print(f"Net Debit: {price}")
+                    if synthetic:
+                        print(f"Strategy: Synthetic Covered Call")
+                        print(f"Leg 1: Buy Call @ {strike_low} for {selected_spread['ask1']}")
+                        print(f"Leg 2: Sell Call @ {strike_high} for {selected_spread['bid2']}")
+                        print(f"Leg 3: Buy Put @ {strike_low} for {selected_spread['put_ask']}")
+                    else:
+                        print(f"Strategy: Vertical Call Spread")
+                        print(f"Leg 1: Buy Call @ {strike_low} for {selected_spread['ask1']}")
+                        print(f"Leg 2: Sell Call @ {strike_high} for {selected_spread['bid2']}")
+
+                    print("\nWaiting for order to be filled ... (Press 'c' to cancel)")
+
+                    # Reset cancel flag
+                    global cancel_order
+                    cancel_order = False
+
+                    # Setup keyboard listener
+                    keyboard.on_press(handle_cancel)
+
+                    # Place the order
+                    if synthetic:
+                        order_id = api.synthetic_covered_call_order(
+                            selected_asset, selected_date, strike_low, strike_high, 1, price
+                        )
+                    else:
+                        order_id = api.vertical_call_order(
+                            selected_asset, selected_date, strike_low, strike_high, 1, price - 5
+                        )
+
+                    if order_id:
+                        # Monitor order
+                        success = monitor_order(api, order_id)
+                        keyboard.unhook_all()
+                        if not success:
+                            print("Order was not completed.")
+                    else:
+                        keyboard.unhook_all()
+                        print("Failed to place order.")
+                else:
+                    print("Order not placed")
             else:
-                api.place_order(
-                    api.vertical_call_order,
-                    [selected_asset, selected_date, strike_low, strike_high, 1],
-                    round_to_nearest_five_cents(price - 5),
-                )
-        else:
-            print("Order not placed")
+                print("Invalid index. Please enter a number between 1 and", len(rows))
+        except ValueError:
+            print("Invalid input. Please enter an integer.")
+    except TimeoutOccurred:
+        print("Timeout occurred. No selection made.")

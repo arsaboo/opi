@@ -3,3 +3,4 @@ __pycache__
 configuration.py
 token.json
 db.json
+.aider*

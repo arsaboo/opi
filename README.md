@@ -17,8 +17,19 @@ If you don't understand everything 100%, then don't use it!
 ### Setup instructions
 
 1. Register and create an app on [developer.schwab.com](https://developer.schwab.com/) to get an API key
-2. copy configuration.example.py to configuration.py and adjust it to your needs
+2. Copy configuration.example.py to configuration.py and adjust it to your needs
 3. Run main.py
+
+### Debug Mode and Market Status
+
+The bot operates based on both market status and debug mode settings:
+
+- When market is open: The bot will run normally with the message "Market is open, running the program now..."
+- When market is closed:
+  - If debug mode is enabled (`debugMarketOpen = True` in configuration.py): The bot will run with the message "Market is closed but the program will work in debug mode."
+  - If debug mode is disabled (`debugMarketOpen = False`): The bot will wait for market open with the message "Market is closed."
+
+Debug mode is useful for testing and development purposes when the market is closed.
 
 ## Factsheet
 

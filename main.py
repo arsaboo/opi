@@ -71,6 +71,7 @@ def present_menu(default="1"):
         "2": "Check Box Spreads",
         "3": "Check Vertical Spreads",
         "4": "Check Synthetic Covered Calls",
+        "5": "View Margin Requirements",
         "0": "Exit",
     }
 
@@ -89,16 +90,20 @@ def present_menu(default="1"):
 
 
 def execute_option(api, option, exec_window, shorts=None):
-    if not exec_window["open"]:
-        print("Market is closed, but the program will work in debug mode.")
+    # Show both debug mode and market status
+    if exec_window["open"]:
+        print("Market is open, running the program now...")
     else:
-        print("Market open, running the program now ...")
+        print("Market is closed" + (" but the program will work in debug mode" if debugMarketOpen else "") + ".")
+        if not debugMarketOpen:
+            return
 
     option_mapping = {
         "1": lambda: roll_short_positions(api, shorts),
         "2": lambda: BoxSpread(api, "$SPX"),
         "3": lambda: find_spreads(api),
         "4": lambda: find_spreads(api, synthetic=True),
+        "5": lambda: Api.display_margin_requirements(api, shorts),
     }
 
     if option in option_mapping:
