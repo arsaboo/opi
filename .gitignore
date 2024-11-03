@@ -1,6 +1,7 @@
 __pycache__
 .idea
 configuration.py
-token.json
-db.json
+*.json
+*.csv
 .aider*
+*.pickle

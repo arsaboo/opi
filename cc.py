@@ -93,19 +93,22 @@ def RollCalls(api, short):
     # Get underlying price and calculate position metrics
     underlying_price = api.getATMPrice(short["stockSymbol"])
     short_strike = float(short["strike"])
-    moneyness = (underlying_price - short_strike) / underlying_price * 100
     days_to_expiry = (short_expiration - datetime.now().date()).days
     short_delta = api.getOptionDetails(short["optionSymbol"])["delta"]
 
     # Determine position status
-    if moneyness > 5:
-        position_status = f"{Fore.RED}Deep ITM{Style.RESET_ALL}"
-    elif moneyness > 2:
-        position_status = f"{Fore.YELLOW}Moderately ITM{Style.RESET_ALL}"
-    elif moneyness > 0:
-        position_status = f"{Fore.GREEN}Slightly ITM{Style.RESET_ALL}"
-    else:
+    value = round(short_strike - underlying_price, 2)
+    if value > 0:
         position_status = f"{Fore.GREEN}OTM{Style.RESET_ALL}"
+    elif value < 0:
+        if abs(value) > configuration[short["stockSymbol"]].get("deepITMLimit", 50):
+            position_status = f"{Fore.RED}Deep ITM{Style.RESET_ALL}"
+        elif abs(value) > configuration[short["stockSymbol"]].get("ITMLimit", 25):
+            position_status = f"{Fore.YELLOW}ITM{Style.RESET_ALL}"
+        else:
+            position_status = f"{Fore.GREEN}Just ITM{Style.RESET_ALL}"
+    else:
+        position_status = "ATM"
 
     # Find roll opportunity
     roll = find_best_rollover(api, chain, short)
@@ -198,19 +201,22 @@ def RollSPX(api, short):
     # Get underlying price and calculate position metrics
     underlying_price = api.getATMPrice(short["stockSymbol"])
     short_strike = float(short["strike"])
-    moneyness = (underlying_price - short_strike) / underlying_price * 100
     days_to_expiry = (short_expiration - datetime.now().date()).days
     short_delta = get_option_delta(short["optionSymbol"], chain)
 
     # Determine position status
-    if moneyness > 5:
-        position_status = f"{Fore.RED}Deep ITM{Style.RESET_ALL}"
-    elif moneyness > 2:
-        position_status = f"{Fore.YELLOW}Moderately ITM{Style.RESET_ALL}"
-    elif moneyness > 0:
-        position_status = f"{Fore.GREEN}Slightly ITM{Style.RESET_ALL}"
-    else:
+    value = round(short_strike - underlying_price, 2)
+    if value > 0:
         position_status = f"{Fore.GREEN}OTM{Style.RESET_ALL}"
+    elif value < 0:
+        if abs(value) > configuration[short["stockSymbol"]].get("deepITMLimit", 50):
+            position_status = f"{Fore.RED}Deep ITM{Style.RESET_ALL}"
+        elif abs(value) > configuration[short["stockSymbol"]].get("ITMLimit", 25):
+            position_status = f"{Fore.YELLOW}ITM{Style.RESET_ALL}"
+        else:
+            position_status = f"{Fore.GREEN}Just ITM{Style.RESET_ALL}"
+    else:
+        position_status = "ATM"
 
     # Find roll opportunity
     roll = find_best_rollover(api, chain, short)

@@ -9,14 +9,33 @@ from tzlocal import get_localzone
 import alert
 import support
 from api import Api
+from sheets_api import SheetsAPI
 from cc import RollCalls, RollSPX
-from configuration import apiKey, apiRedirectUri, appSecret, debugMarketOpen
+from configuration import (
+    debugMarketOpen, enableTaxTracking,
+    apiKey, apiRedirectUri, appSecret, SPREADSHEET_ID
+)
 from logger_config import get_logger
 from strategies import BoxSpread, find_spreads
+from tax_tracker import TaxTracker
 
 logger = get_logger()  # use get_logger(True) to use the underlying logger
+
+# Initialize APIs
 api = Api(apiKey, apiRedirectUri, appSecret)
 
+# Lazy initialization of tax tracking components
+_sheets_api = None
+_tax_tracker = None
+
+def get_tax_tracker():
+    """Lazy initialization of tax tracking components"""
+    global _sheets_api, _tax_tracker
+    if enableTaxTracking and _tax_tracker is None:
+        _sheets_api = SheetsAPI(SPREADSHEET_ID)
+        _sheets_api.authenticate()
+        _tax_tracker = TaxTracker(_sheets_api)
+    return _tax_tracker
 
 def roll_short_positions(api, shorts):
     any_expiring = False  # flag to track if any options are expiring within 7 days
@@ -24,8 +43,6 @@ def roll_short_positions(api, shorts):
 
     for short in shorts:
         dte = (datetime.strptime(short["expiration"], "%Y-%m-%d").date() - today).days
-        # short = {"optionSymbol": "SPXW  240622C05100000", "expiration": "2024-06-22", "strike": "5100", "count": 1.0, "stockSymbol": "$SPX", "receivedPremium": 72.4897}
-        # short = {'stockSymbol': 'MSFT', 'optionSymbol': 'MSFT  240531C00350000', 'expiration': '2024-05-31', 'count': 1.0, 'strike': '350', 'receivedPremium': 72.4897}
         if -1 < dte < 7:
             any_expiring = True  # set the flag to True
 
@@ -39,7 +56,6 @@ def roll_short_positions(api, shorts):
 
     if not any_expiring:  # if the flag is still False after the loop, print the message
         print("No options expiring soon.")
-
 
 def wait_for_execution_window(execWindow):
     if not execWindow["open"]:
@@ -64,6 +80,60 @@ def wait_for_execution_window(execWindow):
             print(f"Market will open in {minutes} minutes and {seconds} seconds.")
             time.sleep(sleep_time)
 
+def display_tax_menu():
+    tax_tracker = get_tax_tracker()
+    if not tax_tracker:
+        print("Tax tracking is not enabled.")
+        return True
+
+    menu_options = {
+        "1": "View Year-to-Date Summary",
+        "2": "Analyze Tax Implications",
+        "3": "Export Tax Report",
+        "0": "Back to Main Menu",
+    }
+
+    while True:
+        print("\n--- Tax Management ---")
+        for key, value in menu_options.items():
+            print(f"{key}. {value}")
+
+        choice = input("Please choose an option: ")
+
+        if choice == "0":
+            break  # Exit the tax menu loop
+        elif choice == "1":
+            year = datetime.now().year
+            summary = tax_tracker.get_year_summary(year)
+            print(f"\nTax Summary for {year}:")
+            print(f"Total Income: ${summary['total_income']:,.2f}")
+            print(f"Option Income: ${summary['option_income']:,.2f}")
+            print(f"Stock Gains: ${summary['stock_gains']:,.2f}")
+            print(f"Dividends: ${summary['dividends']:,.2f}")
+
+            # Print transaction details by category
+            for category, transactions in summary['transactions_by_type'].items():
+                if transactions:  # Only show categories with transactions
+                    print(f"\n{category}:")
+                    for t in sorted(transactions, key=lambda x: x['date']):
+                        print(f"{t['date']}: {t['description']} - ${t['amount']:,.2f}")
+
+        elif choice == "2":
+            year = datetime.now().year
+            analysis = tax_tracker.analyze_tax_implications(year)
+            print(f"\nTax Analysis for {year}:")
+            print(f"Total Taxable Income: ${analysis['total_taxable_income']:,.2f}")
+            print("\nRecommendations:")
+            for rec in analysis['recommendations']:
+                print(f"- {rec}")
+        elif choice == "3":
+            year = datetime.now().year
+            filename = tax_tracker.export_tax_report(year)
+            print(f"\nTax report exported to: {filename}")
+        else:
+            print("Invalid option. Please try again.")
+
+    return True  # Indicate we're returning to main menu
 
 def present_menu(default="1"):
     menu_options = {
@@ -72,11 +142,15 @@ def present_menu(default="1"):
         "3": "Check Vertical Spreads",
         "4": "Check Synthetic Covered Calls",
         "5": "View Margin Requirements",
+        "6": "Tax Management" if enableTaxTracking else None,
         "0": "Exit",
     }
 
+    # Remove None values from menu_options
+    menu_options = {k: v for k, v in menu_options.items() if v is not None}
+
     while True:
-        print("--- Welcome to Options Trading ---")
+        print("\n--- Welcome to Options Trading ---")
         for key, value in menu_options.items():
             print(f"{key}. {value}")
 
@@ -87,7 +161,6 @@ def present_menu(default="1"):
             return choice
         else:
             print("Invalid option. Please enter a valid option.")
-
 
 def execute_option(api, option, exec_window, shorts=None):
     # Show both debug mode and market status
@@ -104,52 +177,58 @@ def execute_option(api, option, exec_window, shorts=None):
         "3": lambda: find_spreads(api),
         "4": lambda: find_spreads(api, synthetic=True),
         "5": lambda: Api.display_margin_requirements(api, shorts),
+        "6": lambda: display_tax_menu() if enableTaxTracking else None,
     }
 
     if option in option_mapping:
-        option_mapping[option]()
+        func = option_mapping[option]
+        if func:  # Only execute if the function exists (not None)
+            result = func()
+            if result:  # If a function returns True (like tax menu), break the loop
+                return True
+            # Only sleep if not returning from tax menu
+            sleep_time = (
+                5
+                if exec_window["open"]
+                and datetime.now(get_localzone()).time() >= time_module(15, 30)
+                else 30
+            )
+            print(f"Sleeping for {sleep_time} seconds...")
+            time.sleep(sleep_time)
     else:
         print(f"Invalid option: {option}")
 
-    sleep_time = (
-        5
-        if exec_window["open"]
-        and datetime.now(get_localzone()).time() >= time_module(15, 30)
-        else 30
-    )
-    print(f"Sleeping for {sleep_time} seconds...")
-    time.sleep(sleep_time)
-
-
 def main():
-    while True:
-        try:
-            option = present_menu()
-            if option == "0":
-                break
-            while True:
-                try:
-                    api.setup()
-                except Exception as e:
-                    alert.botFailed(None, "Failed to setup the API: " + str(e))
-                    return
+    try:
+        # Initialize Schwab API
+        api.setup()
 
-                execWindow = api.getOptionExecutionWindow()
-                shorts = api.updateShortPosition()
+        while True:
+            try:
+                option = present_menu()
+                if option == "0":
+                    break
+                while True:
+                    execWindow = api.getOptionExecutionWindow()
+                    shorts = api.updateShortPosition()
 
-                logger.debug(f"Execution: {execWindow}")
+                    logger.debug(f"Execution: {execWindow}")
 
-                if debugMarketOpen or execWindow["open"]:
-                    execute_option(api, option, execWindow, shorts)
-                else:
-                    wait_for_execution_window(execWindow)
+                    if debugMarketOpen or execWindow["open"]:
+                        result = execute_option(api, option, execWindow, shorts)
+                        if result:  # If a function returns True (like tax menu), break inner loop
+                            break
+                    else:
+                        wait_for_execution_window(execWindow)
 
-        except KeyboardInterrupt:
-            print("\nInterrupted. Going back to the main menu...")
-        except Exception as e:
-            alert.botFailed(None, "Uncaught exception: " + str(e))
-            break  # Exit the program if an unhandled exception occurs
+            except KeyboardInterrupt:
+                print("\nInterrupted. Going back to the main menu...")
+            except Exception as e:
+                alert.botFailed(None, "Uncaught exception: " + str(e))
+                break  # Exit the program if an unhandled exception occurs
 
+    except Exception as e:
+        alert.botFailed(None, "Failed to initialize APIs: " + str(e))
 
 if __name__ == "__main__":
     main()

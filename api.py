@@ -161,11 +161,14 @@ class Api:
     def getOptionExecutionWindow(self):
         now = datetime.datetime.now(pytz.UTC)
 
-        r = self.connectClient.get_market_hours(
-            self.connectClient.MarketHours.Market.OPTION
-        )
-
-        assert r.status_code == 200, r.raise_for_status()
+        try:
+            r = self.connectClient.get_market_hours(
+                self.connectClient.MarketHours.Market.OPTION
+            )
+            r.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error fetching market hours: {e}")
+            return {"open": False, "openDate": None, "nowDate": now, "error": str(e)}
 
         data = r.json()
 
@@ -175,8 +178,7 @@ class Api:
             if not market_data or not next(iter(market_data.values())).get("isOpen"):
                 return {"open": False, "openDate": None, "nowDate": now}
 
-            session_hours = next(iter(market_data.values()))["sessionHours"]
-
+            session_hours = next(iter(market_data.values())).get("sessionHours")
             if not session_hours:
                 return {"open": False, "openDate": None, "nowDate": now}
 
@@ -193,8 +195,9 @@ class Api:
                 return {"open": True, "openDate": window_start, "nowDate": now}
             else:
                 return {"open": False, "openDate": window_start, "nowDate": now}
-        except (KeyError, TypeError, ValueError):
-            return alert.botFailed(None, "Error getting the market hours for today.")
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error(f"Error processing market hours data: {e}")
+            return {"open": False, "openDate": None, "nowDate": now, "error": str(e)}
 
     def display_margin_requirements(api, shorts):
         if not shorts:

@@ -1,67 +1,219 @@
-# OPI - Option passive income bot
+# Options Trading Bot
 
-The DIY alternative to rolling calls in your portfolio.
+This bot helps manage options positions, including rolling options and analyzing spreads. It uses Schwab API for options trading operations and optionally Google Sheets for tax tracking.
 
-This bot is meant for my own personal use, the strategy behind it is subject to change.
+## Setup
 
-That said, you are free to use this bot in any way you see fit, as long as you understand what's written here and what the code of this bot does.
+1. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-If you don't understand everything 100%, then don't use it!
+2. Copy configuration:
+```bash
+cp configuration.example.py configuration.py
+```
 
-### Requirements
+3. Configure your setup:
 
-- A Schwab account with options privileges
-- All python packages from requirements.txt installed
-- General understanding of the stock market and options
+### Required: Schwab API Setup
+1. Create an app on https://developer.schwab.com/
+2. Get your API key and secret
+3. Update configuration.py with your Schwab credentials:
+```python
+apiKey = 'your_api_key'
+apiRedirectUri = 'https://localhost'
+SchwabAccountID = 'your_account_id'
+appSecret = 'your_app_secret'
+```
 
-### Setup instructions
+### Optional: Google Sheets Setup (for Tax Tracking)
+1. Create a Google Cloud Project:
+   - Go to https://console.cloud.google.com/
+   - Create a new project
+   - Enable Google Sheets API
 
-1. Register and create an app on [developer.schwab.com](https://developer.schwab.com/) to get an API key
-2. Copy configuration.example.py to configuration.py and adjust it to your needs
-3. Run main.py
+2. Create credentials:
+   - Go to APIs & Services > Credentials
+   - Click "Create Credentials" > "OAuth client ID"
+   - Choose "Desktop app"
+   - Download the credentials and save as `credentials.json` in project directory
 
-### Debug Mode and Market Status
+3. Get your spreadsheet ID:
+   - Open your "Stock Portfolio Tracker" spreadsheet
+   - The ID is in the URL: https://docs.google.com/spreadsheets/d/[SPREADSHEET_ID]/edit
 
-The bot operates based on both market status and debug mode settings:
+4. Update configuration.py to enable tax tracking:
+```python
+enableTaxTracking = True
+SPREADSHEET_ID = 'your_spreadsheet_id'
+```
 
-- When market is open: The bot will run normally with the message "Market is open, running the program now..."
-- When market is closed:
-  - If debug mode is enabled (`debugMarketOpen = True` in configuration.py): The bot will run with the message "Market is closed but the program will work in debug mode."
-  - If debug mode is disabled (`debugMarketOpen = False`): The bot will wait for market open with the message "Market is closed."
+## Architecture
 
-Debug mode is useful for testing and development purposes when the market is closed.
+The codebase is organized with clear separation of concerns:
+- `api.py`: Handles all Schwab API interactions for options trading
+- `sheets_api.py`: Handles Google Sheets interactions (used only for tax tracking)
+- `tax_tracker.py`: Manages tax-related functionality using Google Sheets
+- `optionChain.py`: Processes option chain data from Schwab API
+- `cc.py`: Implements options rolling logic
+- `main.py`: Coordinates the application flow
 
-## Factsheet
+## Spreadsheet Format
 
-This bot seeks to generate passive income from option premiums through rolling covered calls on stocks and ETF's.
+If using tax tracking with Google Sheets, the integration expects a specific format:
 
-The bot is designed to manage calls that you have created on the assets of your choice.
+### "Stocks" Sheet
+Summary of current positions with columns:
+- Category
+- Stock Name
+- Google Quote
+- Change
+- Chart
+- Google Price
+- Units
+- Cost
+- Cost (Per Unit)
+- Unrealised Gain/Loss
+- Unrealised Gain/Loss (%)
+- Realised Gain/Loss
+- Dividends Collected
+- Total Gain/Loss
+- Mkt Value
+- Returns
+- 52 Wk Low
+- 52 Wk High
+- Additional Deltas
+- Recom
+- Remarks (used to filter for "Schwab" positions)
 
-The bot does not create new covered calls. Instead, it focuses on rolling existing covered calls each month.
+### "Transactions" Sheet
+Detailed transaction history with columns:
+- Date (in YYYY-MM-DD format, e.g., 2024-01-31)
+- Type
+- Stock
+- Units
+- Price (per unit)
+- Fees
+- Split Ratio
+- Prev Row
+- Previous Units
+- Cumulative Units
+- Transacted Value
+- Previous Cost
+- Cost of Transaction
+- Cost of Transaction (per unit)
+- Cumulative Cost
+- Gains/Losses
+- Yield
+- Cash Flow
+- TIC
+- Remarks
+- Account (used to filter for "Schwab" transactions)
 
-You can configure the roll-up or roll-out settings in the configuration file.
+Transaction Types:
+- Buy: Stock purchase
+- Div: Dividend received
+- Sell: Stock sale
+- SPO: Sell put option to open
+- Fees: Fees charged
+- SCO: Sell call option to open
+- BCC: Buy call option to close
+- BCO-VC: Buy call option to open
+- SCO-VC: Sell call option to open
+- BCO: Buy call option to open
+- BCC-VC-F: Buy call option to close
+- BCO-COM: Buy call option to open
+- SPO-COM: Sell put option to open
+- SCC-VC-F: Sell call option to close
+- BPC: Buy put option to close
+- BPC-COM: Buy put option to close
+- SCC-VC: Sell call option to close
+- BCC-VC: Buy call option to close
 
----
+### Data Format Requirements
 
-Please note: The creation of new covered calls is a manual process and must be done by the user.
----
-### Rollups: Further explanation
+1. Dates:
+   - Must be in YYYY-MM-DD format (e.g., 2024-01-31)
+   - Invalid formats like MM/DD/YYYY will cause errors
 
-A 'rollup' is the process of rolling to a higher strike price than the current one.
+2. Numbers:
+   - Can include currency symbols (e.g., $123.45)
+   - Can include commas (e.g., 1,234.56)
+   - Negative values should use minus sign (e.g., -123.45)
+   - Empty cells or '-' are treated as zero
 
-You can use `minRollupGap` to configure the roll, you should have some spare cash in the account to pay for rollup costs, because the new contract can have less premium than the current one,
-if the asset price went up.
+3. Percentages:
+   - Can include % symbol (e.g., 12.34%)
+   - Can be negative (e.g., -12.34%)
+   - Empty cells or '-' are treated as zero
 
-### Risks
+4. Text Fields:
+   - Case sensitive for Type and Account columns
+   - Empty cells are treated as empty strings
+   - Leading/trailing spaces are trimmed
 
-**Volatility risk** - Less volatility, more spread, less option premium
+5. Required Fields:
+   - Date, Type, Stock, and Account are required
+   - Other numeric fields can be empty or '-'
+   - TIC field is required for option transactions
 
-Do not use this bot with assets that have low volatility or too few options
+## Usage
 
-**Options** - Covered calls are the least risky options, nonetheless, if you don't know what you're doing or fuck up the configuration above, you can lose a lot or even all of your
-money
+Run the main script:
+```bash
+python main.py
+```
 
-**Early assignment** - If your cc's end up being significantly ITM before expiration, there is a low chance that you get assigned and your brokerage automatically closes the cc's
-and sells the according amount of shares.
+If tax tracking is enabled with Google Sheets, the first time you run it will:
+1. Open your browser for OAuth authentication
+2. Ask you to authorize the application
+3. Save the token for future use
 
-If this happens, the bot will fail and notify you, but you will need to manually buy everything back, before restarting the bot.
+## Features
+
+- Roll short options positions
+- Check box spreads
+- Analyze vertical spreads
+- Check synthetic covered calls
+- View margin requirements
+- Tax management (if enabled)
+
+## Configuration
+
+Edit configuration.py to customize:
+- Option rolling parameters
+- Spread analysis settings
+- Market timing preferences
+- Debug modes
+- Tax tracking settings
+
+## Troubleshooting
+
+Common issues:
+
+1. Date Format Errors:
+   - Error: "time data '12/31/2024' does not match format '%Y-%m-%d'"
+   - Solution: Change dates to YYYY-MM-DD format
+
+2. Number Format Errors:
+   - Error: "could not convert string to float"
+   - Solution: Check for invalid characters in number fields
+   - Valid: "$1,234.56", "-123.45", empty cell, or "-"
+   - Invalid: "N/A", "TBD", or other text
+
+3. Authentication Errors:
+   - Error: "credentials.json not found"
+   - Solution: Download OAuth credentials from Google Cloud Console
+
+4. Permission Errors:
+   - Error: "Permission denied"
+   - Solution: Share spreadsheet with your Google account
+
+5. Missing Data:
+   - Error: "Missing required column"
+   - Solution: Verify all required columns exist with exact names
+
+6. Sheet Names:
+   - Error: "Sheet not found"
+   - Solution: Ensure sheets are named exactly "Stocks" and "Transactions"
