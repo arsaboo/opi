@@ -54,8 +54,10 @@ def monitor_order(api, order_id):
 
 def BoxSpread(api, asset="$SPX"):
     days = spreads[asset].get("days", 2000)
+    minDays = spreads[asset].get("minDays", 0)
     strikes = spreads[asset].get("strikes", 500)
     toDate = datetime.today() + timedelta(days=days)
+    fromDate = datetime.today() + timedelta(days=minDays)
     try:
         calls = api.getOptionChain(asset, strikes, toDate, days - 120)
         puts = api.getPutOptionChain(asset, strikes, toDate, days - 120)
@@ -65,6 +67,10 @@ def BoxSpread(api, asset="$SPX"):
     option_chain = OptionChain(api, asset, toDate, days)
     calls = option_chain.mapApiData(calls)
     puts = option_chain.mapApiData(puts, put=True)
+
+    # Filter out options before minDays
+    calls = [entry for entry in calls if datetime.strptime(entry["date"], "%Y-%m-%d") >= fromDate]
+    puts = [entry for entry in puts if datetime.strptime(entry["date"], "%Y-%m-%d") >= fromDate]
 
     calls = sorted(
         calls,
@@ -272,7 +278,9 @@ def bull_call_spread(
     :return: the best spread for the given asset
     """
 
+    minDays = spreads[asset].get("minDays", 0)
     toDate = datetime.today() + timedelta(days=days)
+    fromDate = datetime.today() + timedelta(days=minDays)
     optionChain = OptionChain(api, asset, toDate, days)
     quote = api.get_quote(asset)
     if quote is not None and asset in quote:
@@ -283,6 +291,9 @@ def bull_call_spread(
         print("Error: Unable to get quote for asset")
         return None
     chain = optionChain.get()
+
+    # Filter out options before minDays
+    chain = [entry for entry in chain if datetime.strptime(entry["date"], "%Y-%m-%d") >= fromDate]
 
     entries = sorted(
         chain,
@@ -380,7 +391,9 @@ def synthetic_covered_call_spread(
     :return: the best spread for the given asset
     """
 
+    minDays = spreads[asset].get("minDays", 0)
     toDate = datetime.today() + timedelta(days=days)
+    fromDate = datetime.today() + timedelta(days=minDays)
     optionChain = OptionChain(api, asset, toDate, days)
     puts = api.getPutOptionChain(asset, strikes=150, date=toDate, daysLessAllowed=days)
     quote = api.get_quote(asset)
@@ -393,6 +406,10 @@ def synthetic_covered_call_spread(
         return None
     chain = optionChain.get()
     puts = optionChain.mapApiData(puts, put=True)
+
+    # Filter out options before minDays
+    chain = [entry for entry in chain if datetime.strptime(entry["date"], "%Y-%m-%d") >= fromDate]
+    puts = [entry for entry in puts if datetime.strptime(entry["date"], "%Y-%m-%d") >= fromDate]
 
     entries = sorted(
         chain,
