@@ -17,6 +17,7 @@ from configuration import spreads, configuration
 from optionChain import OptionChain
 from support import calculate_cagr
 from logger_config import get_logger
+from margin_utils import calculate_margin_requirement, calculate_annualized_return_on_margin, calculate_short_option_rom
 
 logger = get_logger()
 
@@ -134,6 +135,20 @@ def RollCalls(api, short):
     else:
         annualized_return = 0
 
+    # Calculate margin requirement and return on margin for new position
+    otm_amount = max(0, new_strike - underlying_price)
+    margin_req = calculate_margin_requirement(
+        short["stockSymbol"],
+        'naked_call',
+        underlying_value=underlying_price,
+        otm_amount=otm_amount,
+        premium=roll_premium
+    )
+
+    # Calculate return on margin
+    profit = roll_premium * 100  # Convert to dollar amount
+    rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_new_expiry)
+
     # Calculate break-even
     break_even = new_strike - credit
 
@@ -152,7 +167,8 @@ def RollCalls(api, short):
         "New Delta",
         "Delta Change",
         "Break-even",
-        "Ann. Return"
+        "Ann. Return",
+        "Ann. ROM %"
     ]
     table.add_row([
         short_strike,
@@ -167,7 +183,8 @@ def RollCalls(api, short):
         f"{ret['delta']:.3f}",
         f"{ret['delta'] - short_delta:+.3f}",
         round(break_even, 2),
-        f"{annualized_return:.1f}%"
+        f"{annualized_return:.1f}%",
+        f"{rom:.1f}%"
     ])
 
     print(f"Underlying Price: {round(underlying_price, 2)}")
@@ -242,6 +259,20 @@ def RollSPX(api, short):
     else:
         annualized_return = 0
 
+    # Calculate margin requirement and return on margin for new position
+    otm_amount = max(0, new_strike - underlying_price)
+    margin_req = calculate_margin_requirement(
+        short["stockSymbol"],
+        'naked_call',
+        underlying_value=underlying_price,
+        otm_amount=otm_amount,
+        premium=roll_premium
+    )
+
+    # Calculate return on margin
+    profit = roll_premium * 100  # Convert to dollar amount
+    rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_new_expiry)
+
     # Calculate break-even
     break_even = new_strike - credit
 
@@ -260,7 +291,8 @@ def RollSPX(api, short):
         "New Delta",
         "Delta Change",
         "Break-even",
-        "Ann. Return"
+        "Ann. Return",
+        "Ann. ROM %"
     ]
     table.add_row([
         short_strike,
@@ -275,7 +307,8 @@ def RollSPX(api, short):
         f"{ret['delta']:.3f}",
         f"{ret['delta'] - short_delta:+.3f}",
         round(break_even, 2),
-        f"{annualized_return:.1f}%"
+        f"{annualized_return:.1f}%",
+        f"{rom:.1f}%"
     ])
 
     print(f"Underlying Price: {round(underlying_price, 2)}")

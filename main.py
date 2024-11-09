@@ -9,13 +9,17 @@ from tzlocal import get_localzone
 import alert
 import support
 from api import Api
-from sheets_api import SheetsAPI
 from cc import RollCalls, RollSPX
 from configuration import (
-    debugMarketOpen, enableTaxTracking,
-    apiKey, apiRedirectUri, appSecret, SPREADSHEET_ID
+    SPREADSHEET_ID,
+    apiKey,
+    apiRedirectUri,
+    appSecret,
+    debugMarketOpen,
+    enableTaxTracking,
 )
 from logger_config import get_logger
+from sheets_api import SheetsAPI
 from strategies import BoxSpread, find_spreads
 from tax_tracker import TaxTracker
 
@@ -28,6 +32,7 @@ api = Api(apiKey, apiRedirectUri, appSecret)
 _sheets_api = None
 _tax_tracker = None
 
+
 def get_tax_tracker():
     """Lazy initialization of tax tracking components"""
     global _sheets_api, _tax_tracker
@@ -36,6 +41,7 @@ def get_tax_tracker():
         _sheets_api.authenticate()
         _tax_tracker = TaxTracker(_sheets_api)
     return _tax_tracker
+
 
 def roll_short_positions(api, shorts):
     any_expiring = False  # flag to track if any options are expiring within 7 days
@@ -56,6 +62,7 @@ def roll_short_positions(api, shorts):
 
     if not any_expiring:  # if the flag is still False after the loop, print the message
         print("No options expiring soon.")
+
 
 def wait_for_execution_window(execWindow):
     if not execWindow["open"]:
@@ -79,6 +86,7 @@ def wait_for_execution_window(execWindow):
         else:
             print(f"Market will open in {minutes} minutes and {seconds} seconds.")
             time.sleep(sleep_time)
+
 
 def display_tax_menu():
     tax_tracker = get_tax_tracker()
@@ -105,26 +113,26 @@ def display_tax_menu():
         elif choice == "1":
             year = datetime.now().year
             summary = tax_tracker.get_year_summary(year)
-            print(f"\nTax Summary for {year}:")
-            print(f"Total Income: ${summary['total_income']:,.2f}")
-            print(f"Option Income: ${summary['option_income']:,.2f}")
-            print(f"Stock Gains: ${summary['stock_gains']:,.2f}")
-            print(f"Dividends: ${summary['dividends']:,.2f}")
 
             # Print transaction details by category
-            for category, transactions in summary['transactions_by_type'].items():
+            for category, transactions in summary["transactions_by_type"].items():
                 if transactions:  # Only show categories with transactions
                     print(f"\n{category}:")
-                    for t in sorted(transactions, key=lambda x: x['date']):
+                    for t in sorted(transactions, key=lambda x: x["date"]):
                         print(f"{t['date']}: {t['description']} - ${t['amount']:,.2f}")
+            print(f"\nTax Summary for {year}:")
+            print(f"\tTotal Income: ${summary['total_income']:,.2f}")
+            print(f"\tOption Income: ${summary['option_income']:,.2f}")
+            print(f"\tStock Gains: ${summary['stock_gains']:,.2f}")
+            print(f"\tDividends: ${summary['dividends']:,.2f}")
 
         elif choice == "2":
             year = datetime.now().year
             analysis = tax_tracker.analyze_tax_implications(year)
             print(f"\nTax Analysis for {year}:")
-            print(f"Total Taxable Income: ${analysis['total_taxable_income']:,.2f}")
+            print(f"\tTotal Taxable Income: ${analysis['total_taxable_income']:,.2f}")
             print("\nRecommendations:")
-            for rec in analysis['recommendations']:
+            for rec in analysis["recommendations"]:
                 print(f"- {rec}")
         elif choice == "3":
             year = datetime.now().year
@@ -134,6 +142,7 @@ def display_tax_menu():
             print("Invalid option. Please try again.")
 
     return True  # Indicate we're returning to main menu
+
 
 def present_menu(default="1"):
     menu_options = {
@@ -162,12 +171,17 @@ def present_menu(default="1"):
         else:
             print("Invalid option. Please enter a valid option.")
 
+
 def execute_option(api, option, exec_window, shorts=None):
     # Show both debug mode and market status
     if exec_window["open"]:
         print("Market is open, running the program now...")
     else:
-        print("Market is closed" + (" but the program will work in debug mode" if debugMarketOpen else "") + ".")
+        print(
+            "Market is closed"
+            + (" but the program will work in debug mode" if debugMarketOpen else "")
+            + "."
+        )
         if not debugMarketOpen:
             return
 
@@ -198,6 +212,7 @@ def execute_option(api, option, exec_window, shorts=None):
     else:
         print(f"Invalid option: {option}")
 
+
 def main():
     try:
         # Initialize Schwab API
@@ -216,7 +231,9 @@ def main():
 
                     if debugMarketOpen or execWindow["open"]:
                         result = execute_option(api, option, execWindow, shorts)
-                        if result:  # If a function returns True (like tax menu), break inner loop
+                        if (
+                            result
+                        ):  # If a function returns True (like tax menu), break inner loop
                             break
                     else:
                         wait_for_execution_window(execWindow)
@@ -229,6 +246,7 @@ def main():
 
     except Exception as e:
         alert.botFailed(None, "Failed to initialize APIs: " + str(e))
+
 
 if __name__ == "__main__":
     main()

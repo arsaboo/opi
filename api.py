@@ -3,11 +3,11 @@ import json
 import math
 import os
 import time
-import requests
-from statistics import median
 from operator import itemgetter
+from statistics import median
 
 import pytz
+import requests
 import schwab
 from schwab import auth
 from schwab.orders.options import OptionSymbol

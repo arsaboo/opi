@@ -1,6 +1,10 @@
 import datetime
+import re
+from datetime import datetime
 from typing import Dict
+
 import pytz
+
 from logger_config import get_logger
 
 logger = get_logger()
@@ -27,10 +31,17 @@ class TaxTracker:
     def __init__(self, sheets_api):
         self.api = sheets_api
 
+    def parse_expiration_date(self, remarks):
+        """Parse expiration date from the remarks column"""
+        match = re.search(r'\b(\d{2}/\d{2}/\d{4})\b', remarks)
+        if match:
+            return datetime.strptime(match.group(1), '%m/%d/%Y').date()
+        return None
+
     def get_year_summary(self, year: int = None) -> Dict:
         """Get summary of all transactions for a specific tax year"""
         if year is None:
-            year = datetime.datetime.now().year
+            year = datetime.now().year
 
         # Initialize summary
         summary = {
@@ -77,9 +88,12 @@ class TaxTracker:
                         'description': f"Dividend - {trans['stock']}"
                     })
                 elif trans_type in self.OPTION_TYPES:
-                    # All option transactions (both premiums received and paid)
-                    summary['option_income'] += cash_flow
-                    summary['total_income'] += cash_flow
+                    # Parse expiration date from remarks
+                    expiration_date = self.parse_expiration_date(trans.get('remarks', ''))
+                    if expiration_date is None or expiration_date <= datetime.now().date():
+                        # Include premium in income if option is closed or expired
+                        summary['option_income'] += cash_flow
+                        summary['total_income'] += cash_flow
 
                     # Determine if this is a premium received or paid
                     if trans_type.startswith('S'):  # Sell transactions

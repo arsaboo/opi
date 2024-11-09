@@ -1,18 +1,21 @@
 import json
 import statistics
-import keyboard
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
+import keyboard
 from inputimeout import TimeoutOccurred, inputimeout
 from prettytable import PrettyTable
 
 from cc import round_to_nearest_five_cents
 from configuration import spreads
+from margin_utils import (
+    calculate_annualized_return_on_margin,
+    calculate_margin_requirement,
+)
 from optionChain import OptionChain
 from support import calculate_cagr
-
 
 # Global flag for order cancellation
 cancel_order = False
@@ -110,6 +113,22 @@ def BoxSpread(api, asset="$SPX"):
                 best_overall_cagr = result["cagr_percentage"]
 
     if best_overall_spread is not None:
+        # Calculate margin requirement
+        margin_req = calculate_margin_requirement(
+            asset,
+            'credit_spread',
+            strike_diff=best_overall_spread["strike2"] - best_overall_spread["strike1"],
+            contracts=1
+        )
+
+        # Calculate return on margin
+        profit = best_overall_spread["total_return"]
+        days_to_expiry = (datetime.strptime(best_overall_spread["date"], "%Y-%m-%d") - datetime.today()).days
+        rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_expiry)
+
+        best_overall_spread["margin_requirement"] = margin_req
+        best_overall_spread["return_on_margin"] = rom
+
         # Create a dictionary mapping the original column names to the new labels
         labels = {
             "date": "Date",
@@ -119,6 +138,8 @@ def BoxSpread(api, asset="$SPX"):
             "cagr_percentage": "% CAGR",
             "total_investment": "Investment",
             "total_return": "Total Return",
+            "margin_requirement": "Margin Req",
+            "return_on_margin": "Ann. ROM %"
         }
 
         # Create a new PrettyTable instance
@@ -132,7 +153,7 @@ def BoxSpread(api, asset="$SPX"):
             [
                 (
                     f"{best_overall_spread[column]}%"
-                    if column == "cagr_percentage"
+                    if column in ["cagr_percentage", "return_on_margin"]
                     else best_overall_spread[column]
                 )
                 for column in labels.keys()
@@ -348,9 +369,23 @@ def bull_call_spread(
                         cagr, cagr_percentage = calculate_cagr(
                             total_investment, returns, days
                         )
+
+                        # Calculate margin requirement
+                        margin_req = calculate_margin_requirement(
+                            asset,
+                            'debit_spread',
+                            cost=net_debit * 100
+                        )
+
+                        # Calculate return on margin
+                        profit = (spread - net_debit) * 100
+                        rom = calculate_annualized_return_on_margin(profit, margin_req, days)
+
                     else:
                         cagr = float("-inf")
                         cagr_percentage = round(cagr, 2)
+                        margin_req = 0
+                        rom = 0
 
                     # If this spread has a higher CAGR than the previous best, update our best spread
                     if cagr > highest_cagr:
@@ -369,6 +404,8 @@ def bull_call_spread(
                             "downside_protection": round(downside_protection * 100, 2),
                             "total_investment": round(net_debit * 100, 2),
                             "total_return": round((spread - net_debit) * 100, 2),
+                            "margin_requirement": round(margin_req, 2),
+                            "return_on_margin": round(rom, 2)
                         }
                         highest_cagr = round(cagr, 2)
     if best_spread is not None:
@@ -505,9 +542,24 @@ def synthetic_covered_call_spread(
                         cagr, cagr_percentage = calculate_cagr(
                             total_investment, returns, days
                         )
+
+                        # Calculate margin requirement for the synthetic covered call
+                        margin_req = calculate_margin_requirement(
+                            asset,
+                            'credit_spread',
+                            strike_diff=contracts[j]["strike"] - contracts[i]["strike"],
+                            contracts=1
+                        )
+
+                        # Calculate return on margin
+                        profit = (spread - net_debit) * 100
+                        rom = calculate_annualized_return_on_margin(profit, margin_req, days)
+
                     else:
                         cagr = float("-inf")
                         cagr_percentage = round(cagr, 2)
+                        margin_req = 0
+                        rom = 0
 
                     # If this spread has a higher CAGR than the previous best, update our best spread
                     if cagr > highest_cagr:
@@ -528,6 +580,8 @@ def synthetic_covered_call_spread(
                             "downside_protection": round(downside_protection * 100, 2),
                             "total_investment": round(net_debit * 100, 2),
                             "total_return": round((spread - net_debit) * 100, 2),
+                            "margin_requirement": round(margin_req, 2),
+                            "return_on_margin": round(rom, 2)
                         }
                         highest_cagr = round(cagr, 2)
     if best_spread is not None:
@@ -591,6 +645,8 @@ def find_spreads(api, synthetic=False):
             "Max Profit",
             "CAGR",
             "Protection",
+            "Margin Req",
+            "Ann. ROM %"
         ]
     else:
         table.field_names = [
@@ -605,6 +661,8 @@ def find_spreads(api, synthetic=False):
             "Max Profit",
             "CAGR",
             "Protection",
+            "Margin Req",
+            "Ann. ROM %"
         ]
 
     # Create a list to store the rows
@@ -627,15 +685,13 @@ def find_spreads(api, synthetic=False):
                 best_spread["total_return"],
                 round(best_spread["cagr_percentage"], 2),
                 str(round(best_spread["downside_protection"], 2)) + "%",
+                best_spread["margin_requirement"],
+                str(round(best_spread["return_on_margin"], 2)) + "%"
             ])
             rows.append(row)
 
-    # Sort the rows by CAGR
-    rows.sort(key=lambda x: x[-2], reverse=True)  # -2 is the CAGR column before converting to string
-
-    # Convert the cagr_percentage to string after sorting
-    for row in rows:
-        row[-2] = str(row[-2]) + "%"
+    # Sort the rows by return on margin
+    rows.sort(key=lambda x: float(x[-2]), reverse=True)
 
     # Add the sorted rows to the table with their index
     for index, row in enumerate(rows, start=1):
@@ -677,6 +733,8 @@ def find_spreads(api, synthetic=False):
                     print(f"Low Strike: {strike_low}")
                     print(f"High Strike: {strike_high}")
                     print(f"Net Debit: {price}")
+                    print(f"Margin Requirement: {selected_spread['margin_requirement']}")
+                    print(f"Annualized Return on Margin: {selected_spread['return_on_margin']}%")
                     if synthetic:
                         print(f"Strategy: Synthetic Covered Call")
                         print(f"Leg 1: Buy Call @ {strike_low} for {selected_spread['ask1']}")

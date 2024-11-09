@@ -1,7 +1,8 @@
 from statistics import median
+
 import alert
-from support import validDateFormat
 from logger_config import get_logger
+from support import validDateFormat
 
 logger = get_logger()
 

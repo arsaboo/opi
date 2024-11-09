@@ -33,32 +33,52 @@ class SheetsAPI:
 
     def authenticate(self):
         """Authenticate with Google Sheets API"""
-        try:
-            if os.path.exists('token.pickle'):
-                with open('token.pickle', 'rb') as token:
-                    self.creds = pickle.load(token)
+        max_retries = 2
+        retry_count = 0
 
-            if not self.creds or not self.creds.valid:
-                if self.creds and self.creds.expired and self.creds.refresh_token:
-                    self.creds.refresh(Request())
+        while retry_count < max_retries:
+            try:
+                # Clear credentials and service
+                self.creds = None
+                self.service = None
+
+                # Try to load existing token
+                if os.path.exists('token.pickle'):
+                    with open('token.pickle', 'rb') as token:
+                        self.creds = pickle.load(token)
+
+                # Get new credentials if needed
+                if not self.creds or not self.creds.valid:
+                    if self.creds and self.creds.expired and self.creds.refresh_token:
+                        self.creds.refresh(Request())
+                    else:
+                        if not os.path.exists('credentials.json'):
+                            raise SheetsAPIError(
+                                "credentials.json not found. Please follow the setup instructions in README.md"
+                            )
+                        flow = InstalledAppFlow.from_client_secrets_file(
+                            'credentials.json', SCOPES)
+                        self.creds = flow.run_local_server(port=0)
+
+                    # Save the credentials
+                    with open('token.pickle', 'wb') as token:
+                        pickle.dump(self.creds, token)
+
+                self.service = build('sheets', 'v4', credentials=self.creds)
+                logger.info("Successfully authenticated with Google Sheets")
+                return  # Success - exit the function
+
+            except Exception as e:
+                retry_count += 1
+                if 'invalid_grant' in str(e):
+                    logger.warning(f"Token invalid, attempt {retry_count} of {max_retries}")
+                    if os.path.exists('token.pickle'):
+                        os.remove('token.pickle')
+                    continue  # Try again
                 else:
-                    if not os.path.exists('credentials.json'):
-                        raise SheetsAPIError(
-                            "credentials.json not found. Please follow the setup instructions in README.md "
-                            "to download your credentials from Google Cloud Console."
-                        )
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        'credentials.json', SCOPES)
-                    self.creds = flow.run_local_server(port=0)
+                    raise SheetsAPIError(f"Authentication failed: {str(e)}")
 
-                with open('token.pickle', 'wb') as token:
-                    pickle.dump(self.creds, token)
-
-            self.service = build('sheets', 'v4', credentials=self.creds)
-            logger.info("Successfully authenticated with Google Sheets")
-
-        except Exception as e:
-            raise SheetsAPIError(f"Authentication failed: {str(e)}")
+        raise SheetsAPIError("Failed to authenticate after maximum retries")
 
     def validate_sheet_structure(self):
         """Validate that the spreadsheet has the required structure"""
