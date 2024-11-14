@@ -1,11 +1,14 @@
+import json
 import os.path
 import pickle
-from datetime import datetime
+from datetime import date, datetime
+
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
 from logger_config import get_logger
 
 logger = get_logger()
@@ -30,6 +33,9 @@ class SheetsAPI:
         self.spreadsheet_id = spreadsheet_id
         self.service = None
         self.creds = None
+        self.cache_dir = os.path.join(os.path.dirname(__file__), '.cache')
+        if not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
 
     def authenticate(self):
         """Authenticate with Google Sheets API"""
@@ -176,8 +182,64 @@ class SheetsAPI:
             else:
                 raise SheetsAPIError(f"Error reading positions: {str(e)}")
 
+    def _get_cache_path(self, account):
+        """Get the path for the cache file"""
+        return os.path.join(self.cache_dir, f'transactions_{account}_{date.today()}.json')
+
+    def _is_cache_valid(self, cache_path):
+        """Check if cache exists and is from today"""
+        if not os.path.exists(cache_path):
+            return False
+
+        # Get the file's last modification time
+        file_mtime = datetime.fromtimestamp(os.path.getmtime(cache_path)).date()
+        today = date.today()
+
+        # Check if the file was last modified today
+        return file_mtime == today
+
+    def _save_to_cache(self, transactions, cache_path):
+        """Save transactions to cache file"""
+        # Delete any existing cache files for this account
+        cache_prefix = cache_path.rsplit('_', 1)[0]  # Get path without date
+        for old_file in os.listdir(self.cache_dir):
+            if old_file.startswith(os.path.basename(cache_prefix)):
+                old_path = os.path.join(self.cache_dir, old_file)
+                try:
+                    os.remove(old_path)
+                except OSError as e:
+                    logger.warning(f"Failed to delete old cache file {old_file}: {e}")
+
+        # Convert datetime objects to string for JSON serialization
+        serializable_transactions = []
+        for t in transactions:
+            t_copy = t.copy()
+            t_copy['date'] = t_copy['date'].isoformat()
+            serializable_transactions.append(t_copy)
+
+        with open(cache_path, 'w') as f:
+            json.dump(serializable_transactions, f)
+
+    def _load_from_cache(self, cache_path):
+        """Load transactions from cache file"""
+        with open(cache_path, 'r') as f:
+            transactions = json.load(f)
+            # Convert date strings back to datetime.date objects
+            for t in transactions:
+                t['date'] = datetime.fromisoformat(t['date']).date()
+            return transactions
+
     def read_transactions(self, account='Schwab'):
-        """Read transactions from the Transactions sheet"""
+        """Read transactions from cache or Google Sheets"""
+        cache_path = self._get_cache_path(account)
+
+        # Check if we have valid cache
+        if self._is_cache_valid(cache_path):
+            logger.info("Loading transactions from cache")
+            return self._load_from_cache(cache_path)
+
+        # If no valid cache, fetch from Google Sheets
+        logger.info("Fetching transactions from Google Sheets")
         try:
             if not self.service:
                 self.authenticate()
@@ -196,7 +258,7 @@ class SheetsAPI:
             transactions = []
             for row in values:
                 try:
-                    # Filter for specified account (default Schwab)
+                    # Filter for specified account
                     if len(row) >= 21 and row[20] == account:
                         # Parse date in yyyy-mm-dd format
                         transaction = {
@@ -228,6 +290,8 @@ class SheetsAPI:
                     logger.error(f"Problematic row: {row}")
                     continue
 
+            # Save to cache before returning
+            self._save_to_cache(transactions, cache_path)
             return transactions
 
         except HttpError as e:

@@ -51,23 +51,30 @@ class Api:
             except requests.exceptions.HTTPError as http_err:
                 logger.error(f"HTTP error occurred: {http_err}")
                 if http_err.response.status_code == 401:  # 401 Unauthorized
-                    if os.path.exists(self.tokenPath):
-                        os.remove(self.tokenPath)
-                    self.connectClient = auth.client_from_manual_flow(
-                        api_key=self.apiKey,
-                        app_secret=self.appSecret,
-                        callback_url=self.apiRedirectUri,
-                        token_path=self.tokenPath,
-                    )
-                    return  # Exit after manual flow
+                    self._handle_auth_error()
+                    return
             except Exception as e:
                 logger.error(f"Error while setting up the api: {e}")
+                if "refresh token invalid" in str(e):
+                    self._handle_auth_error()
+                    return
                 attempt += 1
                 if attempt < retries:
                     logger.info(f"Retrying in {delay} seconds...")
                     time.sleep(delay)
                 else:
                     raise
+
+    def _handle_auth_error(self):
+        """Helper method to handle authentication errors"""
+        if os.path.exists(self.tokenPath):
+            os.remove(self.tokenPath)
+        self.connectClient = auth.client_from_manual_flow(
+            api_key=self.apiKey,
+            app_secret=self.appSecret,
+            callback_url=self.apiRedirectUri,
+            token_path=self.tokenPath,
+        )
 
     def get_hash_value(self, account_number, data):
         for item in data:

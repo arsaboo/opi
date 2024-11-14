@@ -1,23 +1,27 @@
 import json
 import math
 import statistics
-import keyboard
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from datetime import time as time_module
-from tzlocal import get_localzone
 
+import keyboard
 from colorama import Fore, Style
 from inputimeout import TimeoutOccurred, inputimeout
 from prettytable import PrettyTable
+from tzlocal import get_localzone
 
 import alert
-from configuration import spreads, configuration
+from configuration import configuration, spreads
+from logger_config import get_logger
+from margin_utils import (
+    calculate_annualized_return_on_margin,
+    calculate_margin_requirement,
+    calculate_short_option_rom,
+)
 from optionChain import OptionChain
 from support import calculate_cagr
-from logger_config import get_logger
-from margin_utils import calculate_margin_requirement, calculate_annualized_return_on_margin, calculate_short_option_rom
 
 logger = get_logger()
 

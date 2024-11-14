@@ -1,7 +1,8 @@
+import calendar
 import datetime
 import re
+
 from dateutil.relativedelta import relativedelta
-import calendar
 
 ccExpDaysOffset = 0
 defaultWaitTime = 1799

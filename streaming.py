@@ -1,13 +1,14 @@
-import time
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
-from typing import Callable, Optional, List, Dict
-from configuration import apiKey, apiRedirectUri, appSecret
+from typing import Callable, Dict, List, Optional
 
 import schwab
 from schwab.client import AsyncClient
 from schwab.streaming import StreamClient
+
+from configuration import apiKey, apiRedirectUri, appSecret
 
 logging.basicConfig(level=logging.DEBUG)
 
