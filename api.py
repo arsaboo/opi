@@ -35,6 +35,8 @@ class Api:
         self.apiKey = apiKey
         self.apiRedirectUri = apiRedirectUri
         self.appSecret = appSecret
+        # Ensure the directory exists
+        os.makedirs(os.path.dirname(self.tokenPath), exist_ok=True)
 
     def setup(self, retries=3, delay=5):
         attempt = 0
@@ -53,6 +55,10 @@ class Api:
                 if http_err.response.status_code == 401:  # 401 Unauthorized
                     self._handle_auth_error()
                     return
+            except FileNotFoundError as fnf_err:
+                logger.error(f"Token file not found: {fnf_err}")
+                self._handle_auth_error()
+                return
             except Exception as e:
                 logger.error(f"Error while setting up the api: {e}")
                 if "refresh token invalid" in str(e):
@@ -69,12 +75,27 @@ class Api:
         """Helper method to handle authentication errors"""
         if os.path.exists(self.tokenPath):
             os.remove(self.tokenPath)
-        self.connectClient = auth.client_from_manual_flow(
-            api_key=self.apiKey,
-            app_secret=self.appSecret,
-            callback_url=self.apiRedirectUri,
-            token_path=self.tokenPath,
-        )
+        try:
+            self.connectClient = auth.client_from_manual_flow(
+                api_key=self.apiKey,
+                app_secret=self.appSecret,
+                callback_url=self.apiRedirectUri,
+                token_path=self.tokenPath,
+            )
+        except requests.exceptions.HTTPError as http_err:
+            if "AuthorizationCode has expired" in str(http_err):
+                logger.error("Authorization code has expired. Please re-authenticate.")
+                # Prompt user to re-authenticate
+                print("Authorization code has expired. Please re-authenticate.")
+                # Retry authentication
+                self.connectClient = auth.client_from_manual_flow(
+                    api_key=self.apiKey,
+                    app_secret=self.appSecret,
+                    callback_url=self.apiRedirectUri,
+                    token_path=self.tokenPath,
+                )
+            else:
+                raise
 
     def get_hash_value(self, account_number, data):
         for item in data:

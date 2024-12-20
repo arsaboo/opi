@@ -88,6 +88,38 @@ def wait_for_execution_window(execWindow):
             time.sleep(sleep_time)
 
 
+def format_amount(amount):
+    """Format currency amount with color coding based on value"""
+    color = Fore.GREEN if amount >= 0 else Fore.RED
+    return f"{color}${abs(amount):,.2f}{Style.RESET_ALL}"
+
+
+def print_transaction_table(title, transactions, category):
+    """Helper function to print transaction table with dynamic width"""
+    if not transactions:
+        return
+
+    # Calculate maximum description length
+    max_desc_len = max(len(t['description']) for t in transactions)
+    desc_width = min(max(45, max_desc_len), 80)  # minimum 45, maximum 80 chars
+    total_width = 12 + 20 + desc_width + 15 + 3  # Date + Type + Description + Amount + spacing
+
+    print(f"\n{title}:")
+    print("-" * total_width)
+    print(f"{'Date':<12} {'Type':<20} {'Description':<{desc_width}} {'Amount':>15}")
+    print("-" * total_width)
+
+    for t in sorted(transactions, key=lambda x: x["date"]):
+        if category == "Stock Sales" and t['amount'] == 0:
+            continue
+        print(
+            f"{t['date']:<12} "
+            f"{category[:20]:<20} "
+            f"{t['description']:<{desc_width}} "
+            f"{format_amount(t['amount']):>15}"
+        )
+    print("-" * total_width)
+
 def display_tax_menu():
     tax_tracker = get_tax_tracker()
     if not tax_tracker:
@@ -114,17 +146,49 @@ def display_tax_menu():
             year = datetime.now().year
             summary = tax_tracker.get_year_summary(year)
 
-            # Print transaction details by category
+            # Debug: Print raw category names from the data
+            print("\nDEBUG - Available categories in data:", list(summary["transactions_by_type"].keys()))
+
+            # Updated category mapping with all possible variations
+            transaction_categories = {
+                "Options": "Option Transactions",
+                "Option": "Option Transactions",
+                "Option Premium": "Option Transactions",
+                "Stock": "Stock Transactions",
+                "Stocks": "Stock Transactions",
+                "Stock Sales": "Stock Transactions",
+                "Dividend": "Dividend Income",
+                "Dividends": "Dividend Income"
+            }
+
+            # Group transactions by display title
+            grouped_transactions = {}
             for category, transactions in summary["transactions_by_type"].items():
-                if transactions:  # Only show categories with transactions
-                    print(f"\n{category}:")
-                    for t in sorted(transactions, key=lambda x: x["date"]):
-                        print(f"{t['date']}: {t['description']} - ${t['amount']:,.2f}")
-            print(f"\nTax Summary for {year}:")
-            print(f"\tTotal Income: ${summary['total_income']:,.2f}")
-            print(f"\tOption Income: ${summary['option_income']:,.2f}")
-            print(f"\tStock Gains: ${summary['stock_gains']:,.2f}")
-            print(f"\tDividends: ${summary['dividends']:,.2f}")
+                if category in transaction_categories:
+                    title = transaction_categories[category]
+                    if title not in grouped_transactions:
+                        grouped_transactions[title] = []
+                    grouped_transactions[title].extend(transactions)
+
+            # Display tables in specific order
+            display_order = ["Option Transactions", "Stock Transactions", "Dividend Income"]
+
+            for title in display_order:
+                if title in grouped_transactions:
+                    print_transaction_table(
+                        title,
+                        grouped_transactions[title],
+                        title
+                    )
+
+            # Print summary section
+            print("\nYear-to-Date Summary:")
+            print("-" * 50)
+            print(f"{'Total Income:':<33} {format_amount(summary['total_income']):>15}")
+            print(f"{'Option Income:':<33} {format_amount(summary['option_income']):>15}")
+            print(f"{'Stock Gains:':<33} {format_amount(summary['stock_gains']):>15}")
+            print(f"{'Dividends:':<33} {format_amount(summary['dividends']):>15}")
+            print("-" * 50)
 
         elif choice == "2":
             year = datetime.now().year
