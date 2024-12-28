@@ -2,6 +2,7 @@ import datetime
 import re
 from datetime import datetime
 from typing import Dict
+import csv
 
 import pytz
 
@@ -206,28 +207,27 @@ class TaxTracker:
 
         summary = self.get_year_summary(year)
 
-        # Create report content
-        report = []
-        report.append("Tax Summary Report")
-        report.append(f"Year: {year}")
-        report.append("")
-        report.append(f"Total Income: ${summary['total_income']:,.2f}")
-        report.append(f"Net Option Income: ${summary['option_income']:,.2f}")
-        report.append(f"Stock Gains: ${summary['stock_gains']:,.2f}")
-        report.append(f"Dividends: ${summary['dividends']:,.2f}")
-        report.append("")
-        report.append("Transaction Details:")
-        report.append("")
+        # Create CSV report content
+        filename = f'tax_report_{year}.csv'
+        with open(filename, 'w', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile)
+            csvwriter.writerow(["Tax Summary Report"])
+            csvwriter.writerow([f"Year: {year}"])
+            csvwriter.writerow([])
+            csvwriter.writerow(["Total Income", f"${summary['total_income']:,.2f}"])
+            csvwriter.writerow(["Net Option Income", f"${summary['option_income']:,.2f}"])
+            csvwriter.writerow(["Stock Gains", f"${summary['stock_gains']:,.2f}"])
+            csvwriter.writerow(["Dividends", f"${summary['dividends']:,.2f}"])
+            csvwriter.writerow([])
+            csvwriter.writerow(["Transaction Details"])
+            csvwriter.writerow([])
 
-        for category, transactions in summary['transactions_by_type'].items():
-            if transactions:  # Only show categories with transactions
-                report.append(f"\n{category}:")
-                for t in sorted(transactions, key=lambda x: x['date']):
-                    report.append(f"{t['date']}: {t['description']} - ${t['amount']:,.2f}")
-
-        # Write report to file
-        filename = f'tax_report_{year}.txt'
-        with open(filename, 'w') as f:
-            f.write('\n'.join(report))
+            for category, transactions in summary['transactions_by_type'].items():
+                if transactions:  # Only show categories with transactions
+                    csvwriter.writerow([category])
+                    csvwriter.writerow(["Date", "Description", "Amount"])
+                    for t in sorted(transactions, key=lambda x: x['date']):
+                        csvwriter.writerow([t['date'], t['description'], f"${t['amount']:,.2f}"])
+                    csvwriter.writerow([])
 
         return filename
