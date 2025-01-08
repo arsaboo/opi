@@ -1,4 +1,4 @@
-# Schwab API settings (optional if using Google Sheets)
+# Schwab API settings
 apiKey = ''  # create an app on https://developer.schwab.com/ to get one
 apiRedirectUri = 'https://localhost'
 SchwabAccountID = ''
@@ -79,8 +79,5 @@ mailConfig = {
 }
 
 # DEBUG MODES
-
-# To run the program in debug mode. If set to True, the program will run even if the market is closed.
 debugMarketOpen = True
-# Can actually place orders. If set to False, the program will only print the orders that would be placed.
 debugCanSendOrders = True

@@ -3,10 +3,12 @@ import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from datetime import time as time_module
 
 import keyboard
 from inputimeout import TimeoutOccurred, inputimeout
 from prettytable import PrettyTable
+from tzlocal import get_localzone
 
 from cc import round_to_nearest_five_cents
 from configuration import spreads
@@ -26,34 +28,65 @@ def handle_cancel(e):
         cancel_order = True
         print("\nCancelling order...")
 
-def monitor_order(api, order_id):
-    """Monitor order status and handle cancellation"""
+def monitor_order(api, order_id, timeout=60):  # Default timeout changed to 60 seconds
+    """Monitor order status and handle cancellation with dynamic display"""
     global cancel_order
 
-    while True:
+    start_time = time.time()
+    last_status_check = 0
+
+    # Set check interval based on market time
+    now = datetime.now(get_localzone())
+    if now.time() >= time_module(15, 30):  # After 3:30 PM
+        check_interval = 2  # Check more frequently near market close
+    else:
+        check_interval = 5  # Normal interval during regular hours
+
+    print("\nMonitoring order execution... (Press 'c' to cancel)")
+
+    while time.time() - start_time < timeout:
+        current_time = time.time()
+        elapsed_time = int(current_time - start_time)
+
         if cancel_order:
             try:
                 api.cancelOrder(order_id)
-                print("Order cancelled successfully.")
-                return False
+                print("\nOrder cancelled by user.")
+                return "cancelled"  # Special return value for user cancellation
             except Exception as e:
-                print(f"Error cancelling order: {e}")
+                print(f"\nError cancelling order: {e}")
                 return False
 
         # Check order status
         try:
-            order_status = api.checkOrder(order_id)
-            if order_status["filled"]:
-                print("Order filled successfully!")
-                return True
-            elif order_status["status"] == "CANCELED":
-                print("Order was cancelled.")
-                return False
-            print("Waiting for order to be filled ...")
-            time.sleep(2)  # Wait before checking again
+            if current_time - last_status_check >= check_interval:
+                order_status = api.checkOrder(order_id)
+                last_status_check = current_time
+
+                remaining = int(timeout - elapsed_time)
+                print(f"\rStatus: {order_status['status']} | Time remaining: {remaining}s | "
+                      f"Price: {order_status.get('price', 'N/A')} | "
+                      f"Filled: {order_status.get('filledQuantity', '0')}  ", end="", flush=True)
+
+                if order_status["filled"]:
+                    print(f"\nOrder filled successfully!")
+                    print(f"Fill Price: {order_status['price']}")
+                    print(f"Time to fill: {elapsed_time} seconds")
+                    return True
+                elif order_status["status"] == "CANCELED":
+                    print(f"\nOrder was cancelled after {elapsed_time} seconds.")
+                    return False
+
+            time.sleep(0.1)  # Small sleep to prevent CPU thrashing
+
         except Exception as e:
-            print(f"Error checking order status: {e}")
+            print(f"\nError checking order status: {e}")
             return False
+
+    print("\nOrder timed out, attempting price improvement...")
+    return "timeout"  # Special return value for timeout
+
+__all__ = ['monitor_order']
 
 def BoxSpread(api, asset="$SPX"):
     days = spreads[asset].get("days", 2000)
@@ -745,7 +778,7 @@ def find_spreads(api, synthetic=False):
                         print(f"Leg 1: Buy Call @ {strike_low} for {selected_spread['ask1']}")
                         print(f"Leg 2: Sell Call @ {strike_high} for {selected_spread['bid2']}")
 
-                    print("\nWaiting for order to be filled ... (Press 'c' to cancel)")
+                    print("\nPlacing order with automatic price improvements...")
 
                     # Reset cancel flag
                     global cancel_order
@@ -754,25 +787,29 @@ def find_spreads(api, synthetic=False):
                     # Setup keyboard listener
                     keyboard.on_press(handle_cancel)
 
-                    # Place the order
-                    if synthetic:
-                        order_id = api.synthetic_covered_call_order(
-                            selected_asset, selected_date, strike_low, strike_high, 1, price
-                        )
-                    else:
-                        order_id = api.vertical_call_order(
-                            selected_asset, selected_date, strike_low, strike_high, 1, price - 5
-                        )
+                    try:
+                        # Use place_order instead of direct order placement
+                        if synthetic:
+                            success = api.place_order(
+                                api.synthetic_covered_call_order,
+                                (selected_asset, selected_date, strike_low, strike_high, 1),
+                                price
+                            )
+                        else:
+                            success = api.place_order(
+                                api.vertical_call_order,
+                                (selected_asset, selected_date, strike_low, strike_high, 1),
+                                price - 5
+                            )
 
-                    if order_id:
-                        # Monitor order
-                        success = monitor_order(api, order_id)
                         keyboard.unhook_all()
+
                         if not success:
                             print("Order was not completed.")
-                    else:
+                    except Exception as e:
                         keyboard.unhook_all()
-                        print("Failed to place order.")
+                        print(f"Failed to place order: {e}")
+
                 else:
                     print("Order not placed")
             else:

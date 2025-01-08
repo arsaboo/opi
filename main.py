@@ -11,36 +11,18 @@ import support
 from api import Api
 from cc import RollCalls, RollSPX
 from configuration import (
-    SPREADSHEET_ID,
     apiKey,
     apiRedirectUri,
     appSecret,
     debugMarketOpen,
-    enableTaxTracking,
 )
 from logger_config import get_logger
-from sheets_api import SheetsAPI
 from strategies import BoxSpread, find_spreads
-from tax_tracker import TaxTracker
 
-logger = get_logger()  # use get_logger(True) to use the underlying logger
+logger = get_logger()
 
-# Initialize APIs
+# Initialize API
 api = Api(apiKey, apiRedirectUri, appSecret)
-
-# Lazy initialization of tax tracking components
-_sheets_api = None
-_tax_tracker = None
-
-
-def get_tax_tracker():
-    """Lazy initialization of tax tracking components"""
-    global _sheets_api, _tax_tracker
-    if enableTaxTracking and _tax_tracker is None:
-        _sheets_api = SheetsAPI(SPREADSHEET_ID)
-        _sheets_api.authenticate()
-        _tax_tracker = TaxTracker(_sheets_api)
-    return _tax_tracker
 
 
 def roll_short_positions(api, shorts):
@@ -120,93 +102,6 @@ def print_transaction_table(title, transactions, category):
         )
     print("-" * total_width)
 
-def display_tax_menu():
-    tax_tracker = get_tax_tracker()
-    if not tax_tracker:
-        print("Tax tracking is not enabled.")
-        return True
-
-    menu_options = {
-        "1": "View Year-to-Date Summary",
-        "2": "Analyze Tax Implications",
-        "3": "Export Tax Report",
-        "0": "Back to Main Menu",
-    }
-
-    while True:
-        print("\n--- Tax Management ---")
-        for key, value in menu_options.items():
-            print(f"{key}. {value}")
-
-        choice = input("Please choose an option: ")
-
-        if choice == "0":
-            break  # Exit the tax menu loop
-        elif choice == "1":
-            year = datetime.now().year
-            summary = tax_tracker.get_year_summary(year)
-
-            # Debug: Print raw category names from the data
-            print("\nDEBUG - Available categories in data:", list(summary["transactions_by_type"].keys()))
-
-            # Updated category mapping with all possible variations
-            transaction_categories = {
-                "Options": "Option Transactions",
-                "Option": "Option Transactions",
-                "Option Premium": "Option Transactions",
-                "Stock": "Stock Transactions",
-                "Stocks": "Stock Transactions",
-                "Stock Sales": "Stock Transactions",
-                "Dividend": "Dividend Income",
-                "Dividends": "Dividend Income"
-            }
-
-            # Group transactions by display title
-            grouped_transactions = {}
-            for category, transactions in summary["transactions_by_type"].items():
-                if category in transaction_categories:
-                    title = transaction_categories[category]
-                    if title not in grouped_transactions:
-                        grouped_transactions[title] = []
-                    grouped_transactions[title].extend(transactions)
-
-            # Display tables in specific order
-            display_order = ["Option Transactions", "Stock Transactions", "Dividend Income"]
-
-            for title in display_order:
-                if title in grouped_transactions:
-                    print_transaction_table(
-                        title,
-                        grouped_transactions[title],
-                        title
-                    )
-
-            # Print summary section
-            print("\nYear-to-Date Summary:")
-            print("-" * 50)
-            print(f"{'Total Income:':<33} {format_amount(summary['total_income']):>15}")
-            print(f"{'Option Income:':<33} {format_amount(summary['option_income']):>15}")
-            print(f"{'Stock Gains:':<33} {format_amount(summary['stock_gains']):>15}")
-            print(f"{'Dividends:':<33} {format_amount(summary['dividends']):>15}")
-            print("-" * 50)
-
-        elif choice == "2":
-            year = datetime.now().year
-            analysis = tax_tracker.analyze_tax_implications(year)
-            print(f"\nTax Analysis for {year}:")
-            print(f"\tTotal Taxable Income: ${analysis['total_taxable_income']:,.2f}")
-            print("\nRecommendations:")
-            for rec in analysis["recommendations"]:
-                print(f"- {rec}")
-        elif choice == "3":
-            year = datetime.now().year
-            filename = tax_tracker.export_tax_report(year)
-            print(f"\nTax report exported to: {filename}")
-        else:
-            print("Invalid option. Please try again.")
-
-    return True  # Indicate we're returning to main menu
-
 
 def present_menu(default="1"):
     menu_options = {
@@ -215,12 +110,8 @@ def present_menu(default="1"):
         "3": "Check Vertical Spreads",
         "4": "Check Synthetic Covered Calls",
         "5": "View Margin Requirements",
-        "6": "Tax Management" if enableTaxTracking else None,
         "0": "Exit",
     }
-
-    # Remove None values from menu_options
-    menu_options = {k: v for k, v in menu_options.items() if v is not None}
 
     while True:
         print("\n--- Welcome to Options Trading ---")
@@ -255,16 +146,12 @@ def execute_option(api, option, exec_window, shorts=None):
         "3": lambda: find_spreads(api),
         "4": lambda: find_spreads(api, synthetic=True),
         "5": lambda: Api.display_margin_requirements(api, shorts),
-        "6": lambda: display_tax_menu() if enableTaxTracking else None,
     }
 
     if option in option_mapping:
         func = option_mapping[option]
         if func:  # Only execute if the function exists (not None)
-            result = func()
-            if result:  # If a function returns True (like tax menu), break the loop
-                return True
-            # Only sleep if not returning from tax menu
+            func()
             sleep_time = (
                 5
                 if exec_window["open"]

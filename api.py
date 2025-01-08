@@ -3,6 +3,7 @@ import json
 import math
 import os
 import time
+from datetime import time as time_module
 from operator import itemgetter
 from statistics import median
 
@@ -12,11 +13,13 @@ import schwab
 from schwab import auth
 from schwab.orders.options import OptionSymbol
 from schwab.utils import Utils
+from tzlocal import get_localzone
 
 import alert
 from cc import round_to_nearest_five_cents
 from configuration import SchwabAccountID, debugCanSendOrders
 from logger_config import get_logger
+from strategies import monitor_order  # Import monitor_order from strategies
 from support import extract_date, extract_strike_price, validDateFormat
 
 logger = get_logger()
@@ -628,7 +631,7 @@ class Api:
         return order_id
 
     def vertical_call_order(
-        self, symbol, expiration, strike_low, strike_high, amount, price
+        self, symbol, expiration, strike_low, strike_high, amount, *, price
     ):
 
         if "$" in symbol:
@@ -679,7 +682,7 @@ class Api:
         return order_id
 
     def synthetic_covered_call_order(
-        self, symbol, expiration, strike_low, strike_high, amount, price
+        self, symbol, expiration, strike_low, strike_high, amount, *, price
     ):
 
         if "$" in symbol:
@@ -734,29 +737,69 @@ class Api:
 
         return order_id
 
+    def place_order(self, order_func, order_params, price):
+        """
+        Place an order with automatic price improvements if not filled
+        """
+        max_retries = 75
+        price_improvement_pct = 1  # percentage to improve price by on each retry
+        initial_price = price
 
-    def place_order(api, order_func, order_params, price=None):
-        maxRetries = 75
-        checkFillXTimes = 12
 
-        # Ensure that price is not included in order_params
-        order_params = [param for param in order_params if param != price]
+        now = datetime.now(get_localzone())
+        if now.time() >= time_module(15, 30):  # After 3:30 PM
+            order_timeout = 15  # Update faster near market close
+        else:
+            order_timeout = 60  # Normal interval during regular hours
 
-        order_id = order_func(*order_params, price=price)
+        # Determine if this is a debit order (paying) or credit order (receiving)
+        is_debit_order = price > 0  # Positive price means we're paying
 
-        for retry in range(maxRetries):
-            for x in range(checkFillXTimes):
-                print("Waiting for order to be filled ...")
-                time.sleep(60)
-                checkedOrder = api.checkOrder(order_id)
-                if checkedOrder["status"] == "CANCELED":
-                    print(f"Order canceled: {order_id}\n Order details: {checkedOrder}")
-                    return
-                if checkedOrder["filled"]:
-                    print(f"Order filled: {order_id}\n Order details: {checkedOrder}")
-                    return
-            api.cancelOrder(order_id)
-            print("Can't fill order, retrying with lower price ...")
-            new_price = price * (100 - retry) / 100
-            rounded_price = round_to_nearest_five_cents(new_price)
-            order_id = order_func(*order_params, rounded_price)
+        for retry in range(max_retries):
+            # Calculate new price with improvement
+            if is_debit_order:
+                # For debit orders, increase the price we're willing to pay
+                current_price = round_to_nearest_five_cents(initial_price * (100 + retry * price_improvement_pct) / 100)
+            else:
+                # For credit orders, decrease the price we're willing to accept
+                current_price = round_to_nearest_five_cents(initial_price * (100 - retry * price_improvement_pct) / 100)
+
+            if retry > 0:
+                if is_debit_order:
+                    print(f"\nAttempt {retry + 1}/{max_retries}")
+                    print(f"Improving price by paying {retry * price_improvement_pct}% more to {current_price}")
+                else:
+                    print(f"\nAttempt {retry + 1}/{max_retries}")
+                    print(f"Improving price by accepting {retry * price_improvement_pct}% less to {current_price}")
+
+            try:
+                # Call order function with params and explicit price kwarg
+                order_id = order_func(*order_params, price=current_price)
+
+                if not order_id:
+                    print("Failed to place order")
+                    return False
+
+                # Monitor order with longer timeout
+                result = monitor_order(self, order_id, timeout=order_timeout)
+
+                if result == True:  # Order filled
+                    return True
+                elif result == "cancelled":  # User cancelled
+                    return False
+                elif result == "timeout":  # Timeout - try price improvement
+                    try:
+                        self.cancelOrder(order_id)
+                        continue
+                    except Exception as e:
+                        print(f"Error cancelling order: {e}")
+                        return False
+                else:  # Other failure
+                    return False
+
+            except Exception as e:
+                print(f"Error during order placement: {str(e)}")
+                return False
+
+        print("\nFailed to fill order after all price improvement attempts")
+        return False
