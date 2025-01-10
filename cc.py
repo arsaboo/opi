@@ -3,8 +3,7 @@ import math
 import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
-from datetime import time as time_module
+from datetime import datetime, timedelta, time as time_module
 
 import keyboard
 from colorama import Fore, Style

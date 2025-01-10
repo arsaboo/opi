@@ -1,6 +1,5 @@
 import time
-from datetime import datetime, timedelta
-from datetime import time as time_module
+from datetime import datetime, timedelta, time as time_module
 
 import pytz
 from colorama import Fore, Style

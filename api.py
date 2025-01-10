@@ -3,7 +3,7 @@ import json
 import math
 import os
 import time
-from datetime import time as time_module
+from datetime import datetime, timedelta, time as time_module
 from operator import itemgetter
 from statistics import median
 
@@ -138,7 +138,7 @@ class Api:
         return lastPrice
 
     def getOptionChain(self, asset, strikes, date, daysLessAllowed):
-        fromDate = date - datetime.timedelta(days=daysLessAllowed)
+        fromDate = date - timedelta(days=daysLessAllowed)
         toDate = date
 
         r = self.connectClient.get_option_chain(
@@ -164,7 +164,7 @@ class Api:
         return r.json()
 
     def getPutOptionChain(self, asset, strikes, date, daysLessAllowed):
-        fromDate = date - datetime.timedelta(days=daysLessAllowed)
+        fromDate = date - timedelta(days=daysLessAllowed)
         toDate = date
 
         r = self.connectClient.get_option_chain(
@@ -190,7 +190,7 @@ class Api:
         return r.json()
 
     def getOptionExecutionWindow(self):
-        now = datetime.datetime.now(pytz.UTC)
+        now = datetime.now(pytz.UTC)
 
         try:
             r = self.connectClient.get_market_hours(
@@ -217,10 +217,10 @@ class Api:
             if not regular_market_hours:
                 return {"open": False, "openDate": None, "nowDate": now}
 
-            start = datetime.datetime.fromisoformat(regular_market_hours[0]["start"])
-            end = datetime.datetime.fromisoformat(regular_market_hours[0]["end"])
+            start = datetime.fromisoformat(regular_market_hours[0]["start"])
+            end = datetime.fromisoformat(regular_market_hours[0]["end"])
 
-            window_start = start + datetime.timedelta(minutes=10)
+            window_start = start + timedelta(minutes=10)
 
             if window_start <= now <= end:
                 return {"open": True, "openDate": window_start, "nowDate": now}
