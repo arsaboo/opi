@@ -1,3 +1,5 @@
+from logger_config import get_logger
+
 def calculate_margin_requirement(asset, strategy_type, **kwargs):
     """
     Calculate margin requirement for different option strategies
@@ -10,6 +12,11 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
 
     asset_type = spreads[asset].get('type', 'etf')
 
+    # Add debug logging
+    logger = get_logger()
+    logger.debug(f"Calculating margin for {strategy_type} on {asset} ({asset_type})")
+    logger.debug(f"Parameters: {kwargs}")
+
     if strategy_type == 'credit_spread':
         strike_diff = kwargs.get('strike_diff')
         contracts = kwargs.get('contracts', 1)
@@ -18,6 +25,30 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
     elif strategy_type == 'debit_spread':
         cost = kwargs.get('cost')
         return margin_rules['spreads']['debit'](cost)
+
+    elif strategy_type == 'synthetic_covered_call':
+        # For synthetic covered calls, margin is only required for the short put
+        strike = kwargs.get('put_strike')
+        underlying_value = kwargs.get('underlying_value')
+        otm_amount = max(0, strike - underlying_value) if strike and underlying_value else 0
+        premium = kwargs.get('put_premium', 0)
+
+        if not all([strike, underlying_value]):
+            logger.error(f"Missing required parameters for synthetic_covered_call margin calculation: {kwargs}")
+            return 0
+
+        # Calculate margin for broad-based index
+        if asset_type == 'broad_based_index':
+            method_1 = strike * 0.15 - otm_amount + premium * 100  # 15% method
+            method_2 = strike * 0.10 + premium * 100  # 10% method
+            margin = max(method_1, method_2)
+            logger.debug(f"Margin calculation for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+            return margin
+        # For non-index options, use standard margin calculation
+        else:
+            margin = strike * 0.20  # Standard 20% requirement for equity options
+            logger.debug(f"Using standard 20% margin for {asset}: {margin}")
+            return margin
 
     elif strategy_type == 'naked_call':
         underlying_value = kwargs.get('underlying_value')
@@ -35,17 +66,21 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
             )
 
     elif strategy_type == 'naked_put':
-        underlying_value = kwargs.get('underlying_value')
-        otm_amount = kwargs.get('otm_amount', 0)
-        premium = kwargs.get('premium')
-        max_loss = kwargs.get('max_loss')
+        strike = kwargs.get('strike', kwargs.get('put_strike', 0))  # Try both parameter names
+        underlying_value = kwargs.get('underlying_value', 0)
+        otm_amount = max(0, strike - underlying_value)
+        premium = kwargs.get('premium', 0)
 
         if asset_type == 'broad_based_index':
-            return margin_rules['naked_puts']['broad_based_index']['initial_req'](
-                underlying_value, otm_amount, premium, max_loss
-            )
+            method_1 = strike * 0.15 - otm_amount + premium * 100
+            method_2 = strike * 0.10 + premium * 100
+            margin = max(method_1, method_2)
+            logger.debug(f"Naked put margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+            return margin
 
-    return None
+    # Default return value
+    logger.warning(f"No specific margin rule found for {strategy_type} on {asset}. Using 0.")
+    return 0
 
 def calculate_annualized_return_on_margin(profit, margin_req, days):
     """

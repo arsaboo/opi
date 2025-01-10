@@ -579,9 +579,11 @@ def synthetic_covered_call_spread(
                         # Calculate margin requirement for the synthetic covered call
                         margin_req = calculate_margin_requirement(
                             asset,
-                            'credit_spread',
-                            strike_diff=contracts[j]["strike"] - contracts[i]["strike"],
-                            contracts=1
+                            'synthetic_covered_call',
+                            put_strike=contracts[i]["strike"],
+                            underlying_value=underlying_price,
+                            put_premium=put_contract["bid"],
+                            max_loss=contracts[i]["strike"] * 100
                         )
 
                         # Calculate return on margin

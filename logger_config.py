@@ -1,15 +1,22 @@
 import logging
 from configuration import loggingLevel
 
-def get_logger(use_underlying_logger=False):
-    logger_name = __name__ if use_underlying_logger else 'my_application'
-    logger = logging.getLogger(logger_name)
+def get_logger():
+    """Configure and return a logger instance"""
+    logger = logging.getLogger(__name__)
 
-    # Only add a new handler if the logger doesn't have any
+    # Check if handlers already exist to avoid duplicate handlers
     if not logger.handlers:
-        stream_handler = logging.StreamHandler()
-        stream_handler.setLevel(getattr(logging, loggingLevel.upper()))
-        logger.addHandler(stream_handler)
-        logger.setLevel(getattr(logging, loggingLevel.upper()))
+        # Create console handler and set level
+        handler = logging.StreamHandler()
+        handler.setLevel(loggingLevel)
+
+        # Create formatter
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+
+        # Add handler to logger
+        logger.addHandler(handler)
+        logger.setLevel(loggingLevel)
 
     return logger
