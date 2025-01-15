@@ -10,73 +10,99 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
     """
     from configuration import spreads, margin_rules
 
-    asset_type = spreads[asset].get('type', 'etf')
-
-    # Add debug logging
     logger = get_logger()
-    logger.debug(f"Calculating margin for {strategy_type} on {asset} ({asset_type})")
-    logger.debug(f"Parameters: {kwargs}")
 
-    if strategy_type == 'credit_spread':
-        strike_diff = kwargs.get('strike_diff')
-        contracts = kwargs.get('contracts', 1)
-        return margin_rules['spreads']['credit'](strike_diff, contracts)
+    try:
+        asset_type = spreads[asset].get('type', 'etf')
+        logger.info(f"Calculating {strategy_type} margin for {asset} ({asset_type})")
+        logger.debug(f"Input parameters: {kwargs}")
 
-    elif strategy_type == 'debit_spread':
-        cost = kwargs.get('cost')
-        return margin_rules['spreads']['debit'](cost)
+        if strategy_type == 'credit_spread':
+            strike_diff = kwargs.get('strike_diff')
+            contracts = kwargs.get('contracts', 1)
+            return margin_rules['spreads']['credit'](strike_diff, contracts)
 
-    elif strategy_type == 'synthetic_covered_call':
-        # For synthetic covered calls, margin is only required for the short put
-        strike = kwargs.get('put_strike')
-        underlying_value = kwargs.get('underlying_value')
-        otm_amount = max(0, strike - underlying_value) if strike and underlying_value else 0
-        premium = kwargs.get('put_premium', 0)
+        elif strategy_type == 'debit_spread':
+            cost = kwargs.get('cost')
+            return margin_rules['spreads']['debit'](cost)
 
-        if not all([strike, underlying_value]):
-            logger.error(f"Missing required parameters for synthetic_covered_call margin calculation: {kwargs}")
-            return 0
+        elif strategy_type == 'synthetic_covered_call':
+            strike = kwargs.get('put_strike')
+            underlying_value = kwargs.get('underlying_value')
 
-        # Calculate margin for broad-based index
-        if asset_type == 'broad_based_index':
-            method_1 = strike * 0.15 - otm_amount + premium * 100  # 15% method
-            method_2 = strike * 0.10 + premium * 100  # 10% method
-            margin = max(method_1, method_2)
-            logger.debug(f"Margin calculation for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
-            return margin
-        # For non-index options, use standard margin calculation
-        else:
-            margin = strike * 0.20  # Standard 20% requirement for equity options
-            logger.debug(f"Using standard 20% margin for {asset}: {margin}")
-            return margin
+            if not all([strike, underlying_value]):
+                logger.error(f"Missing required parameters for {strategy_type}. Strike: {strike}, Underlying: {underlying_value}")
+                return 0
 
-    elif strategy_type == 'naked_call':
-        underlying_value = kwargs.get('underlying_value')
-        otm_amount = kwargs.get('otm_amount', 0)
-        premium = kwargs.get('premium')
+            logger.info(f"Processing {asset} synthetic covered call - Strike: {strike}, Underlying: {underlying_value}")
 
-        if asset_type == 'broad_based_index':
-            return margin_rules['naked_calls']['broad_based_index']['initial_req'](
-                underlying_value, otm_amount, premium
-            )
-        elif asset_type == 'leveraged_etf':
-            leverage = kwargs.get('leverage', '2x')
-            return margin_rules['naked_calls']['leveraged_etf'][leverage]['initial_req'](
-                underlying_value, otm_amount, premium
-            )
+            # For synthetic covered calls, margin is only required for the short put
+            otm_amount = max(0, strike - underlying_value) if strike and underlying_value else 0
+            premium = kwargs.get('put_premium', 0)
 
-    elif strategy_type == 'naked_put':
-        strike = kwargs.get('strike', kwargs.get('put_strike', 0))  # Try both parameter names
-        underlying_value = kwargs.get('underlying_value', 0)
-        otm_amount = max(0, strike - underlying_value)
-        premium = kwargs.get('premium', 0)
+            # Calculate margin based on asset type
+            if asset_type == 'broad_based_index':
+                method_1 = strike * 0.15 - otm_amount + premium * 100
+                method_2 = strike * 0.10 + premium * 100
+                margin = max(method_1, method_2)
+                logger.debug(f"Broad-based index margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                return margin
+            elif asset_type == 'etf_index':  # SPY, QQQ, VOO
+                margin = max(
+                    underlying_value * 0.10 * 100,  # 10% of underlying
+                    strike * 0.10 * 100,  # 10% of strike
+                    2500  # Minimum requirement
+                )
+                logger.debug(f"ETF index margin for {asset}: {margin}")
+                return margin
+            else:  # Standard ETFs and stocks
+                margin = strike * 0.20 * 100  # 20% of strike price
+                logger.debug(f"Standard margin for {asset}: {margin}")
+                return margin
 
-        if asset_type == 'broad_based_index':
-            method_1 = strike * 0.15 - otm_amount + premium * 100
-            method_2 = strike * 0.10 + premium * 100
-            margin = max(method_1, method_2)
-            logger.debug(f"Naked put margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
-            return margin
+        elif strategy_type == 'naked_call':
+            underlying_value = kwargs.get('underlying_value')
+            otm_amount = kwargs.get('otm_amount', 0)
+            premium = kwargs.get('premium')
+
+            if asset_type == 'broad_based_index':
+                return margin_rules['naked_calls']['broad_based_index']['initial_req'](
+                    underlying_value, otm_amount, premium
+                )
+            elif asset_type == 'leveraged_etf':
+                leverage = kwargs.get('leverage', '2x')
+                return margin_rules['naked_calls']['leveraged_etf'][leverage]['initial_req'](
+                    underlying_value, otm_amount, premium
+                )
+
+        elif strategy_type == 'naked_put':
+            strike = kwargs.get('strike', kwargs.get('put_strike', 0))  # Try both parameter names
+            underlying_value = kwargs.get('underlying_value', 0)
+            otm_amount = max(0, strike - underlying_value)
+            premium = kwargs.get('premium', 0)
+
+            if asset_type == 'broad_based_index':
+                method_1 = strike * 0.15 - otm_amount + premium * 100
+                method_2 = strike * 0.10 + premium * 100
+                margin = max(method_1, method_2)
+                logger.debug(f"Naked put margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                return margin
+            elif asset_type == 'etf_index':  # Add SPY-specific calculation
+                margin = max(
+                    underlying_value * 0.10 * 100,  # 10% of underlying
+                    2500  # Minimum requirement
+                )
+                logger.debug(f"ETF index margin for {asset}: {margin}")
+                return margin
+
+    except KeyError as e:
+        logger.error(f"Configuration error for {asset}: {str(e)}")
+        logger.debug(f"Available config: {spreads.get(asset, 'Not found')}")
+        return 0
+    except Exception as e:
+        logger.error(f"Error calculating margin for {asset}: {str(e)}")
+        logger.debug(f"Full traceback: {traceback.format_exc()}")
+        return 0
 
     # Default return value
     logger.warning(f"No specific margin rule found for {strategy_type} on {asset}. Using 0.")

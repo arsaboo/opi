@@ -17,6 +17,7 @@ from configuration import (
 )
 from logger_config import get_logger
 from strategies import BoxSpread, find_spreads
+import traceback
 
 logger = get_logger()
 
@@ -25,24 +26,31 @@ api = Api(apiKey, apiRedirectUri, appSecret)
 
 
 def roll_short_positions(api, shorts):
-    any_expiring = False  # flag to track if any options are expiring within 7 days
-    today = datetime.now(pytz.UTC).date()
+    try:
+        any_expiring = False  # flag to track if any options are expiring within 7 days
+        today = datetime.now(pytz.UTC).date()
 
-    for short in shorts:
-        dte = (datetime.strptime(short["expiration"], "%Y-%m-%d").date() - today).days
-        if -1 < dte < 7:
-            any_expiring = True  # set the flag to True
+        for short in shorts:
+            dte = (datetime.strptime(short["expiration"], "%Y-%m-%d").date() - today).days
+            if -1 < dte < 7:
+                any_expiring = True  # set the flag to True
 
-            message_color = Fore.RED if dte == 0 else Fore.GREEN
-            print(
-                f"{short['count']} {short['stockSymbol']} expiring in {message_color}{dte} day(s){Style.RESET_ALL}: {short['optionSymbol']}"
-            )
+                message_color = Fore.RED if dte == 0 else Fore.GREEN
+                print(
+                    f"{short['count']} {short['stockSymbol']} expiring in {message_color}{dte} day(s){Style.RESET_ALL}: {short['optionSymbol']}"
+                )
 
-            roll_function = RollSPX if short["stockSymbol"] == "$SPX" else RollCalls
-            roll_function(api, short)
+                roll_function = RollSPX if short["stockSymbol"] == "$SPX" else RollCalls
+                roll_function(api, short)
 
-    if not any_expiring:  # if the flag is still False after the loop, print the message
-        print("No options expiring soon.")
+        if not any_expiring:  # if the flag is still False after the loop, print the message
+            print("No options expiring soon.")
+
+    except Exception as e:
+        logger.error(f"Error in roll_short_positions: {str(e)}")
+        logger.debug(f"Full traceback: {traceback.format_exc()}")
+        alert.botFailed(None, f"Error rolling positions: {str(e)}")
+        return None
 
 
 def wait_for_execution_window(execWindow):
@@ -150,16 +158,22 @@ def execute_option(api, option, exec_window, shorts=None):
     if option in option_mapping:
         func = option_mapping[option]
         if func:  # Only execute if the function exists (not None)
-            func()
-            sleep_time = (
-                5
-                if exec_window["open"]
-                and datetime.now(get_localzone()).time() >= time_module(15, 30)
-                else 30
-            )
-            print(f"Sleeping for {sleep_time} seconds...")
-            time.sleep(sleep_time)
+            try:
+                func()
+                sleep_time = (
+                    5
+                    if exec_window["open"]
+                    and datetime.now(get_localzone()).time() >= time_module(15, 30)
+                    else 30
+                )
+                print(f"Sleeping for {sleep_time} seconds...")
+                time.sleep(sleep_time)
+            except Exception as e:
+                logger.error(f"Error executing option {option}: {str(e)}")
+                logger.debug(f"Full traceback: {traceback.format_exc()}")
+                alert.botFailed(None, f"Error in option {option}: {str(e)}")
     else:
+        logger.warning(f"Invalid option selected: {option}")
         print(f"Invalid option: {option}")
 
 
@@ -174,28 +188,39 @@ def main():
                 if option == "0":
                     break
                 while True:
-                    execWindow = api.getOptionExecutionWindow()
-                    shorts = api.updateShortPosition()
+                    try:
+                        execWindow = api.getOptionExecutionWindow()
+                        shorts = api.updateShortPosition()
 
-                    logger.debug(f"Execution: {execWindow}")
+                        logger.debug(f"Execution window: {execWindow}")
+                        logger.debug(f"Short positions: {shorts}")
 
-                    if debugMarketOpen or execWindow["open"]:
-                        result = execute_option(api, option, execWindow, shorts)
-                        if (
-                            result
-                        ):  # If a function returns True (like tax menu), break inner loop
-                            break
-                    else:
-                        wait_for_execution_window(execWindow)
+                        if debugMarketOpen or execWindow["open"]:
+                            result = execute_option(api, option, execWindow, shorts)
+                            if result:
+                                break
+                        else:
+                            wait_for_execution_window(execWindow)
+
+                    except Exception as e:
+                        logger.error(f"Error in main loop: {str(e)}")
+                        logger.debug(f"Full traceback: {traceback.format_exc()}")
+                        alert.botFailed(None, f"Error in main loop: {str(e)}")
+                        break
 
             except KeyboardInterrupt:
+                logger.info("Program interrupted by user. Going back to main menu.")
                 print("\nInterrupted. Going back to the main menu...")
             except Exception as e:
-                alert.botFailed(None, "Uncaught exception: " + str(e))
-                break  # Exit the program if an unhandled exception occurs
+                logger.error(f"Unhandled error: {str(e)}")
+                logger.debug(f"Full traceback: {traceback.format_exc()}")
+                alert.botFailed(None, f"Unhandled error: {str(e)}")
+                break
 
     except Exception as e:
-        alert.botFailed(None, "Failed to initialize APIs: " + str(e))
+        logger.error(f"Failed to initialize API: {str(e)}")
+        logger.debug(f"Full traceback: {traceback.format_exc()}")
+        alert.botFailed(None, f"Failed to initialize API: {str(e)}")
 
 
 if __name__ == "__main__":
