@@ -27,21 +27,38 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
             return margin_rules['spreads']['debit'](cost)
 
         elif strategy_type == 'synthetic_covered_call':
-            # For synthetic covered calls, use the naked put margin requirement
             strike = kwargs.get('put_strike')
             underlying_value = kwargs.get('underlying_value')
+
+            if not all([strike, underlying_value]):
+                logger.error(f"Missing required parameters for {strategy_type}. Strike: {strike}, Underlying: {underlying_value}")
+                return 0
+
+            logger.info(f"Processing {asset} synthetic covered call - Strike: {strike}, Underlying: {underlying_value}")
+
+            # For synthetic covered calls, margin is only required for the short put
             otm_amount = max(0, strike - underlying_value) if strike and underlying_value else 0
             premium = kwargs.get('put_premium', 0)
-            max_loss = kwargs.get('max_loss', strike * 100)
 
+            # Calculate margin based on asset type
             if asset_type == 'broad_based_index':
                 method_1 = strike * 0.15 - otm_amount + premium * 100
                 method_2 = strike * 0.10 + premium * 100
-                return max(method_1, method_2, 100)
-            else:  # equity, ETFs
-                method_1 = strike * 0.20 - otm_amount + premium * 100
-                method_2 = strike * 0.10 + premium * 100
-                return max(method_1, method_2, 100)
+                margin = max(method_1, method_2)
+                logger.debug(f"Broad-based index margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                return margin
+            elif asset_type == 'etf_index':  # SPY, QQQ, VOO
+                margin = max(
+                    underlying_value * 0.10 * 100,  # 10% of underlying
+                    strike * 0.10 * 100,  # 10% of strike
+                    2500  # Minimum requirement
+                )
+                logger.debug(f"ETF index margin for {asset}: {margin}")
+                return margin
+            else:  # Standard ETFs and stocks
+                margin = strike * 0.20 * 100  # 20% of strike price
+                logger.debug(f"Standard margin for {asset}: {margin}")
+                return margin
 
         elif strategy_type == 'naked_call':
             underlying_value = kwargs.get('underlying_value')
@@ -68,11 +85,11 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
                 method_1 = strike * 0.15 - otm_amount + premium * 100
                 method_2 = strike * 0.10 + premium * 100
                 margin = max(method_1, method_2)
-                logger.debug(f"Broad-based index margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                logger.debug(f"Naked put margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
                 return margin
-            elif asset_type == 'etf_index':  # SPY, VOO, QQQ
+            elif asset_type == 'etf_index':  # Add SPY-specific calculation
                 margin = max(
-                    strike * 0.15 * 100,  # 15% of strike (not underlying)
+                    underlying_value * 0.10 * 100,  # 10% of underlying
                     2500  # Minimum requirement
                 )
                 logger.debug(f"ETF index margin for {asset}: {margin}")
