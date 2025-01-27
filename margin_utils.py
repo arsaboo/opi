@@ -29,9 +29,16 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
         elif strategy_type == 'synthetic_covered_call':
             strike = kwargs.get('put_strike')
             underlying_value = kwargs.get('underlying_value')
+
+            if not all([strike, underlying_value]):
+                logger.error(f"Missing required parameters for {strategy_type}. Strike: {strike}, Underlying: {underlying_value}")
+                return 0
+
+            logger.info(f"Processing {asset} synthetic covered call - Strike: {strike}, Underlying: {underlying_value}")
+
+            # For synthetic covered calls, margin is only required for the short put
             otm_amount = max(0, strike - underlying_value) if strike and underlying_value else 0
             premium = kwargs.get('put_premium', 0)
-            max_loss = kwargs.get('max_loss', strike * 100)
 
             if not all([strike, underlying_value]):
                 logger.error(f"Missing required parameters for synthetic_covered_call margin calculation: {kwargs}")
@@ -76,11 +83,11 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
                 method_1 = strike * 0.15 - otm_amount + premium * 100
                 method_2 = strike * 0.10 + premium * 100
                 margin = max(method_1, method_2)
-                logger.debug(f"Broad-based index margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                logger.debug(f"Naked put margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
                 return margin
-            elif asset_type == 'etf_index':  # SPY, VOO, QQQ
+            elif asset_type == 'etf_index':  # Add SPY-specific calculation
                 margin = max(
-                    strike * 0.15 * 100,  # 15% of strike (not underlying)
+                    underlying_value * 0.10 * 100,  # 10% of underlying
                     2500  # Minimum requirement
                 )
                 logger.debug(f"ETF index margin for {asset}: {margin}")
