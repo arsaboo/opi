@@ -27,21 +27,29 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
             return margin_rules['spreads']['debit'](cost)
 
         elif strategy_type == 'synthetic_covered_call':
-            # For synthetic covered calls, use the naked put margin requirement
             strike = kwargs.get('put_strike')
             underlying_value = kwargs.get('underlying_value')
             otm_amount = max(0, strike - underlying_value) if strike and underlying_value else 0
             premium = kwargs.get('put_premium', 0)
             max_loss = kwargs.get('max_loss', strike * 100)
 
+            if not all([strike, underlying_value]):
+                logger.error(f"Missing required parameters for synthetic_covered_call margin calculation: {kwargs}")
+                return 0
+
             if asset_type == 'broad_based_index':
                 method_1 = strike * 0.15 - otm_amount + premium * 100
                 method_2 = strike * 0.10 + premium * 100
                 return max(method_1, method_2, 100)
             else:  # equity, ETFs
-                method_1 = strike * 0.20 - otm_amount + premium * 100
-                method_2 = strike * 0.10 + premium * 100
-                return max(method_1, method_2, 100)
+                # Use higher of:
+                # 1. 20% of underlying value
+                # 2. 15% of underlying value + put premium
+                method_1 = underlying_value * 0.20 * 100
+                method_2 = underlying_value * 0.15 * 100 + premium * 100
+                margin = max(method_1, method_2, max_loss)
+                logger.debug(f"Equity margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                return margin
 
         elif strategy_type == 'naked_call':
             underlying_value = kwargs.get('underlying_value')
