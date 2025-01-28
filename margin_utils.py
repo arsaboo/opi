@@ -1,3 +1,4 @@
+import traceback
 from logger_config import get_logger
 
 def calculate_margin_requirement(asset, strategy_type, **kwargs):
@@ -29,33 +30,34 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
         elif strategy_type == 'synthetic_covered_call':
             strike = kwargs.get('put_strike')
             underlying_value = kwargs.get('underlying_value')
+            premium = kwargs.get('put_premium', 0)
+            max_loss = kwargs.get('max_loss', strike * 100) if strike else 0
 
             if not all([strike, underlying_value]):
-                logger.error(f"Missing required parameters for {strategy_type}. Strike: {strike}, Underlying: {underlying_value}")
+                logger.error(f"Missing required parameters for synthetic_covered_call margin calc: {kwargs}")
                 return 0
+
+            # Calculate OTM amount here before using it
+            otm_amount = max(0, strike - underlying_value)
 
             logger.info(f"Processing {asset} synthetic covered call - Strike: {strike}, Underlying: {underlying_value}")
 
-            # For synthetic covered calls, margin is only required for the short put
-            otm_amount = max(0, strike - underlying_value) if strike and underlying_value else 0
-            premium = kwargs.get('put_premium', 0)
-
-            if not all([strike, underlying_value]):
-                logger.error(f"Missing required parameters for synthetic_covered_call margin calculation: {kwargs}")
-                return 0
-
             if asset_type == 'broad_based_index':
+                # Use index rules (15%/10%)
                 method_1 = strike * 0.15 - otm_amount + premium * 100
                 method_2 = strike * 0.10 + premium * 100
-                return max(method_1, method_2, 100)
-            else:  # equity, ETFs
-                # Use higher of:
-                # 1. 20% of underlying value
-                # 2. 15% of underlying value + put premium
-                method_1 = underlying_value * 0.20 * 100
-                method_2 = underlying_value * 0.15 * 100 + premium * 100
-                margin = max(method_1, method_2, max_loss)
-                logger.debug(f"Equity margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                margin = max(method_1, method_2)
+                logger.debug(f"Index margin: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                return margin
+            else:  # equity options (SPY, QQQ, VOO)
+                # For equity options, use:
+                # - Short put: 20% of strike price less OTM amount + premium
+                # - Minimum $2,000 per contract
+                margin = max(
+                    (strike * 0.20 - otm_amount) * 100 + premium * 100,  # 20% - OTM + premium
+                    2000  # Minimum requirement per contract
+                )
+                logger.debug(f"Equity margin for {asset}: {margin}")
                 return margin
 
         elif strategy_type == 'naked_call':
