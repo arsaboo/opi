@@ -21,11 +21,9 @@ from margin_utils import (
 )
 from optionChain import OptionChain
 from support import calculate_cagr
+from order_utils import monitor_order, handle_cancel, cancel_order
 
 logger = get_logger()
-
-# Global flag for order cancellation
-cancel_order = False
 
 class Cc:
     def __init__(self, asset):
@@ -45,41 +43,6 @@ class Cc:
             alert.botFailed(self.asset, "No rollover contract found")
             return None
         return roll
-
-def handle_cancel(e):
-    global cancel_order
-    if e.name == 'c':
-        cancel_order = True
-        print("\nCancelling order...")
-
-def monitor_order(api, order_id):
-    """Monitor order status and handle cancellation"""
-    global cancel_order
-
-    while True:
-        if cancel_order:
-            try:
-                api.cancelOrder(order_id)
-                print("Order cancelled successfully.")
-                return False
-            except Exception as e:
-                print(f"Error cancelling order: {e}")
-                return False
-
-        # Check order status
-        try:
-            order_status = api.checkOrder(order_id)
-            if order_status["filled"]:
-                print("Order filled successfully!")
-                return True
-            elif order_status["status"] == "CANCELED":
-                print("Order was cancelled.")
-                return False
-            print("Waiting for order to be filled ...")
-            time.sleep(2)  # Wait before checking again
-        except Exception as e:
-            print(f"Error checking order status: {e}")
-            return False
 
 def RollCalls(api, short):
     days = configuration[short["stockSymbol"]]["maxRollOutWindow"]
@@ -330,36 +293,77 @@ def RollSPX(api, short):
         print("Roll over cancelled")
 
 def roll_contract(api, short, roll, order_premium):
-    maxRetries = 75
-    checkFillXTimes = 12
+    """Execute roll order with improved monitoring and cancellation"""
+    global cancel_order
 
-    roll_order_id = api.rollOver(
-        short["optionSymbol"], roll["symbol"], short["count"], order_premium
-    )
+    # Clean up any existing hooks and reset flag
+    keyboard.unhook_all()
+    cancel_order = False
 
-    for retry in range(maxRetries):
-        for x in range(checkFillXTimes):
-            print("Waiting for order to be filled ...")
-            time.sleep(
-                1
-                if datetime.now(get_localzone()).time() >= time_module(15, 45)
-                else (
-                    5
-                    if datetime.now(get_localzone()).time() >= time_module(15, 30)
-                    else 30
-                )
+    # Get expiration date from roll contract with fallback handling
+    try:
+        if 'expiration' in roll:
+            roll_expiration = roll['expiration']
+        else:
+            roll_expiration = api.getOptionDetails(roll['symbol'])['expiration']
+    except:
+        roll_expiration = roll['date']
+
+    # Print detailed order information
+    print("\nOrder Details:")
+    print(f"Asset: {short['stockSymbol']}")
+    print(f"Current Position: Short Call @ {short['strike']} expiring {short['expiration']}")
+    print(f"Rolling to: Short Call @ {roll['strike']} expiring {roll_expiration}")
+    print(f"Net Credit: ${order_premium}")
+    print(f"Strategy: Roll Short Call")
+
+    # Setup keyboard listener for cancellation
+    keyboard.on_press_key('c', handle_cancel)
+
+    try:
+        print("\nPlacing order with automatic price improvements...")
+        result = None
+        initial_premium = order_premium
+
+        # Try prices in sequence, starting with original price
+        for i in range(0, 76):  # 0 = original price, 1-75 = improvements
+            if cancel_order:
+                print("\nOperation cancelled by user")
+                break
+
+            current_premium = (
+                initial_premium if i == 0
+                else round_to_nearest_five_cents(initial_premium * (1 - (i/100)))
             )
-            checkedOrder = api.checkOrder(roll_order_id)
-            if checkedOrder["filled"]:
-                print(f"Order filled: {roll_order_id}\n Order details: {checkedOrder}")
-                return
-        api.cancelOrder(roll_order_id)
-        print("Can't fill order, retrying with lower price ...")
-        new_premium = order_premium * (100 - retry) / 100
-        rounded_premium = round_to_nearest_five_cents(new_premium)
-        roll_order_id = api.rollOver(
-            short["optionSymbol"], roll["symbol"], short["count"], rounded_premium
-        )
+
+            if i > 0:
+                print(f"\nTrying new price: ${current_premium} (improvement #{i})")
+
+            # Cancel any existing order before placing new one
+            try:
+                if i > 0:  # Don't need to cancel before first order
+                    api.cancelOrder(roll_order_id)
+                    time.sleep(1)  # Brief pause between orders
+            except:
+                pass
+
+            # Place new order
+            roll_order_id = api.rollOver(
+                short["optionSymbol"],
+                roll["symbol"],
+                short["count"],
+                current_premium
+            )
+
+            result = monitor_order(api, roll_order_id, timeout=60)
+            if result is True or result == "cancelled":
+                break
+
+    finally:
+        keyboard.unhook_all()
+        cancel_order = False  # Reset flag on exit
+
+    return result is True
 
 def find_best_rollover(api, data, short_option):
     short_strike, short_price, short_expiry, underlying_price = parse_option_details(

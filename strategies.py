@@ -18,73 +18,7 @@ from margin_utils import (
 )
 from optionChain import OptionChain
 from support import calculate_cagr
-
-# Global flag for order cancellation
-cancel_order = False
-
-def handle_cancel(e):
-    global cancel_order
-    if e.name == 'c':
-        cancel_order = True
-        print("\nCancelling order...")
-
-def monitor_order(api, order_id, timeout=60):  # Default timeout changed to 60 seconds
-    """Monitor order status and handle cancellation with dynamic display"""
-    global cancel_order
-
-    start_time = time.time()
-    last_status_check = 0
-
-    # Set check interval based on market time
-    now = datetime.now(get_localzone())
-    if now.time() >= time_module(15, 30):  # After 3:30 PM
-        check_interval = 2  # Check more frequently near market close
-    else:
-        check_interval = 5  # Normal interval during regular hours
-
-    print("\nMonitoring order execution... (Press 'c' to cancel)")
-
-    while time.time() - start_time < timeout:
-        current_time = time.time()
-        elapsed_time = int(current_time - start_time)
-
-        if cancel_order:
-            try:
-                api.cancelOrder(order_id)
-                print("\nOrder cancelled by user.")
-                return "cancelled"  # Special return value for user cancellation
-            except Exception as e:
-                print(f"\nError cancelling order: {e}")
-                return False
-
-        # Check order status
-        try:
-            if current_time - last_status_check >= check_interval:
-                order_status = api.checkOrder(order_id)
-                last_status_check = current_time
-
-                remaining = int(timeout - elapsed_time)
-                print(f"\rStatus: {order_status['status']} | Time remaining: {remaining}s | "
-                      f"Price: {order_status.get('price', 'N/A')} | "
-                      f"Filled: {order_status.get('filledQuantity', '0')}  ", end="", flush=True)
-
-                if order_status["filled"]:
-                    print(f"\nOrder filled successfully!")
-                    print(f"Fill Price: {order_status['price']}")
-                    print(f"Time to fill: {elapsed_time} seconds")
-                    return True
-                elif order_status["status"] == "CANCELED":
-                    print(f"\nOrder was cancelled after {elapsed_time} seconds.")
-                    return False
-
-            time.sleep(0.1)  # Small sleep to prevent CPU thrashing
-
-        except Exception as e:
-            print(f"\nError checking order status: {e}")
-            return False
-
-    print("\nOrder timed out, attempting price improvement...")
-    return "timeout"  # Special return value for timeout
+from order_utils import monitor_order, handle_cancel, cancel_order, reset_cancel_flag
 
 __all__ = ['monitor_order']
 
@@ -770,6 +704,7 @@ def find_spreads(api, synthetic=False):
                     print(f"Net Debit: {price}")
                     print(f"Margin Requirement: {selected_spread['margin_requirement']}")
                     print(f"Annualized Return on Margin: {selected_spread['return_on_margin']}%")
+
                     if synthetic:
                         print(f"Strategy: Synthetic Covered Call")
                         print(f"Leg 1: Buy Call @ {strike_low} for {selected_spread['ask1']}")
@@ -780,37 +715,66 @@ def find_spreads(api, synthetic=False):
                         print(f"Leg 1: Buy Call @ {strike_low} for {selected_spread['ask1']}")
                         print(f"Leg 2: Sell Call @ {strike_high} for {selected_spread['bid2']}")
 
-                    print("\nPlacing order with automatic price improvements...")
-
-                    # Reset cancel flag
-                    global cancel_order
-                    cancel_order = False
-
-                    # Setup keyboard listener
-                    keyboard.on_press(handle_cancel)
-
                     try:
-                        # Use place_order instead of direct order placement
-                        if synthetic:
-                            success = api.place_order(
-                                api.synthetic_covered_call_order,
-                                (selected_asset, selected_date, strike_low, strike_high, 1),
-                                price
-                            )
-                        else:
-                            success = api.place_order(
-                                api.vertical_call_order,
-                                (selected_asset, selected_date, strike_low, strike_high, 1),
-                                price - 5
+                        # Reset cancel flag and clear keyboard hooks
+                        reset_cancel_flag()
+                        keyboard.unhook_all()
+                        keyboard.on_press(handle_cancel)
+
+                        print("\nPlacing order with automatic price improvements...")
+
+                        # Try prices in sequence, starting with original price
+                        initial_price = price
+                        for i in range(0, 76):  # 0 = original price, 1-75 = improvements
+                            if cancel_order:
+                                print("\nOperation cancelled by user")
+                                break
+
+                            current_price = (
+                                initial_price if i == 0
+                                else round_to_nearest_five_cents(initial_premium * (1 - (i/100)))
                             )
 
-                        keyboard.unhook_all()
+                            if i > 0:
+                                print(f"\nTrying new price: ${current_price} (improvement #{i})")
 
-                        if not success:
-                            print("Order was not completed.")
-                    except Exception as e:
+                            # Place order with appropriate strategy
+                            if synthetic:
+                                order_id = api.synthetic_covered_call_order(
+                                    selected_asset,
+                                    selected_date,
+                                    strike_low,
+                                    strike_high,
+                                     1,  # quantity
+                                    price=current_price  # Explicitly pass price as keyword arg
+                                )
+                            else:
+                                order_id = api.vertical_call_order(
+                                    selected_asset,
+                                    selected_date,
+                                    strike_low,
+                                    strike_high,
+                                    1,  # quantity
+                                    current_price - 5
+                                )
+
+                            # Monitor with 60s timeout
+                            result = monitor_order(api, order_id, timeout=60)
+
+                            if result is True:  # Order filled
+                                break
+                            elif result == "cancelled":  # User cancelled
+                                break
+                            elif result == "rejected":  # Order rejected
+                                continue  # Try next price
+                            # On timeout, continue to next price improvement
+
+                            # Brief pause between attempts
+                            if i > 0:
+                                time.sleep(1)
+
+                    finally:
                         keyboard.unhook_all()
-                        print(f"Failed to place order: {e}")
 
                 else:
                     print("Order not placed")

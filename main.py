@@ -18,6 +18,7 @@ from configuration import (
 from logger_config import get_logger
 from strategies import BoxSpread, find_spreads
 import traceback
+from order_utils import reset_cancel_flag
 
 logger = get_logger()
 
@@ -111,6 +112,9 @@ def print_transaction_table(title, transactions, category):
 
 
 def present_menu(default="1"):
+    # Reset cancel flag before showing menu
+    reset_cancel_flag()
+
     menu_options = {
         "1": "Roll Short Options",
         "2": "Check Box Spreads",
@@ -135,6 +139,9 @@ def present_menu(default="1"):
 
 
 def execute_option(api, option, exec_window, shorts=None):
+    # Reset cancel flag before executing any option
+    reset_cancel_flag()
+
     # Show both debug mode and market status
     if exec_window["open"]:
         print("Market is open, running the program now...")
