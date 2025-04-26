@@ -62,18 +62,34 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
 
         elif strategy_type == 'naked_call':
             underlying_value = kwargs.get('underlying_value')
-            otm_amount = kwargs.get('otm_amount', 0)
-            premium = kwargs.get('premium')
+            strike = kwargs.get('strike', 0)
+            otm_amount = kwargs.get('otm_amount', max(0, underlying_value - strike))
+            premium = kwargs.get('premium', 0)
+            contracts = kwargs.get('contracts', 1)
+
+            logger.info(f"Processing naked call for {asset} - Strike: {strike}, Underlying: {underlying_value}, Contracts: {contracts}")
 
             if asset_type == 'broad_based_index':
-                return margin_rules['naked_calls']['broad_based_index']['initial_req'](
-                    underlying_value, otm_amount, premium
-                )
+                # Use index rules for broad-based indexes like SPX (15%/10%)
+                method_1 = (underlying_value * 0.15 - otm_amount) * 100 + premium * 100
+                method_2 = underlying_value * 0.10 * 100 + premium * 100
+                margin = max(method_1, method_2) * contracts
+                logger.debug(f"Index naked call margin: Method 1=${method_1:.2f}, Method 2=${method_2:.2f}, Using=${margin:.2f}")
+                return margin
             elif asset_type == 'leveraged_etf':
                 leverage = kwargs.get('leverage', '2x')
-                return margin_rules['naked_calls']['leveraged_etf'][leverage]['initial_req'](
+                result = margin_rules['naked_calls']['leveraged_etf'][leverage]['initial_req'](
                     underlying_value, otm_amount, premium
-                )
+                ) * contracts
+                logger.debug(f"Leveraged ETF naked call margin: ${result:.2f}")
+                return result
+            else:  # standard equity options
+                # For equity options
+                method_1 = (underlying_value * 0.20 - otm_amount) * 100 + premium * 100
+                method_2 = underlying_value * 0.10 * 100 + premium * 100
+                margin = max(method_1, method_2, 2000) * contracts
+                logger.debug(f"Equity naked call margin: ${margin:.2f}")
+                return margin
 
         elif strategy_type == 'naked_put':
             strike = kwargs.get('strike', kwargs.get('put_strike', 0))  # Try both parameter names
