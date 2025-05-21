@@ -741,7 +741,8 @@ def find_spreads(api, synthetic=False):
                         keyboard.unhook_all()
                         keyboard.on_press(handle_cancel)
 
-                        print("\nPlacing order with automatic price improvements...")                        # Try prices in sequence, starting with original price
+                        print("\nPlacing order with automatic price improvements...")
+                        # Try prices in sequence, starting with original price
                         initial_price = price
                         for i in range(0, 76):  # 0 = original price, 1-75 = improvements
                             if cancel_order:

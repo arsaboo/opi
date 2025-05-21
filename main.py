@@ -26,6 +26,65 @@ logger = get_logger()
 api = Api(apiKey, apiRedirectUri, appSecret)
 
 
+def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None):
+    """
+    Execute a function with retry logic for recoverable errors.
+
+    Args:
+        func: Function to execute
+        max_retries: Maximum number of retry attempts
+        backoff_factor: Multiplier for wait time between retries
+        recoverable_errors: List of error message substrings that are considered recoverable
+
+    Returns:
+        The result of the function if successful, False otherwise
+    """
+    # Define default recoverable errors if none provided
+    if recoverable_errors is None:
+        recoverable_errors = [
+            "token_invalid",
+            "connection was forcibly closed",
+            "WinError 10054",
+            "ConnectionRefusedError",
+            "ConnectionResetError",
+            "read operation timed out",
+            "timed out"
+        ]
+
+    for retry_count in range(max_retries):
+        try:
+            # Attempt to execute the function
+            result = func()
+            return result  # Success
+        except Exception as e:
+            error_str = str(e)
+            logger.error(f"Error during execution: {error_str}")
+            logger.debug(f"Full traceback: {traceback.format_exc()}")
+
+            # Check if this is a recoverable error
+            is_recoverable = any(err in error_str for err in recoverable_errors)
+
+            # If error is recoverable and we have retries left
+            if is_recoverable and retry_count < max_retries - 1:
+                # Calculate wait time with exponential backoff
+                retry_wait = backoff_factor * (retry_count + 1)
+
+                # Inform user about retry
+                print(f"\nRecoverable error detected: {error_str}")
+                print(f"Attempting to retry (attempt {retry_count + 1}/{max_retries})...")
+                print(f"Waiting {retry_wait} seconds before retry...")
+                time.sleep(retry_wait)
+                print("Retrying...")
+                continue
+
+            # Non-recoverable error or max retries reached
+            alert.botFailed(None, f"Error: {error_str}")
+            return False
+
+    # This should not be reached but added as a fallback
+    return False
+
+
 def roll_short_positions(api, shorts):
     try:
         any_expiring = False  # flag to track if any options are expiring within 7 days
@@ -54,22 +113,30 @@ def roll_short_positions(api, shorts):
         return None
 
 
+def calculate_time_to_market_open():
+    """Calculate time until market opens at 9:30 AM"""
+    now = datetime.now(get_localzone())
+    time_to_open = now.replace(hour=9, minute=30, second=0, microsecond=0) - now
+
+    if time_to_open.total_seconds() < 0:
+        # If we are past 9:30 AM, calculate the time to 9:30 AM the next day
+        time_to_open += timedelta(days=1)
+
+    return time_to_open
+
+
 def wait_for_execution_window(execWindow):
     if not execWindow["open"]:
-        # find out how long before 9:30 am in the morning
-        now = datetime.now(get_localzone())
-        time_to_open = now.replace(hour=9, minute=30, second=0, microsecond=0) - now
-
-        if time_to_open.total_seconds() < 0:
-            # If we are past 9:30 AM, calculate the time to 9:30 AM the next day
-            time_to_open += timedelta(days=1)
+        time_to_open = calculate_time_to_market_open()
 
         sleep_time = time_to_open.total_seconds()
         if sleep_time < 0:
             return
+
         seconds = int(sleep_time)
         minutes = (seconds % 3600) // 60
         seconds = seconds % 60
+
         if sleep_time > support.defaultWaitTime:
             print("\rMarket is closed, rechecking in 30 minutes...", end="")
             time.sleep(support.defaultWaitTime)
@@ -112,6 +179,7 @@ def print_transaction_table(title, transactions, category):
 
 
 def present_menu(default="1"):
+    """Display menu options and get user selection"""
     # Reset cancel flag before showing menu
     reset_cancel_flag()
 
@@ -138,22 +206,8 @@ def present_menu(default="1"):
             print("Invalid option. Please enter a valid option.")
 
 
-def execute_option(api, option, exec_window, shorts=None):
-    # Reset cancel flag before executing any option
-    reset_cancel_flag()
-
-    # Show both debug mode and market status
-    if exec_window["open"]:
-        print("Market is open, running the program now...")
-    else:
-        print(
-            "Market is closed"
-            + (" but the program will work in debug mode" if debugMarketOpen else "")
-            + "."
-        )
-        if not debugMarketOpen:
-            return
-
+def get_option_function(option, api, shorts=None):
+    """Map option numbers to their corresponding functions"""
     option_mapping = {
         "1": lambda: roll_short_positions(api, shorts),
         "2": lambda: BoxSpread(api, "$SPX"),
@@ -162,95 +216,130 @@ def execute_option(api, option, exec_window, shorts=None):
         "5": lambda: Api.display_margin_requirements(api, shorts),
     }
 
-    if option in option_mapping:
-        func = option_mapping[option]
-        if func:  # Only execute if the function exists (not None)
-            option_error_retries = 0
-            max_option_retries = 3
+    return option_mapping.get(option)
 
-            while option_error_retries < max_option_retries:
-                try:
-                    func()
-                    sleep_time = (
-                        5
-                        if exec_window["open"]
-                        and datetime.now(get_localzone()).time() >= time_module(15, 30)
-                        else 30
-                    )
-                    print(f"Sleeping for {sleep_time} seconds...")
-                    time.sleep(sleep_time)
-                    return  # Exit after successful execution
-                except Exception as e:
-                    error_str = str(e)
-                    logger.error(f"Error executing option {option}: {str(e)}")
-                    logger.debug(f"Full traceback: {traceback.format_exc()}")
 
-                    # Check if this is a recoverable error
-                    if ("token_invalid" in error_str or
-                        "connection was forcibly closed" in error_str or
-                        "WinError 10054" in error_str or
-                        "ConnectionRefusedError" in error_str or
-                        "ConnectionResetError" in error_str or
-                        "read operation timed out" in error_str or
-                        "timed out" in error_str):
+def execute_option(api, option, exec_window, shorts=None):
+    """Execute the selected option with error handling and retries"""
+    # Reset cancel flag before executing any option
+    reset_cancel_flag()
 
-                        option_error_retries += 1
-                        if option_error_retries >= max_option_retries:
-                            # If we've reached max retries, alert and exit
-                            alert.botFailed(None, f"Error in option {option} after {max_option_retries} attempts: {error_str}")
-                            return False
+    # Display market status information
+    display_market_status(exec_window)
 
-                        # Wait with exponential backoff
-                        retry_wait = 3 * option_error_retries
-                        print(f"\nRecoverable error detected: {error_str}")
-                        print(f"Attempting to retry option {option} (attempt {option_error_retries}/{max_option_retries})...")
-                        print(f"Waiting {retry_wait} seconds before retry...")
-                        time.sleep(retry_wait)
-                        print(f"Retrying option {option}...")
-                        continue
+    # Don't proceed if market is closed and we're not in debug mode
+    if not exec_window["open"] and not debugMarketOpen:
+        return False
 
-                    # Non-recoverable error
-                    alert.botFailed(None, f"Error in option {option}: {error_str}")
-                    return False
-    else:
+    # Get and execute the function corresponding to the selected option
+    func = get_option_function(option, api, shorts)
+    if not func:
         logger.warning(f"Invalid option selected: {option}")
         print(f"Invalid option: {option}")
+        return False
+
+    # Execute the function with sleep after completion
+    def execute_with_sleep():
+        func()
+        sleep_time = get_sleep_time(exec_window)
+        print(f"Sleeping for {sleep_time} seconds...")
+        time.sleep(sleep_time)
+        return True
+
+    return handle_retry(execute_with_sleep, max_retries=3)
+
+
+def display_market_status(exec_window):
+    """Display information about the current market status"""
+    if exec_window["open"]:
+        print("Market is open, running the program now...")
+    else:
+        message = "Market is closed"
+        if debugMarketOpen:
+            message += " but the program will work in debug mode"
+        print(message + ".")
+
+
+def get_sleep_time(exec_window):
+    """Determine how long to sleep after executing an option"""
+    now = datetime.now(get_localzone())
+    current_time = now.time()
+
+    # If market is open and it's after 3:30 PM, use short sleep time
+    if exec_window["open"] and current_time >= time_module(15, 30):
+        return 5
+
+    # Otherwise use longer sleep time
+    return 30
+
+
+def setup_api_with_retry(api, max_attempts=3):
+    """Set up the API with retry logic specifically for authentication errors"""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            api.setup()
+            return True  # If setup is successful, return True
+        except Exception as e:
+            error_str = str(e)
+            logger.error(f"Error while setting up the api: {error_str}")
+
+            # Check if this is the last attempt
+            is_last_attempt = attempt >= max_attempts
+
+            # Handle token authentication error
+            if "refresh_token_authentication_error" in error_str and not is_last_attempt:
+                logger.info("Detected refresh token authentication error. Attempting to delete token and retry...")
+                print("Token authentication failed. Deleting existing token and retrying...")
+                api.delete_token()
+
+            # Exit if max attempts reached
+            if is_last_attempt:
+                logger.error(f"Failed to initialize API after {max_attempts} attempts")
+                alert.botFailed(None, f"Failed to initialize API after {max_attempts} attempts: {error_str}")
+                return False
+
+            # Retry with delay
+            print(f"Retrying setup (attempt {attempt}/{max_attempts})...")
+            time.sleep(2)  # Brief pause before retry
+
+    return False  # Should not reach here, but added as a fallback
+
+
+def get_execution_context(api):
+    """Get the current execution context (window and short positions)"""
+    execWindow = api.getOptionExecutionWindow()
+    shorts = api.updateShortPosition()
+
+    logger.debug(f"Execution window: {execWindow}")
+    logger.debug(f"Short positions: {shorts}")
+
+    return execWindow, shorts
+
+def process_menu_option(api, option):
+    """Process a single menu option execution with error handling"""
+    try:
+        def run_option():
+            execWindow, shorts = get_execution_context(api)
+
+            if debugMarketOpen or execWindow["open"]:
+                return execute_option(api, option, execWindow, shorts)
+            else:
+                wait_for_execution_window(execWindow)
+                return None  # Continue the loop after waiting
+
+        return handle_retry(run_option)
+
+    except KeyboardInterrupt:
+        logger.info("Operation interrupted by user.")
+        print("\nInterrupted. Going back to operation...")
+        return None  # Continue with main loop
 
 
 def main():
     try:
         # Initialize Schwab API with retry for token authentication errors
-        setup_attempts = 0
-        max_attempts = 3
-
-        while setup_attempts < max_attempts:
-            try:
-                api.setup()
-                break  # If setup is successful, exit the retry loop
-            except Exception as e:
-                setup_attempts += 1
-                error_str = str(e)
-                logger.error(f"Error while setting up the api: {error_str}")
-
-                # Check for token authentication error
-                if "refresh_token_authentication_error" in error_str and setup_attempts < max_attempts:
-                    logger.info("Detected refresh token authentication error. Attempting to delete token and retry...")
-                    print("Token authentication failed. Deleting existing token and retrying...")
-
-                    # Reset/delete the token
-                    api.delete_token()
-
-                    if setup_attempts < max_attempts:
-                        print(f"Retrying authentication (attempt {setup_attempts+1}/{max_attempts})...")
-                        time.sleep(2)  # Brief pause before retry
-                        continue
-
-                # If we've reached max attempts or it's not a token error, raise the exception
-                if setup_attempts >= max_attempts:
-                    logger.error(f"Failed to initialize API after {max_attempts} attempts")
-                    alert.botFailed(None, f"Failed to initialize API after {max_attempts} attempts: {error_str}")
-                    return
-                raise  # Re-raise the exception if it's not a token error
+        if not setup_api_with_retry(api):
+            return
 
         while True:
             try:
@@ -258,56 +347,9 @@ def main():
                 if option == "0":
                     break
 
-                # Counter for token invalid errors within this menu option execution
-                token_error_retries = 0
-                max_token_retries = 3
-
-                while True:
-                    try:
-                        execWindow = api.getOptionExecutionWindow()
-                        shorts = api.updateShortPosition()
-
-                        logger.debug(f"Execution window: {execWindow}")
-                        logger.debug(f"Short positions: {shorts}")
-
-                        if debugMarketOpen or execWindow["open"]:
-                            result = execute_option(api, option, execWindow, shorts)
-                            if result:
-                                break
-                        else:
-                            wait_for_execution_window(execWindow)
-
-                        # Reset token error counter on successful execution
-                        token_error_retries = 0
-
-                    except Exception as e:
-                        error_str = str(e)
-                        logger.error(f"Error in main loop: {error_str}")
-                        logger.debug(f"Full traceback: {traceback.format_exc()}")                        # Check for various errors that can be resolved with a simple retry
-                        # Including token_invalid errors and network connection errors
-                        if (("token_invalid" in error_str or
-                            "connection was forcibly closed" in error_str or
-                            "WinError 10054" in error_str or
-                            "ConnectionRefusedError" in error_str or
-                            "ConnectionResetError" in error_str or
-                            "read operation timed out" in error_str or
-                            "timed out" in error_str) and
-                            token_error_retries < max_token_retries):
-
-                            token_error_retries += 1
-                            logger.info(f"Recoverable error detected. Attempting to retry operation (attempt {token_error_retries}/{max_token_retries})...")
-                            print(f"\nRecoverable error detected: {error_str}")
-                            print(f"Attempting to retry operation (attempt {token_error_retries}/{max_token_retries})...")
-
-                            # Simple wait before retry with exponential backoff
-                            retry_wait = 3 * token_error_retries  # Increase wait time with each retry
-                            print(f"Waiting {retry_wait} seconds before retry...")
-                            time.sleep(retry_wait)
-                            print("Retrying operation...")
-                            continue  # Skip to next iteration with a simple retry
-
-                        alert.botFailed(None, f"Error in main loop: {error_str}")
-                        break
+                result = process_menu_option(api, option)
+                if result:  # If the option execution was successful and complete
+                    continue  # Go back to menu
 
             except KeyboardInterrupt:
                 logger.info("Program interrupted by user. Going back to main menu.")
