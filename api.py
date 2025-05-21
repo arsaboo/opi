@@ -100,6 +100,44 @@ class Api:
             else:
                 raise
 
+    def delete_token(self):
+        """
+        Delete the stored token files to force re-authentication.
+        This is useful when token authentication errors occur.
+        """
+        import os
+        from logger_config import get_logger
+
+        logger = get_logger()
+
+        try:
+            # Path to token file - assuming it's stored in the same directory in a 'token.json' file
+            token_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'token.json')
+
+            # Check if token file exists before attempting to delete
+            if os.path.exists(token_path):
+                os.remove(token_path)
+                logger.info(f"Successfully deleted token file at {token_path}")
+                print("Token file deleted successfully.")
+            else:
+                logger.info("No token file found to delete.")
+                print("No existing token file found.")
+
+            # Also check for any other potential token-related files in the directory
+            directory = os.path.dirname(os.path.abspath(__file__))
+            for filename in os.listdir(directory):
+                if filename.endswith('.token') or 'token' in filename.lower():
+                    file_path = os.path.join(directory, filename)
+                    os.remove(file_path)
+                    logger.info(f"Deleted additional token file: {file_path}")
+                    print(f"Deleted additional token file: {filename}")
+
+            return True
+        except Exception as e:
+            logger.error(f"Error while deleting token: {str(e)}")
+            print(f"Error while deleting token: {str(e)}")
+            return False
+
     def get_hash_value(self, account_number, data):
         for item in data:
             if item["accountNumber"] == account_number:

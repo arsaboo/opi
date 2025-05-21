@@ -165,20 +165,53 @@ def execute_option(api, option, exec_window, shorts=None):
     if option in option_mapping:
         func = option_mapping[option]
         if func:  # Only execute if the function exists (not None)
-            try:
-                func()
-                sleep_time = (
-                    5
-                    if exec_window["open"]
-                    and datetime.now(get_localzone()).time() >= time_module(15, 30)
-                    else 30
-                )
-                print(f"Sleeping for {sleep_time} seconds...")
-                time.sleep(sleep_time)
-            except Exception as e:
-                logger.error(f"Error executing option {option}: {str(e)}")
-                logger.debug(f"Full traceback: {traceback.format_exc()}")
-                alert.botFailed(None, f"Error in option {option}: {str(e)}")
+            option_error_retries = 0
+            max_option_retries = 3
+
+            while option_error_retries < max_option_retries:
+                try:
+                    func()
+                    sleep_time = (
+                        5
+                        if exec_window["open"]
+                        and datetime.now(get_localzone()).time() >= time_module(15, 30)
+                        else 30
+                    )
+                    print(f"Sleeping for {sleep_time} seconds...")
+                    time.sleep(sleep_time)
+                    return  # Exit after successful execution
+                except Exception as e:
+                    error_str = str(e)
+                    logger.error(f"Error executing option {option}: {str(e)}")
+                    logger.debug(f"Full traceback: {traceback.format_exc()}")
+
+                    # Check if this is a recoverable error
+                    if ("token_invalid" in error_str or
+                        "connection was forcibly closed" in error_str or
+                        "WinError 10054" in error_str or
+                        "ConnectionRefusedError" in error_str or
+                        "ConnectionResetError" in error_str or
+                        "read operation timed out" in error_str or
+                        "timed out" in error_str):
+
+                        option_error_retries += 1
+                        if option_error_retries >= max_option_retries:
+                            # If we've reached max retries, alert and exit
+                            alert.botFailed(None, f"Error in option {option} after {max_option_retries} attempts: {error_str}")
+                            return False
+
+                        # Wait with exponential backoff
+                        retry_wait = 3 * option_error_retries
+                        print(f"\nRecoverable error detected: {error_str}")
+                        print(f"Attempting to retry option {option} (attempt {option_error_retries}/{max_option_retries})...")
+                        print(f"Waiting {retry_wait} seconds before retry...")
+                        time.sleep(retry_wait)
+                        print(f"Retrying option {option}...")
+                        continue
+
+                    # Non-recoverable error
+                    alert.botFailed(None, f"Error in option {option}: {error_str}")
+                    return False
     else:
         logger.warning(f"Invalid option selected: {option}")
         print(f"Invalid option: {option}")
@@ -186,14 +219,49 @@ def execute_option(api, option, exec_window, shorts=None):
 
 def main():
     try:
-        # Initialize Schwab API
-        api.setup()
+        # Initialize Schwab API with retry for token authentication errors
+        setup_attempts = 0
+        max_attempts = 3
+
+        while setup_attempts < max_attempts:
+            try:
+                api.setup()
+                break  # If setup is successful, exit the retry loop
+            except Exception as e:
+                setup_attempts += 1
+                error_str = str(e)
+                logger.error(f"Error while setting up the api: {error_str}")
+
+                # Check for token authentication error
+                if "refresh_token_authentication_error" in error_str and setup_attempts < max_attempts:
+                    logger.info("Detected refresh token authentication error. Attempting to delete token and retry...")
+                    print("Token authentication failed. Deleting existing token and retrying...")
+
+                    # Reset/delete the token
+                    api.delete_token()
+
+                    if setup_attempts < max_attempts:
+                        print(f"Retrying authentication (attempt {setup_attempts+1}/{max_attempts})...")
+                        time.sleep(2)  # Brief pause before retry
+                        continue
+
+                # If we've reached max attempts or it's not a token error, raise the exception
+                if setup_attempts >= max_attempts:
+                    logger.error(f"Failed to initialize API after {max_attempts} attempts")
+                    alert.botFailed(None, f"Failed to initialize API after {max_attempts} attempts: {error_str}")
+                    return
+                raise  # Re-raise the exception if it's not a token error
 
         while True:
             try:
                 option = present_menu()
                 if option == "0":
                     break
+
+                # Counter for token invalid errors within this menu option execution
+                token_error_retries = 0
+                max_token_retries = 3
+
                 while True:
                     try:
                         execWindow = api.getOptionExecutionWindow()
@@ -209,10 +277,36 @@ def main():
                         else:
                             wait_for_execution_window(execWindow)
 
+                        # Reset token error counter on successful execution
+                        token_error_retries = 0
+
                     except Exception as e:
-                        logger.error(f"Error in main loop: {str(e)}")
-                        logger.debug(f"Full traceback: {traceback.format_exc()}")
-                        alert.botFailed(None, f"Error in main loop: {str(e)}")
+                        error_str = str(e)
+                        logger.error(f"Error in main loop: {error_str}")
+                        logger.debug(f"Full traceback: {traceback.format_exc()}")                        # Check for various errors that can be resolved with a simple retry
+                        # Including token_invalid errors and network connection errors
+                        if (("token_invalid" in error_str or
+                            "connection was forcibly closed" in error_str or
+                            "WinError 10054" in error_str or
+                            "ConnectionRefusedError" in error_str or
+                            "ConnectionResetError" in error_str or
+                            "read operation timed out" in error_str or
+                            "timed out" in error_str) and
+                            token_error_retries < max_token_retries):
+
+                            token_error_retries += 1
+                            logger.info(f"Recoverable error detected. Attempting to retry operation (attempt {token_error_retries}/{max_token_retries})...")
+                            print(f"\nRecoverable error detected: {error_str}")
+                            print(f"Attempting to retry operation (attempt {token_error_retries}/{max_token_retries})...")
+
+                            # Simple wait before retry with exponential backoff
+                            retry_wait = 3 * token_error_retries  # Increase wait time with each retry
+                            print(f"Waiting {retry_wait} seconds before retry...")
+                            time.sleep(retry_wait)
+                            print("Retrying operation...")
+                            continue  # Skip to next iteration with a simple retry
+
+                        alert.botFailed(None, f"Error in main loop: {error_str}")
                         break
 
             except KeyboardInterrupt:
