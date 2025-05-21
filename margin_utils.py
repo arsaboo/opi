@@ -96,19 +96,26 @@ def calculate_margin_requirement(asset, strategy_type, **kwargs):
             underlying_value = kwargs.get('underlying_value', 0)
             otm_amount = max(0, strike - underlying_value)
             premium = kwargs.get('premium', 0)
+            contracts = kwargs.get('contracts', 1)
 
             if asset_type == 'broad_based_index':
-                method_1 = strike * 0.15 - otm_amount + premium * 100
-                method_2 = strike * 0.10 + premium * 100
-                margin = max(method_1, method_2)
-                logger.debug(f"Naked put margin for {asset}: Method 1={method_1}, Method 2={method_2}, Using={margin}")
+                method_1 = (strike * 0.15 - otm_amount) * 100 + premium * 100
+                method_2 = strike * 0.10 * 100 + premium * 100
+                margin = max(method_1, method_2) * contracts
+                logger.debug(f"Index naked put margin: Method 1=${method_1:.2f}, Method 2=${method_2:.2f}, Using=${margin:.2f}")
                 return margin
             elif asset_type == 'etf_index':  # Add SPY-specific calculation
                 margin = max(
                     underlying_value * 0.10 * 100,  # 10% of underlying
                     2500  # Minimum requirement
-                )
-                logger.debug(f"ETF index margin for {asset}: {margin}")
+                ) * contracts
+                logger.debug(f"ETF index margin for {asset}: ${margin:.2f}")
+                return margin
+            else:  # standard equity options
+                method_1 = (strike * 0.20 - otm_amount) * 100 + premium * 100
+                method_2 = underlying_value * 0.10 * 100 + premium * 100
+                margin = max(method_1, method_2, 2000) * contracts
+                logger.debug(f"Equity naked put margin: Method 1=${method_1:.2f}, Method 2=${method_2:.2f}, Using=${margin:.2f}")
                 return margin
 
     except KeyError as e:

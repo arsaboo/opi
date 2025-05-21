@@ -74,10 +74,11 @@ def BoxSpread(api, asset="$SPX"):
         }
 
         for future in as_completed(futures):
-            result, spread = future.result()
+            result, spread, trade_direction = future.result()
             if result is not None and result["cagr_percentage"] > best_overall_cagr:
                 best_overall_spread = result
                 best_overall_cagr = result["cagr_percentage"]
+                best_overall_spread["trade_direction"] = trade_direction.capitalize()
 
     if best_overall_spread is not None:
         # Calculate margin requirement
@@ -86,10 +87,12 @@ def BoxSpread(api, asset="$SPX"):
             'credit_spread',
             strike_diff=best_overall_spread["strike2"] - best_overall_spread["strike1"],
             contracts=1
-        )
-
-        # Calculate return on margin
-        profit = best_overall_spread["total_return"]
+        )        # Calculate return on margin
+        # For sell (borrow) box spreads, profit is the difference between what we receive now and what we pay later
+        if best_overall_spread["trade_direction"].lower() == "sell":
+            profit = best_overall_spread["total_investment"] - best_overall_spread["total_return"]
+        else:
+            profit = best_overall_spread["total_return"] - best_overall_spread["total_investment"]
         days_to_expiry = (datetime.strptime(best_overall_spread["date"], "%Y-%m-%d") - datetime.today()).days
         rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_expiry)
 
@@ -103,11 +106,25 @@ def BoxSpread(api, asset="$SPX"):
             "strike2": "High Strike",
             "net_debit": "Net Price",
             "cagr_percentage": "% CAGR",
-            "total_investment": "Investment",
-            "total_return": "Total Return",
+            "trade_direction": "Direction"
+        }
+
+        # Use different labels based on whether we're buying or selling the box spread
+        if best_overall_spread["trade_direction"].lower() == "buy":
+            labels.update({
+                "total_investment": "Investment",
+                "total_return": "Total Return"
+            })
+        else:  # For selling box spreads (borrowing money)
+            labels.update({
+                "total_investment": "Borrowed",
+                "total_return": "Repayment"
+            })
+
+        labels.update({
             "margin_requirement": "Margin Req",
             "return_on_margin": "Ann. ROM %"
-        }
+        })
 
         # Create a new PrettyTable instance
         table = PrettyTable()
@@ -132,9 +149,12 @@ def BoxSpread(api, asset="$SPX"):
 
 
 def calculate_box_spread_wrapper(spread, calls, puts):
+    # Use "sell" as the trade direction for box spreads
+    trade_direction = "sell"
     return (
-        calculate_box_spread(spread, json.dumps(calls), json.dumps(puts), trade="sell"),
+        calculate_box_spread(spread, json.dumps(calls), json.dumps(puts), trade=trade_direction),
         spread,
+        trade_direction
     )
 
 
@@ -144,9 +164,9 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
     puts_chain = json.loads(puts)
     highest_cagr = None
 
-    if trade == "buy":
+    if trade.lower() == "buy":
         highest_cagr = 0
-    elif trade == "sell":
+    elif trade.lower() == "sell":
         highest_cagr = float("-inf")
     best_spread = None
 
@@ -242,8 +262,8 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
                                 "net_debit": round(trade_price, 2),
                                 "cagr": round(cagr, 2),
                                 "cagr_percentage": round(cagr_percentage, 2),
-                                "total_investment": round(spread * 100, 2),
-                                "total_return": round((trade_price) * 100, 2),
+                                "total_return": round(spread * 100, 2),  # Amount to be repaid
+                                "total_investment": round(trade_price * 100, 2),  # Amount borrowed
                             }
                             highest_cagr = round(cagr, 2)
     if best_spread is not None:
@@ -706,12 +726,12 @@ def find_spreads(api, synthetic=False):
                     print(f"Annualized Return on Margin: {selected_spread['return_on_margin']}%")
 
                     if synthetic:
-                        print(f"Strategy: Synthetic Covered Call")
+                        print("Strategy: Synthetic Covered Call")
                         print(f"Leg 1: Buy Call @ {strike_low} for {selected_spread['ask1']}")
                         print(f"Leg 2: Sell Call @ {strike_high} for {selected_spread['bid2']}")
                         print(f"Leg 3: Buy Put @ {strike_low} for {selected_spread['put_ask']}")
                     else:
-                        print(f"Strategy: Vertical Call Spread")
+                        print("Strategy: Vertical Call Spread")
                         print(f"Leg 1: Buy Call @ {strike_low} for {selected_spread['ask1']}")
                         print(f"Leg 2: Sell Call @ {strike_high} for {selected_spread['bid2']}")
 
@@ -721,9 +741,7 @@ def find_spreads(api, synthetic=False):
                         keyboard.unhook_all()
                         keyboard.on_press(handle_cancel)
 
-                        print("\nPlacing order with automatic price improvements...")
-
-                        # Try prices in sequence, starting with original price
+                        print("\nPlacing order with automatic price improvements...")                        # Try prices in sequence, starting with original price
                         initial_price = price
                         for i in range(0, 76):  # 0 = original price, 1-75 = improvements
                             if cancel_order:
@@ -732,7 +750,7 @@ def find_spreads(api, synthetic=False):
 
                             current_price = (
                                 initial_price if i == 0
-                                else round_to_nearest_five_cents(initial_premium * (1 - (i/100)))
+                                else round_to_nearest_five_cents(initial_price * (1 - (i/100)))
                             )
 
                             if i > 0:
