@@ -347,13 +347,20 @@ def main():
                 if option == "0":
                     break
 
-                result = process_menu_option(api, option)
-                if result:  # If the option execution was successful and complete
-                    continue  # Go back to menu
-
+                # Repeat the selected option until interrupted
+                while True:
+                    try:
+                        result = process_menu_option(api, option)
+                        if result:
+                            continue  # Repeat the same option
+                    except KeyboardInterrupt:
+                        logger.info("Operation interrupted by user. Returning to main menu.")
+                        print("\nInterrupted. Returning to the main menu...")
+                        break  # Break inner loop, return to menu
             except KeyboardInterrupt:
-                logger.info("Program interrupted by user. Going back to main menu.")
-                print("\nInterrupted. Going back to the main menu...")
+                logger.info("Program interrupted by user. Exiting.")
+                print("\nInterrupted. Exiting program...")
+                break
             except Exception as e:
                 logger.error(f"Unhandled error: {str(e)}")
                 logger.debug(f"Full traceback: {traceback.format_exc()}")
