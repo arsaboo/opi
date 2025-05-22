@@ -56,6 +56,9 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
             # Attempt to execute the function
             result = func()
             return result  # Success
+        except KeyboardInterrupt:
+            # Let KeyboardInterrupts propagate up
+            raise
         except Exception as e:
             error_str = str(e)
             logger.error(f"Error during execution: {error_str}")
@@ -73,7 +76,11 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
                 print(f"\nRecoverable error detected: {error_str}")
                 print(f"Attempting to retry (attempt {retry_count + 1}/{max_retries})...")
                 print(f"Waiting {retry_wait} seconds before retry...")
-                time.sleep(retry_wait)
+                try:
+                    time.sleep(retry_wait)
+                except KeyboardInterrupt:
+                    # Let KeyboardInterrupts during sleep propagate up
+                    raise
                 print("Retrying...")
                 continue
 
@@ -240,10 +247,16 @@ def execute_option(api, option, exec_window, shorts=None):
 
     # Execute the function with sleep after completion
     def execute_with_sleep():
+        # Allow KeyboardInterrupt to propagate up
         func()
         sleep_time = get_sleep_time(exec_window)
         print(f"Sleeping for {sleep_time} seconds...")
-        time.sleep(sleep_time)
+        # We'll need to check for KeyboardInterrupt during sleep
+        try:
+            time.sleep(sleep_time)
+        except KeyboardInterrupt:
+            # Re-raise to propagate up
+            raise
         return True
 
     return handle_retry(execute_with_sleep, max_retries=3)
@@ -317,22 +330,17 @@ def get_execution_context(api):
 
 def process_menu_option(api, option):
     """Process a single menu option execution with error handling"""
-    try:
-        def run_option():
-            execWindow, shorts = get_execution_context(api)
+    def run_option():
+        execWindow, shorts = get_execution_context(api)
 
-            if debugMarketOpen or execWindow["open"]:
-                return execute_option(api, option, execWindow, shorts)
-            else:
-                wait_for_execution_window(execWindow)
-                return None  # Continue the loop after waiting
+        if debugMarketOpen or execWindow["open"]:
+            return execute_option(api, option, execWindow, shorts)
+        else:
+            wait_for_execution_window(execWindow)
+            return None  # Continue the loop after waiting
 
-        return handle_retry(run_option)
-
-    except KeyboardInterrupt:
-        logger.info("Operation interrupted by user.")
-        print("\nInterrupted. Going back to operation...")
-        return None  # Continue with main loop
+    return handle_retry(run_option)
+    # We removed the KeyboardInterrupt handling to allow it to propagate to the main loop
 
 
 def main():
@@ -347,8 +355,8 @@ def main():
                 if option == "0":
                     break
 
-                # Repeat the selected option until interrupted
-                while True:
+                repeat_option = True
+                while repeat_option:
                     try:
                         result = process_menu_option(api, option)
                         if result:
@@ -356,7 +364,7 @@ def main():
                     except KeyboardInterrupt:
                         logger.info("Operation interrupted by user. Returning to main menu.")
                         print("\nInterrupted. Returning to the main menu...")
-                        break  # Break inner loop, return to menu
+                        repeat_option = False  # Break inner loop, return to menu
             except KeyboardInterrupt:
                 logger.info("Program interrupted by user. Exiting.")
                 print("\nInterrupted. Exiting program...")
