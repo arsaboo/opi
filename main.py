@@ -37,7 +37,7 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
         recoverable_errors: List of error message substrings that are considered recoverable
 
     Returns:
-        The result of the function if successful, False otherwise
+        The result of the function if successful, True if completed without errors even if result is None
     """
     # Define default recoverable errors if none provided
     if recoverable_errors is None:
@@ -55,10 +55,8 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
         try:
             # Attempt to execute the function
             result = func()
-            return result  # Success
-        except KeyboardInterrupt:
-            # Let KeyboardInterrupts propagate up
-            raise
+            # Return True if function completed successfully, regardless of its return value
+            return True if result is None else result
         except Exception as e:
             error_str = str(e)
             logger.error(f"Error during execution: {error_str}")
@@ -245,21 +243,16 @@ def execute_option(api, option, exec_window, shorts=None):
         print(f"Invalid option: {option}")
         return False
 
-    # Execute the function with sleep after completion
-    def execute_with_sleep():
-        # Allow KeyboardInterrupt to propagate up
-        func()
+    # Execute the function with retry logic
+    result = handle_retry(func, max_retries=3)
+
+    # Only sleep if the function executed successfully
+    if result is not False:
         sleep_time = get_sleep_time(exec_window)
         print(f"Sleeping for {sleep_time} seconds...")
-        # We'll need to check for KeyboardInterrupt during sleep
-        try:
-            time.sleep(sleep_time)
-        except KeyboardInterrupt:
-            # Re-raise to propagate up
-            raise
-        return True
+        time.sleep(sleep_time)
 
-    return handle_retry(execute_with_sleep, max_retries=3)
+    return result
 
 
 def display_market_status(exec_window):
@@ -339,9 +332,13 @@ def process_menu_option(api, option):
             wait_for_execution_window(execWindow)
             return None  # Continue the loop after waiting
 
-    return handle_retry(run_option)
-    # We removed the KeyboardInterrupt handling to allow it to propagate to the main loop
+        result = handle_retry(run_option)
+        return result  # Return the result to main loop
 
+    except KeyboardInterrupt:
+        logger.info("Operation interrupted by user.")
+        print("\nInterrupted. Going back to main menu...")
+        raise  # Re-raise so main() can handle and break the loop
 
 def main():
     try:
@@ -349,26 +346,17 @@ def main():
         if not setup_api_with_retry(api):
             return
 
-        while True:
+        while True:  # Outer loop for main menu
+            option = present_menu()
+            if option == "0":
+                return
             try:
-                option = present_menu()
-                if option == "0":
-                    break
-
-                repeat_option = True
-                while repeat_option:
-                    try:
-                        result = process_menu_option(api, option)
-                        if result:
-                            continue  # Repeat the same option
-                    except KeyboardInterrupt:
-                        logger.info("Operation interrupted by user. Returning to main menu.")
-                        print("\nInterrupted. Returning to the main menu...")
-                        repeat_option = False  # Break inner loop, return to menu
+                while True:  # Inner loop for auto-repeat
+                    process_menu_option(api, option)
             except KeyboardInterrupt:
-                logger.info("Program interrupted by user. Exiting.")
-                print("\nInterrupted. Exiting program...")
-                break
+                logger.info("Program interrupted by user. Exiting to main menu.")
+                print("\nInterrupted. Exiting to main menu...")
+                continue  # Go back to main menu
             except Exception as e:
                 logger.error(f"Unhandled error: {str(e)}")
                 logger.debug(f"Full traceback: {traceback.format_exc()}")
