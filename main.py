@@ -325,20 +325,12 @@ def process_menu_option(api, option):
     """Process a single menu option execution with error handling"""
     def run_option():
         execWindow, shorts = get_execution_context(api)
-
         if debugMarketOpen or execWindow["open"]:
             return execute_option(api, option, execWindow, shorts)
         else:
             wait_for_execution_window(execWindow)
             return None  # Continue the loop after waiting
-
-        result = handle_retry(run_option)
-        return result  # Return the result to main loop
-
-    except KeyboardInterrupt:
-        logger.info("Operation interrupted by user.")
-        print("\nInterrupted. Going back to main menu...")
-        raise  # Re-raise so main() can handle and break the loop
+    return handle_retry(run_option)
 
 def main():
     try:
