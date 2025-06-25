@@ -74,7 +74,11 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
                 print(f"\nRecoverable error detected: {error_str}")
                 print(f"Attempting to retry (attempt {retry_count + 1}/{max_retries})...")
                 print(f"Waiting {retry_wait} seconds before retry...")
-                time.sleep(retry_wait)
+                try:
+                    time.sleep(retry_wait)
+                except KeyboardInterrupt:
+                    # Let KeyboardInterrupts during sleep propagate up
+                    raise
                 print("Retrying...")
                 continue
 
@@ -319,15 +323,14 @@ def get_execution_context(api):
 
 def process_menu_option(api, option):
     """Process a single menu option execution with error handling"""
-    try:
-        def run_option():
-            execWindow, shorts = get_execution_context(api)
+    def run_option():
+        execWindow, shorts = get_execution_context(api)
 
-            if debugMarketOpen or execWindow["open"]:
-                return execute_option(api, option, execWindow, shorts)
-            else:
-                wait_for_execution_window(execWindow)
-                return None  # Continue the loop after waiting
+        if debugMarketOpen or execWindow["open"]:
+            return execute_option(api, option, execWindow, shorts)
+        else:
+            wait_for_execution_window(execWindow)
+            return None  # Continue the loop after waiting
 
         result = handle_retry(run_option)
         return result  # Return the result to main loop
