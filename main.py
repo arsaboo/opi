@@ -49,7 +49,12 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
             "ConnectionRefusedError",
             "ConnectionResetError",
             "read operation timed out",
-            "timed out"
+            "timed out",
+            "Expecting value: line 1 column 1 (char 0)",
+            "JSONDecodeError",
+            "Invalid JSON",
+            "Unterminated string",
+            "Extra data"
         ]
 
     for retry_count in range(max_retries):
@@ -68,13 +73,18 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
 
             # If error is recoverable and we have retries left
             if is_recoverable and retry_count < max_retries - 1:
-                # Calculate wait time with exponential backoff
-                retry_wait = backoff_factor * (retry_count + 1)
+                # Special handling for JSON parsing errors - use shorter wait time
+                if any(json_err in error_str for json_err in ["Expecting value", "JSONDecodeError", "Invalid JSON"]):
+                    retry_wait = 2  # Shorter wait for JSON errors
+                    print(f"\nAPI response error detected (likely temporary): {error_str}")
+                    print(f"This usually resolves quickly. Retrying in {retry_wait} seconds... (attempt {retry_count + 1}/{max_retries})")
+                else:
+                    # Calculate wait time with exponential backoff for other errors
+                    retry_wait = backoff_factor * (retry_count + 1)
+                    print(f"\nRecoverable error detected: {error_str}")
+                    print(f"Attempting to retry (attempt {retry_count + 1}/{max_retries})...")
+                    print(f"Waiting {retry_wait} seconds before retry...")
 
-                # Inform user about retry
-                print(f"\nRecoverable error detected: {error_str}")
-                print(f"Attempting to retry (attempt {retry_count + 1}/{max_retries})...")
-                print(f"Waiting {retry_wait} seconds before retry...")
                 try:
                     time.sleep(retry_wait)
                 except KeyboardInterrupt:
