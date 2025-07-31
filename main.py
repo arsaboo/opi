@@ -340,7 +340,7 @@ def process_menu_option(api, option):
     except KeyboardInterrupt:
         logger.info("Operation interrupted by user.")
         print("\nInterrupted. Going back to main menu...")
-        raise  # Re-raise so main() can handle and break the loop
+        return "interrupted"  # Return a special value to indicate interruption
 
 def main():
     try:
@@ -354,11 +354,9 @@ def main():
                 return
             try:
                 while True:  # Inner loop for auto-repeat
-                    process_menu_option(api, option)
-            except KeyboardInterrupt:
-                logger.info("Program interrupted by user. Exiting to main menu.")
-                print("\nInterrupted. Exiting to main menu...")
-                continue  # Go back to main menu
+                    result = process_menu_option(api, option)
+                    if result == "interrupted":
+                        break  # Break out of inner loop and return to main menu
             except Exception as e:
                 logger.error(f"Unhandled error: {str(e)}")
                 logger.debug(f"Full traceback: {traceback.format_exc()}")
