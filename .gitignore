@@ -6,5 +6,3 @@ configuration.py
 .aider*
 *.pickle
 *.env
-
-.env
