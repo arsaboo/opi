@@ -38,6 +38,7 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
 
     Returns:
         The result of the function if successful, True if completed without errors even if result is None
+        The result of the function if successful, True if completed without errors even if result is None
     """
     # Define default recoverable errors if none provided
     if recoverable_errors is None:
