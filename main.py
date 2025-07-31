@@ -38,6 +38,7 @@ def handle_retry(func, max_retries=3, backoff_factor=3, recoverable_errors=None)
 
     Returns:
         The result of the function if successful, True if completed without errors even if result is None
+        The result of the function if successful, True if completed without errors even if result is None
     """
     # Define default recoverable errors if none provided
     if recoverable_errors is None:
@@ -323,14 +324,23 @@ def get_execution_context(api):
 
 def process_menu_option(api, option):
     """Process a single menu option execution with error handling"""
-    def run_option():
-        execWindow, shorts = get_execution_context(api)
-        if debugMarketOpen or execWindow["open"]:
-            return execute_option(api, option, execWindow, shorts)
-        else:
-            wait_for_execution_window(execWindow)
-            return None  # Continue the loop after waiting
-    return handle_retry(run_option)
+    try:
+        def run_option():
+            execWindow, shorts = get_execution_context(api)
+
+            if debugMarketOpen or execWindow["open"]:
+                return execute_option(api, option, execWindow, shorts)
+            else:
+                wait_for_execution_window(execWindow)
+                return None  # Continue the loop after waiting
+
+        result = handle_retry(run_option)
+        return result  # Return the result to main loop
+
+    except KeyboardInterrupt:
+        logger.info("Operation interrupted by user.")
+        print("\nInterrupted. Going back to main menu...")
+        raise  # Re-raise so main() can handle and break the loop
 
 def main():
     try:
