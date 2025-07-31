@@ -324,23 +324,17 @@ def get_execution_context(api):
 
 def process_menu_option(api, option):
     """Process a single menu option execution with error handling"""
-    try:
-        def run_option():
-            execWindow, shorts = get_execution_context(api)
+    def run_option():
+        execWindow, shorts = get_execution_context(api)
 
-            if debugMarketOpen or execWindow["open"]:
-                return execute_option(api, option, execWindow, shorts)
-            else:
-                wait_for_execution_window(execWindow)
-                return None  # Continue the loop after waiting
+        if debugMarketOpen or execWindow["open"]:
+            return execute_option(api, option, execWindow, shorts)
+        else:
+            wait_for_execution_window(execWindow)
+            return None  # Continue the loop after waiting
 
-        result = handle_retry(run_option)
-        return result  # Return the result to main loop
-
-    except KeyboardInterrupt:
-        logger.info("Operation interrupted by user.")
-        print("\nInterrupted. Going back to main menu...")
-        raise  # Re-raise so main() can handle and break the loop
+    result = handle_retry(run_option)
+    return result  # Return the result to main loop
 
 def main():
     try:
@@ -356,8 +350,8 @@ def main():
                 while True:  # Inner loop for auto-repeat
                     process_menu_option(api, option)
             except KeyboardInterrupt:
-                logger.info("Program interrupted by user. Exiting to main menu.")
-                print("\nInterrupted. Exiting to main menu...")
+                logger.info("Program interrupted by user. Going back to main menu.")
+                print("\nInterrupted. Going back to main menu...")
                 continue  # Go back to main menu
             except Exception as e:
                 logger.error(f"Unhandled error: {str(e)}")
