@@ -39,16 +39,20 @@ def alert(asset, message, isError=False):
         mail = Mail()
         mail.send(subj, message)
 
+        # Do not exit here; just log and return
         if isError:
-            exit(1)
+            print(f"[ERROR] {subj}: {message}")
+            return message  # Return the error message
     else:
         if asset:
             print("Asset: " + asset)
 
         print(message)
 
+        # Do not exit here; just log and return
         if isError:
-            exit(1)
+            print(f"[ERROR] {asset}: {message}")
+            return message  # Return the error message
 
 
 def botFailed(asset, message):

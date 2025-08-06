@@ -64,93 +64,98 @@ def BoxSpread(api, asset="$SPX"):
             ),
         ),
     )
-    best_overall_spread = None
-    best_overall_cagr = float("-inf")
+    best_buy_spread = None
+    best_sell_spread = None
+    best_buy_cagr = float("-inf")
+    best_sell_cagr = float("-inf")
 
     with ThreadPoolExecutor() as executor:
-        futures = {
-            executor.submit(calculate_box_spread_wrapper, spread, calls, puts): spread
-            for spread in range(100, 500, 50)
-        }
+        futures = {}
+
+        # Calculate both buy and sell directions for each spread
+        for spread in range(100, 500, 50):
+            # Submit both buy and sell calculations
+            buy_future = executor.submit(calculate_box_spread_wrapper, spread, calls, puts, "buy")
+            sell_future = executor.submit(calculate_box_spread_wrapper, spread, calls, puts, "sell")
+
+            futures[buy_future] = (spread, "buy")
+            futures[sell_future] = (spread, "sell")
 
         for future in as_completed(futures):
             result, spread, trade_direction = future.result()
-            if result is not None and result["cagr_percentage"] > best_overall_cagr:
-                best_overall_spread = result
-                best_overall_cagr = result["cagr_percentage"]
-                best_overall_spread["trade_direction"] = trade_direction.capitalize()
+            spread_value, direction = futures[future]
 
-    if best_overall_spread is not None:
-        # Calculate margin requirement
-        margin_req = calculate_margin_requirement(
-            asset,
-            'credit_spread',
-            strike_diff=best_overall_spread["strike2"] - best_overall_spread["strike1"],
-            contracts=1
-        )        # Calculate return on margin
-        # For sell (borrow) box spreads, profit is the difference between what we receive now and what we pay later
-        if best_overall_spread["trade_direction"].lower() == "sell":
-            profit = best_overall_spread["total_investment"] - best_overall_spread["total_return"]
-        else:
-            profit = best_overall_spread["total_return"] - best_overall_spread["total_investment"]
-        days_to_expiry = (datetime.strptime(best_overall_spread["date"], "%Y-%m-%d") - datetime.today()).days
-        rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_expiry)
+            if result is not None:
+                if trade_direction == "buy" and result["cagr_percentage"] > best_buy_cagr:
+                    best_buy_spread = result
+                    best_buy_cagr = result["cagr_percentage"]
+                    best_buy_spread["trade_direction"] = "Buy"
+                elif trade_direction == "sell" and result["cagr_percentage"] > best_sell_cagr:
+                    best_sell_spread = result
+                    best_sell_cagr = result["cagr_percentage"]
+                    best_sell_spread["trade_direction"] = "Sell"
 
-        best_overall_spread["margin_requirement"] = margin_req
-        best_overall_spread["return_on_margin"] = rom
+    # Return both buy and sell spreads
+    results = []
 
-        # Create a dictionary mapping the original column names to the new labels
-        labels = {
-            "date": "Date",
-            "strike1": "Low Strike",
-            "strike2": "High Strike",
-            "net_debit": "Net Price",
-            "cagr_percentage": "% CAGR",
-            "trade_direction": "Direction"
-        }
+    for spread_data in [best_buy_spread, best_sell_spread]:
+        if spread_data is not None:
+            # Calculate margin requirement
+            margin_req = calculate_margin_requirement(
+                asset,
+                'credit_spread',
+                strike_diff=spread_data["strike2"] - spread_data["strike1"],
+                contracts=1
+            )
 
-        # Use different labels based on whether we're buying or selling the box spread
-        if best_overall_spread["trade_direction"].lower() == "buy":
-            labels.update({
-                "total_investment": "Investment",
-                "total_return": "Total Return"
-            })
-        else:  # For selling box spreads (borrowing money)
-            labels.update({
-                "total_investment": "Borrowed",
-                "total_return": "Repayment"
-            })
+            # Calculate return on margin
+            if spread_data["trade_direction"].lower() == "sell":
+                profit = spread_data["total_investment"] - spread_data["total_return"]
+            else:
+                profit = spread_data["total_return"] - spread_data["total_investment"]
 
-        labels.update({
-            "margin_requirement": "Margin Req",
-            "return_on_margin": "Ann. ROM %"
-        })
+            days_to_expiry = (datetime.strptime(spread_data["date"], "%Y-%m-%d") - datetime.today()).days
+            rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_expiry)
 
-        # Create a new PrettyTable instance
+            spread_data["margin_requirement"] = margin_req
+            spread_data["return_on_margin"] = rom
+
+            results.append(spread_data)
+
+    if results:
+        # Create a table showing both buy and sell options
         table = PrettyTable()
+        table.field_names = ["Direction", "Date", "Low Strike", "High Strike", "Net Price", "CAGR %", "Borrowed/Investment", "Repayment/Return", "Margin Req", "Ann. ROM %"]
 
-        # Set the field names to the labels
-        table.field_names = list(labels.values())
+        for spread_data in results:
+            if spread_data["trade_direction"].lower() == "buy":
+                borrowed_investment = spread_data["total_investment"]
+                repayment_return = spread_data["total_return"]
+            else:
+                borrowed_investment = spread_data["total_investment"]
+                repayment_return = spread_data["total_return"]
 
-        # Add a row with the values of the selected columns
-        table.add_row(
-            [
-                (
-                    f"{best_overall_spread[column]}%"
-                    if column in ["cagr_percentage", "return_on_margin"]
-                    else best_overall_spread[column]
-                )
-                for column in labels.keys()
-            ]
-        )
+            table.add_row([
+                spread_data["trade_direction"],
+                spread_data["date"],
+                spread_data["strike1"],
+                spread_data["strike2"],
+                spread_data["net_debit"],
+                f"{spread_data['cagr_percentage']}%",
+                borrowed_investment,
+                repayment_return,
+                spread_data["margin_requirement"],
+                f"{spread_data['return_on_margin']}%"
+            ])
+
         print(table)
+
+        # Return the list of results for UI display
+        return results
     else:
-        print("No best spread found.")
-
-
-def calculate_box_spread_wrapper(spread, calls, puts):
-    # Use "sell" as the trade direction for box spreads
-    trade_direction = "sell"
+        print("No box spreads found.")
+        return None
+def calculate_box_spread_wrapper(spread, calls, puts, trade_direction="sell"):
     return (
         calculate_box_spread(spread, json.dumps(calls), json.dumps(puts), trade=trade_direction),
         spread,
@@ -162,12 +167,13 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
     # Parse the JSON option chain
     calls_chain = json.loads(calls)
     puts_chain = json.loads(puts)
-    highest_cagr = None
 
+    # Initialize highest_cagr based on trade direction
     if trade.lower() == "buy":
-        highest_cagr = 0
+        highest_cagr = float("-inf")  # Changed from 0 to -inf for consistency
     elif trade.lower() == "sell":
         highest_cagr = float("-inf")
+
     best_spread = None
 
     # Iterate over the option chain
@@ -205,10 +211,10 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
                             low_put = put_contracts[i]["ask"]
                             high_call = call_contracts[j]["ask"]
                             high_put = put_contracts[j]["bid"]
+
                     if None not in [low_call, high_put, high_call, low_put]:
                         if trade.lower() == "buy":  # debit
-                            trade_price = low_put + high_call - high_put - low_call
-                            trade_price = -trade_price
+                            trade_price = low_call + high_put - high_call - low_put
                         elif trade.lower() == "sell":  # credit
                             trade_price = low_call + high_put - high_call - low_put
                     else:
@@ -221,55 +227,53 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="natural"):
                         datetime.strptime(entry[0]["date"], "%Y-%m-%d").date()
                         - datetime.today().date()
                     ).days
-                    if days > 1 and trade_price > 0:
+
+                    # Allow both positive and negative trade prices for debugging
+                    if days > 1 and abs(trade_price) > 0:
                         if trade.lower() == "buy":
                             cagr, cagr_percentage = calculate_cagr(
-                                trade_price, spread, days
+                                abs(trade_price), spread, days
                             )
                         else:
                             cagr, cagr_percentage = calculate_cagr(
-                                spread, trade_price, days
+                                spread, abs(trade_price), days
                             )
-                        if trade.lower() == "buy" and (
-                            highest_cagr is None or cagr > highest_cagr
-                        ):
-                            best_spread = {
-                                "date": entry[0]["date"],
-                                "strike1": low_strike,
-                                "strike2": high_strike,
-                                "net_debit": round(trade_price, 2),
-                                "cagr": round(cagr, 2),
-                                "cagr_percentage": round(cagr_percentage, 2),
-                                "total_investment": round(trade_price * 100, 2),
-                                "total_return": round((spread) * 100, 2),
-                            }
+
+                        # Update condition to use consistent comparison
+                        if cagr > highest_cagr:
+                            if trade.lower() == "buy":
+                                best_spread = {
+                                    "date": entry[0]["date"],
+                                    "strike1": low_strike,
+                                    "strike2": high_strike,
+                                    "net_debit": round(abs(trade_price), 2),
+                                    "cagr": round(cagr, 2),
+                                    "cagr_percentage": round(cagr_percentage, 2),
+                                    "total_investment": round(abs(trade_price) * 100, 2),
+                                    "total_return": round(spread * 100, 2),
+                                }
+                            else:  # sell
+                                best_spread = {
+                                    "date": entry[0]["date"],
+                                    "strike1": low_strike,
+                                    "strike2": high_strike,
+                                    "low_call_bid": call_contracts[i]["bid"],
+                                    "high_put_bid": put_contracts[j]["bid"],
+                                    "high_call_ask": call_contracts[j]["ask"],
+                                    "low_put_ask": put_contracts[i]["ask"],
+                                    "low_call_ask": call_contracts[i]["ask"],
+                                    "high_call_bid": call_contracts[j]["bid"],
+                                    "low_put_bid": put_contracts[i]["bid"],
+                                    "high_put_ask": put_contracts[j]["ask"],
+                                    "net_debit": round(abs(trade_price), 2),
+                                    "cagr": round(cagr, 2),
+                                    "cagr_percentage": round(cagr_percentage, 2),
+                                    "total_return": round(spread * 100, 2),  # Amount to be repaid
+                                    "total_investment": round(abs(trade_price) * 100, 2),  # Amount borrowed
+                                }
                             highest_cagr = round(cagr, 2)
-                        elif trade.lower() == "sell" and (
-                            highest_cagr is None or cagr > highest_cagr
-                        ):
-                            best_spread = {
-                                "date": entry[0]["date"],
-                                "strike1": low_strike,
-                                "strike2": high_strike,
-                                "low_call_bid": call_contracts[i]["bid"],
-                                "high_put_bid": put_contracts[j]["bid"],
-                                "high_call_ask": call_contracts[j]["ask"],
-                                "low_put_ask": put_contracts[i]["ask"],
-                                "low_call_ask": call_contracts[i]["ask"],
-                                "high_call_bid": call_contracts[j]["bid"],
-                                "low_put_bid": put_contracts[i]["bid"],
-                                "high_put_ask": put_contracts[j]["ask"],
-                                "net_debit": round(trade_price, 2),
-                                "cagr": round(cagr, 2),
-                                "cagr_percentage": round(cagr_percentage, 2),
-                                "total_return": round(spread * 100, 2),  # Amount to be repaid
-                                "total_investment": round(trade_price * 100, 2),  # Amount borrowed
-                            }
-                            highest_cagr = round(cagr, 2)
-    if best_spread is not None:
-        return best_spread
-    else:
-        return None
+
+    return best_spread
 
 
 def bull_call_spread(

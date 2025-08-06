@@ -4,9 +4,9 @@ from datetime import datetime
 
 def get_logger():
     """Configure and return a file-based logger that doesn't interfere with Textual UI"""
-    logger = logging.getLogger(__name__)
+    logger = logging.getLogger("file_logger")  # Use a unique name
 
-    # Check if handlers already exist to avoid duplicate handlers
+    # Only configure once
     if not logger.handlers:
         # Create logs directory if it doesn't exist
         log_dir = "logs"
@@ -17,7 +17,7 @@ def get_logger():
         timestamp = datetime.now().strftime("%Y%m%d")
         log_file = os.path.join(log_dir, f"options_trading_{timestamp}.log")
 
-        # Create file handler instead of console handler
+        # Create file handler
         handler = logging.FileHandler(log_file)
         handler.setLevel(logging.INFO)
 

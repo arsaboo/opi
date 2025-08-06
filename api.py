@@ -3,7 +3,7 @@ import json
 import math
 import os
 import time
-from datetime import datetime, timedelta, time as time_module
+from datetime import datetime, timedelta
 from operator import itemgetter
 from statistics import median
 
@@ -13,13 +13,10 @@ import schwab
 from schwab import auth
 from schwab.orders.options import OptionSymbol
 from schwab.utils import Utils
-from tzlocal import get_localzone
 
 import alert
-from cc import round_to_nearest_five_cents
 from configuration import SchwabAccountID, debugCanSendOrders
-from logger_config import get_logger
-from strategies import monitor_order  # Import monitor_order from strategies
+from logger_config_quiet import get_logger
 from support import extract_date, extract_strike_price, validDateFormat
 
 logger = get_logger()
@@ -38,7 +35,6 @@ class Api:
         self.apiKey = apiKey
         self.apiRedirectUri = apiRedirectUri
         self.appSecret = appSecret
-        # Ensure the directory exists
         os.makedirs(os.path.dirname(self.tokenPath), exist_ok=True)
 
     def setup(self, retries=3, delay=5):
@@ -51,20 +47,23 @@ class Api:
                     token_path=self.tokenPath,
                 )
                 response = self.connectClient.get_account_numbers()
-                response.raise_for_status()
-                return  # Exit if successful
-            except requests.exceptions.HTTPError as http_err:
-                logger.error(f"HTTP error occurred: {http_err}")
-                if http_err.response.status_code == 401:  # 401 Unauthorized
+                if response.status_code != 200:
+                    logger.error(f"HTTP error occurred: {response.status_code} {response.text}")
                     self._handle_auth_error()
                     return
-            except FileNotFoundError as fnf_err:
-                logger.error(f"Token file not found: {fnf_err}")
-                self._handle_auth_error()
                 return
             except Exception as e:
+                if isinstance(e, FileNotFoundError):
+                    logger.info("Token file not found, starting manual authentication flow.")
+                    self._handle_auth_error()
+                    return
                 logger.error(f"Error while setting up the api: {e}")
-                if "refresh token invalid" in str(e):
+                error_str = str(e).lower()
+                if (
+                    "refresh token invalid" in error_str
+                    or "refresh_token_authentication_error" in error_str
+                    or "unsupported_token_type" in error_str
+                ):
                     self._handle_auth_error()
                     return
                 attempt += 1
@@ -75,7 +74,6 @@ class Api:
                     raise
 
     def _handle_auth_error(self):
-        """Helper method to handle authentication errors"""
         if os.path.exists(self.tokenPath):
             os.remove(self.tokenPath)
         try:
@@ -85,36 +83,14 @@ class Api:
                 callback_url=self.apiRedirectUri,
                 token_path=self.tokenPath,
             )
-        except requests.exceptions.HTTPError as http_err:
-            if "AuthorizationCode has expired" in str(http_err):
-                logger.error("Authorization code has expired. Please re-authenticate.")
-                # Prompt user to re-authenticate
-                print("Authorization code has expired. Please re-authenticate.")
-                # Retry authentication
-                self.connectClient = auth.client_from_manual_flow(
-                    api_key=self.apiKey,
-                    app_secret=self.appSecret,
-                    callback_url=self.apiRedirectUri,
-                    token_path=self.tokenPath,
-                )
-            else:
-                raise
+        except Exception as http_err:
+            logger.error(f"Auth error: {http_err}")
+            print("Authorization code has expired. Please re-authenticate.")
+            return
 
     def delete_token(self):
-        """
-        Delete the stored token files to force re-authentication.
-        This is useful when token authentication errors occur.
-        """
-        import os
-        from logger_config import get_logger
-
-        logger = get_logger()
-
         try:
-            # Path to token file - assuming it's stored in the same directory in a 'token.json' file
             token_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'token.json')
-
-            # Check if token file exists before attempting to delete
             if os.path.exists(token_path):
                 os.remove(token_path)
                 logger.info(f"Successfully deleted token file at {token_path}")
@@ -122,8 +98,6 @@ class Api:
             else:
                 logger.info("No token file found to delete.")
                 print("No existing token file found.")
-
-            # Also check for any other potential token-related files in the directory
             directory = os.path.dirname(os.path.abspath(__file__))
             for filename in os.listdir(directory):
                 if filename.endswith('.token') or 'token' in filename.lower():
@@ -131,7 +105,6 @@ class Api:
                     os.remove(file_path)
                     logger.info(f"Deleted additional token file: {file_path}")
                     print(f"Deleted additional token file: {filename}")
-
             return True
         except Exception as e:
             logger.error(f"Error while deleting token: {str(e)}")
@@ -145,128 +118,137 @@ class Api:
         return None
 
     def getAccountHash(self):
-        r = self.connectClient.get_account_numbers()
-
-        assert r.status_code == 200, r.raise_for_status()
-
-        data = r.json()
         try:
-            return self.get_hash_value(SchwabAccountID, data)
-        except KeyError:
-            return alert.botFailed(None, "Error while getting account hash value")
+            r = self.connectClient.get_account_numbers()
+            if r.status_code != 200:
+                logger.error(f"get_account_numbers failed: {r.status_code} {r.text}")
+                return alert.botFailed(None, f"Error getting account hash: {r.status_code} {r.text}")
+            data = r.json()
+            try:
+                return self.get_hash_value(SchwabAccountID, data)
+            except KeyError:
+                return alert.botFailed(None, "Error while getting account hash value")
+        except Exception as e:
+            logger.error(f"Exception in getAccountHash: {e}")
+            return alert.botFailed(None, f"Exception in getAccountHash: {e}")
 
     def getATMPrice(self, asset):
-        # client can be None
-        r = self.connectClient.get_quote(asset)
-        assert r.status_code == 200, r.raise_for_status()
-
-        data = r.json()
-        lastPrice = 0
-
         try:
-            if data[asset]["assetMainType"] == "OPTION":
-                lastPrice = median(
-                    [data[asset]["quote"]["bidPrice"], data[asset]["quote"]["askPrice"]]
-                )
-            else:
-                lastPrice = data[asset]["quote"]["lastPrice"]
-        except KeyError:
-            return alert.botFailed(asset, "Wrong data from api when getting ATM price")
-
-        return lastPrice
+            r = self.connectClient.get_quote(asset)
+            if r.status_code != 200:
+                logger.error(f"get_quote failed: {r.status_code} {r.text}")
+                return alert.botFailed(asset, f"Error getting ATM price: {r.status_code} {r.text}")
+            data = r.json()
+            lastPrice = 0
+            try:
+                if data[asset]["assetMainType"] == "OPTION":
+                    lastPrice = median([
+                        data[asset]["quote"]["bidPrice"], data[asset]["quote"]["askPrice"]
+                    ])
+                else:
+                    lastPrice = data[asset]["quote"]["lastPrice"]
+            except KeyError:
+                return alert.botFailed(asset, "Wrong data from api when getting ATM price")
+            return lastPrice
+        except Exception as e:
+            logger.error(f"Exception in getATMPrice: {e}")
+            return alert.botFailed(asset, f"Exception in getATMPrice: {e}")
 
     def getOptionChain(self, asset, strikes, date, daysLessAllowed):
-        fromDate = date - timedelta(days=daysLessAllowed)
-        toDate = date
-
-        r = self.connectClient.get_option_chain(
-            asset,
-            contract_type=self.connectClient.Options.ContractType.CALL,
-            strike_count=strikes,
-            strategy=self.connectClient.Options.Strategy.SINGLE,
-            interval=None,
-            strike=None,
-            strike_range=None,
-            from_date=fromDate,
-            to_date=toDate,
-            volatility=None,
-            underlying_price=None,
-            interest_rate=None,
-            days_to_expiration=None,
-            exp_month=None,
-            option_type=None,
-        )
-
-        assert r.status_code == 200, r.raise_for_status()
-
-        return r.json()
+        try:
+            fromDate = date - timedelta(days=daysLessAllowed)
+            toDate = date
+            r = self.connectClient.get_option_chain(
+                asset,
+                contract_type=self.connectClient.Options.ContractType.CALL,
+                strike_count=strikes,
+                strategy=self.connectClient.Options.Strategy.SINGLE,
+                interval=None,
+                strike=None,
+                strike_range=None,
+                from_date=fromDate,
+                to_date=toDate,
+                volatility=None,
+                underlying_price=None,
+                interest_rate=None,
+                days_to_expiration=None,
+                exp_month=None,
+                option_type=None,
+            )
+            if r.status_code != 200:
+                logger.error(f"get_option_chain failed: {r.status_code} {r.text}")
+                return alert.botFailed(asset, f"Error getting option chain: {r.status_code} {r.text}")
+            return r.json()
+        except Exception as e:
+            logger.error(f"Exception in getOptionChain: {e}")
+            return alert.botFailed(asset, f"Exception in getOptionChain: {e}")
 
     def getPutOptionChain(self, asset, strikes, date, daysLessAllowed):
-        fromDate = date - timedelta(days=daysLessAllowed)
-        toDate = date
-
-        r = self.connectClient.get_option_chain(
-            asset,
-            contract_type=self.connectClient.Options.ContractType.PUT,
-            strike_count=strikes,
-            strategy=self.connectClient.Options.Strategy.SINGLE,
-            interval=None,
-            strike=None,
-            strike_range=None,
-            from_date=fromDate,
-            to_date=toDate,
-            volatility=None,
-            underlying_price=None,
-            interest_rate=None,
-            days_to_expiration=None,
-            exp_month=None,
-            option_type=None,
-        )
-
-        assert r.status_code == 200, r.raise_for_status()
-
-        return r.json()
+        try:
+            fromDate = date - timedelta(days=daysLessAllowed)
+            toDate = date
+            r = self.connectClient.get_option_chain(
+                asset,
+                contract_type=self.connectClient.Options.ContractType.PUT,
+                strike_count=strikes,
+                strategy=self.connectClient.Options.Strategy.SINGLE,
+                interval=None,
+                strike=None,
+                strike_range=None,
+                from_date=fromDate,
+                to_date=toDate,
+                volatility=None,
+                underlying_price=None,
+                interest_rate=None,
+                days_to_expiration=None,
+                exp_month=None,
+                option_type=None,
+            )
+            if r.status_code != 200:
+                logger.error(f"get_option_chain (PUT) failed: {r.status_code} {r.text}")
+                return alert.botFailed(asset, f"Error getting put option chain: {r.status_code} {r.text}")
+            return r.json()
+        except Exception as e:
+            logger.error(f"Exception in getPutOptionChain: {e}")
+            return alert.botFailed(asset, f"Exception in getPutOptionChain: {e}")
 
     def getOptionExecutionWindow(self):
-        now = datetime.now(pytz.UTC)
-
+        from datetime import timezone
         try:
+            now = datetime.now(timezone.utc)  # Make now timezone-aware (UTC)
             r = self.connectClient.get_market_hours(
                 self.connectClient.MarketHours.Market.OPTION
             )
-            r.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Error fetching market hours: {e}")
-            return {"open": False, "openDate": None, "nowDate": now, "error": str(e)}
-
-        data = r.json()
-
-        try:
-            market_data = data["option"]
-            logger.debug("Market data: %s", market_data)
-            if not market_data or not next(iter(market_data.values())).get("isOpen"):
-                return {"open": False, "openDate": None, "nowDate": now}
-
-            session_hours = next(iter(market_data.values())).get("sessionHours")
-            if not session_hours:
-                return {"open": False, "openDate": None, "nowDate": now}
-
-            regular_market_hours = session_hours.get("regularMarket")
-            if not regular_market_hours:
-                return {"open": False, "openDate": None, "nowDate": now}
-
-            start = datetime.fromisoformat(regular_market_hours[0]["start"])
-            end = datetime.fromisoformat(regular_market_hours[0]["end"])
-
-            window_start = start + timedelta(minutes=10)
-
-            if window_start <= now <= end:
-                return {"open": True, "openDate": window_start, "nowDate": now}
-            else:
-                return {"open": False, "openDate": window_start, "nowDate": now}
-        except (KeyError, TypeError, ValueError) as e:
-            logger.error(f"Error processing market hours data: {e}")
-            return {"open": False, "openDate": None, "nowDate": now, "error": str(e)}
+            if r.status_code != 200:
+                logger.error(f"get_market_hours failed: {r.status_code} {r.text}")
+                return {"open": False, "openDate": None, "nowDate": now, "error": f"{r.status_code} {r.text}"}
+            data = r.json()
+            try:
+                market_data = data["option"]
+                logger.debug("Market data: %s", market_data)
+                if not market_data or not next(iter(market_data.values())).get("isOpen"):
+                    return {"open": False, "openDate": None, "nowDate": now}
+                session_hours = next(iter(market_data.values())).get("sessionHours")
+                if not session_hours:
+                    return {"open": False, "openDate": None, "nowDate": now}
+                regular_market_hours = session_hours.get("regularMarket")
+                if not regular_market_hours:
+                    return {"open": False, "openDate": None, "nowDate": now}
+                # Parse start and end as timezone-aware UTC
+                start = datetime.fromisoformat(regular_market_hours[0]["start"]).astimezone(timezone.utc)
+                end = datetime.fromisoformat(regular_market_hours[0]["end"]).astimezone(timezone.utc)
+                window_start = start + timedelta(minutes=10)
+                if window_start <= now <= end:
+                    return {"open": True, "openDate": window_start, "nowDate": now}
+                else:
+                    return {"open": False, "openDate": window_start, "nowDate": now}
+            except (KeyError, TypeError, ValueError) as e:
+                logger.error(f"Error processing market hours data: {e}")
+                return {"open": False, "openDate": None, "nowDate": now, "error": str(e)}
+        except Exception as e:
+            logger.error(f"Exception in getOptionExecutionWindow: {e}")
+            from datetime import timezone
+            return {"open": False, "openDate": None, "nowDate": datetime.now(timezone.utc), "error": str(e)}
 
     def display_margin_requirements(api, shorts):
         if not shorts:
@@ -416,8 +398,8 @@ class Api:
             )
 
         if not debugCanSendOrders:
-            print(order.build())
-            exit()
+            print("Order not placed: ", order.build())
+            return alert.botFailed(None, "Order not placed: debugCanSendOrders is disabled")
 
         r = self.connectClient.place_order(SchwabAccountID, order)
 
@@ -427,48 +409,51 @@ class Api:
         return order_id
 
     def checkOrder(self, orderId):
-        r = self.connectClient.get_order(orderId, self.getAccountHash())
-
-        assert r.status_code == 200, r.raise_for_status()
-
-        data = r.json()
-        if data["status"] == "FILLED":
-            print(f"Check Order details: {data}")
-        complexOrderStrategyType = None
-
         try:
-            status = data["status"]
-            filled = data["status"] == "FILLED"
-            price = data["price"]
-            partialFills = data["filledQuantity"]
-            orderType = "CREDIT"
-            typeAdjustedPrice = price
-
-            if data["orderType"] == "NET_DEBIT":
-                orderType = "DEBIT"
-                typeAdjustedPrice = -price
-
-            if "complexOrderStrategyType" in data:
-                complexOrderStrategyType = data["complexOrderStrategyType"]
-
-        except KeyError:
-            return alert.botFailed(None, "Error while checking working order")
-
-        return {
-            "status": status,
-            "filled": filled,
-            "price": price,
-            "partialFills": partialFills,
-            "complexOrderStrategyType": complexOrderStrategyType,
-            "typeAdjustedPrice": typeAdjustedPrice,
-            "orderType": orderType,
-        }
+            r = self.connectClient.get_order(orderId, self.getAccountHash())
+            if r.status_code != 200:
+                logger.error(f"get_order failed: {r.status_code} {r.text}")
+                return alert.botFailed(None, f"Error checking order: {r.status_code} {r.text}")
+            data = r.json()
+            if data.get("status") == "FILLED":
+                print(f"Check Order details: {data}")
+            complexOrderStrategyType = None
+            try:
+                status = data["status"]
+                filled = data["status"] == "FILLED"
+                price = data["price"]
+                partialFills = data["filledQuantity"]
+                orderType = "CREDIT"
+                typeAdjustedPrice = price
+                if data["orderType"] == "NET_DEBIT":
+                    orderType = "DEBIT"
+                    typeAdjustedPrice = -price
+                if "complexOrderStrategyType" in data:
+                    complexOrderStrategyType = data["complexOrderStrategyType"]
+            except KeyError:
+                return alert.botFailed(None, "Error while checking working order")
+            return {
+                "status": status,
+                "filled": filled,
+                "price": price,
+                "partialFills": partialFills,
+                "complexOrderStrategyType": complexOrderStrategyType,
+                "typeAdjustedPrice": typeAdjustedPrice,
+                "orderType": orderType,
+            }
+        except Exception as e:
+            logger.error(f"Exception in checkOrder: {e}")
+            return alert.botFailed(None, f"Exception in checkOrder: {e}")
 
     def cancelOrder(self, orderId):
-        r = self.connectClient.cancel_order(orderId, self.getAccountHash())
-
-        # throws error if cant cancel (code 400 - 404)
-        assert r.status_code == 200, r.raise_for_status()
+        try:
+            r = self.connectClient.cancel_order(orderId, self.getAccountHash())
+            if r.status_code != 200:
+                logger.error(f"cancel_order failed: {r.status_code} {r.text}")
+                return alert.botFailed(None, f"Error cancelling order: {r.status_code} {r.text}")
+        except Exception as e:
+            logger.error(f"Exception in cancelOrder: {e}")
+            return alert.botFailed(None, f"Exception in cancelOrder: {e}")
 
     def checkAccountHasEnoughToCover(
         self,
@@ -558,44 +543,57 @@ class Api:
             return False
 
     def get_quote(self, asset):
-        r = self.connectClient.get_quotes([asset])
-        assert r.status_code == 200 or r.status_code == 201, r.raise_for_status()
-        return r.json()
+        try:
+            r = self.connectClient.get_quotes([asset])
+            if r.status_code not in [200, 201]:
+                logger.error(f"get_quotes failed: {r.status_code} {r.text}")
+                return alert.botFailed(asset, f"Error getting quote: {r.status_code} {r.text}")
+            return r.json()
+        except Exception as e:
+            logger.error(f"Exception in get_quote: {e}")
+            return alert.botFailed(asset, f"Exception in get_quote: {e}")
 
     def getOptionDetails(self, asset):
-        r = self.connectClient.get_quotes(asset)
-
-        assert r.status_code == 200, r.raise_for_status()
-
-        data = r.json()
-
         try:
-            year = str(data[asset]["reference"]["expirationYear"])
-            month = str(data[asset]["reference"]["expirationMonth"]).zfill(2)
-            day = str(data[asset]["reference"]["expirationDay"]).zfill(2)
-            expiration = year + "-" + month + "-" + day
-
-            if not validDateFormat(expiration):
+            r = self.connectClient.get_quotes(asset)
+            if r.status_code != 200:
+                logger.error(f"get_quotes failed: {r.status_code} {r.text}")
+                return alert.botFailed(asset, f"Error getting option details: {r.status_code} {r.text}")
+            data = r.json()
+            try:
+                year = str(data[asset]["reference"]["expirationYear"])
+                month = str(data[asset]["reference"]["expirationMonth"]).zfill(2)
+                day = str(data[asset]["reference"]["expirationDay"]).zfill(2)
+                expiration = year + "-" + month + "-" + day
+                if not validDateFormat(expiration):
+                    return alert.botFailed(
+                        asset, "Incorrect date format from api: " + expiration
+                    )
+                return {
+                    "strike": data[asset]["reference"]["strikePrice"],
+                    "expiration": expiration,
+                    "delta": data[asset]["quote"]["delta"],
+                }
+            except KeyError:
                 return alert.botFailed(
-                    asset, "Incorrect date format from api: " + expiration
+                    asset, "Wrong data from api when getting option expiry data"
                 )
-
-            return {
-                "strike": data[asset]["reference"]["strikePrice"],
-                "expiration": expiration,
-                "delta": data[asset]["quote"]["delta"],
-            }
-        except KeyError:
-            return alert.botFailed(
-                asset, "Wrong data from api when getting option expiry data"
-            )
+        except Exception as e:
+            logger.error(f"Exception in getOptionDetails: {e}")
+            return alert.botFailed(asset, f"Exception in getOptionDetails: {e}")
 
     def updateShortPosition(self):
-        # get account positions
-        r = self.connectClient.get_account(
-            self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
-        )
-        return self.optionPositions(r.text)
+        try:
+            r = self.connectClient.get_account(
+                self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
+            )
+            if r.status_code != 200:
+                logger.error(f"get_account failed: {r.status_code} {r.text}")
+                return alert.botFailed(None, f"Error updating short position: {r.status_code} {r.text}")
+            return self.optionPositions(r.text)
+        except Exception as e:
+            logger.error(f"Exception in updateShortPosition: {e}")
+            return alert.botFailed(None, f"Exception in updateShortPosition: {e}")
 
     def optionPositions(self, data):
         data = json.loads(data)
@@ -622,15 +620,21 @@ class Api:
         return shortPositions
 
     def rollOver(self, oldSymbol, newSymbol, amount, price):
-        # init a new position, sell to open,
-        # price is the net amount to be credited (received) for the roll
+        """
+        Place a roll order using the exact option symbols as returned by the Schwab API option chain.
+        Both oldSymbol and newSymbol must be the 'symbol' field from the Schwab API, with no manual construction or modification.
+        """
+        print(f"DEBUG: rollOver called with oldSymbol={oldSymbol}, newSymbol={newSymbol}, amount={amount}, price={price}")
+
         order = schwab.orders.generic.OrderBuilder()
 
         orderType = schwab.orders.common.OrderType.NET_CREDIT
+        abs_price = abs(float(price))
 
         if price < 0:
-            price = -price
             orderType = schwab.orders.common.OrderType.NET_DEBIT
+
+        print(f"DEBUG: Order type: {orderType}, Price: {abs_price}")
 
         order.add_option_leg(
             schwab.orders.common.OptionInstruction.BUY_TO_CLOSE,
@@ -645,7 +649,7 @@ class Api:
         ).set_session(
             schwab.orders.common.Session.NORMAL
         ).set_price(
-            str(price)
+            abs_price  # Always use absolute value, orderType determines debit/credit
         ).set_order_type(
             orderType
         ).set_order_strategy_type(
@@ -654,19 +658,47 @@ class Api:
             schwab.orders.common.ComplexOrderStrategyType.DIAGONAL
         )
 
+        print("DEBUG: Order built successfully")
+
         if not debugCanSendOrders:
-            print("Order not placed: ", order.build())
-            exit()
+            print("DEBUG: Order not placed (debugCanSendOrders=False):", order.build())
+            return alert.botFailed(None, "Order not placed: debugCanSendOrders is disabled")
+
+        hash = self.getAccountHash()
+        print(f"DEBUG: Account hash: {hash}")
+
         try:
-            r = self.connectClient.place_order(self.getAccountHash(), order)
+            print("DEBUG: About to place order...")
+            r = self.connectClient.place_order(hash, order)
+            print(f"DEBUG: Order response status: {r.status_code}")
+
+            # Check if the response indicates success
+            if r.status_code not in [200, 201]:
+                error_msg = f"Order failed with status {r.status_code}"
+                try:
+                    error_detail = r.json()
+                    error_msg += f": {error_detail}"
+                except Exception:
+                    error_msg += f": {r.text}"
+                logger.error(error_msg)
+                return alert.botFailed(None, error_msg)
+
         except Exception as e:
-            print(e)
-            return alert.botFailed(None, "Error while placing the roll order")
+            logger.error(f"Error placing roll order: {e}")
+            return alert.botFailed(None, f"Error while placing the roll order: {str(e)}")
 
-        order_id = Utils(self.connectClient, self.getAccountHash()).extract_order_id(r)
-        assert order_id is not None
+        try:
+            order_id = Utils(self.connectClient, hash).extract_order_id(r)
+            print(f"DEBUG: Extracted order ID: {order_id}")
 
-        return order_id
+            if order_id is None:
+                logger.error("Failed to extract order ID from response")
+                return alert.botFailed(None, "Failed to extract order ID from roll order response")
+
+            return order_id
+        except Exception as e:
+            logger.error(f"Error extracting order ID: {e}")
+            return alert.botFailed(None, f"Error extracting order ID: {str(e)}")
 
     def vertical_call_order(
         self, symbol, expiration, strike_low, strike_high, amount, *, price
@@ -706,7 +738,7 @@ class Api:
 
         if not debugCanSendOrders:
             print("Order not placed: ", order.build())
-            exit()
+            return alert.botFailed(None, "Order not placed: debugCanSendOrders is disabled")
         hash = self.getAccountHash()
         try:
             r = self.connectClient.place_order(hash, order)
@@ -762,7 +794,7 @@ class Api:
 
         if not debugCanSendOrders:
             print("Order not placed: ", order.build())
-            exit()
+            return alert.botFailed(None, "Order not placed: debugCanSendOrders is disabled")
         hash = self.getAccountHash()
         try:
             r = self.connectClient.place_order(hash, order)
@@ -775,69 +807,219 @@ class Api:
 
         return order_id
 
-    def place_order(self, order_func, order_params, price):
+    def get_orders(self, max_results=1000, days_back=None, status=None):
         """
-        Place an order with automatic price improvements if not filled
+        Get orders from Schwab API with multiple fallback strategies
+        Returns list of orders or empty list if none found
         """
-        max_retries = 75
-        price_improvement_pct = 1  # percentage to improve price by on each retry
-        initial_price = price
+        try:
+            # Try multiple approaches to get orders
+            approaches = []
 
+            # Approach 1: All orders without filters
+            approaches.append(("all_orders", {
+                "account_hash": self.getAccountHash(),
+                "max_results": max_results
+            }))
 
-        now = datetime.now(get_localzone())
-        if now.time() >= time_module(15, 30):  # After 3:30 PM
-            order_timeout = 15  # Update faster near market close
-        else:
-            order_timeout = 60  # Normal interval during regular hours
+            # Approach 2: Orders with specific status
+            if status:
+                try:
+                    status_enum = getattr(self.connectClient.Order.Status, status, None)
+                    if status_enum:
+                        approaches.append((f"status_{status}", {
+                            "account_hash": self.getAccountHash(),
+                            "max_results": max_results,
+                            "status": status_enum
+                        }))
+                except AttributeError:
+                    pass
 
-        # Determine if this is a debit order (paying) or credit order (receiving)
-        is_debit_order = price > 0  # Positive price means we're paying
+            # Approach 3: Orders with date range
+            if days_back is not None:
+                from_date = datetime.now() - timedelta(days=days_back)
+                to_date = datetime.now()
+                approaches.append((f"date_range_{days_back}", {
+                    "account_hash": self.getAccountHash(),
+                    "max_results": max_results,
+                    "from_entered_datetime": from_date,
+                    "to_entered_datetime": to_date
+                }))
 
-        for retry in range(max_retries):
-            # Calculate new price with improvement
-            if is_debit_order:
-                # For debit orders, increase the price we're willing to pay
-                current_price = round_to_nearest_five_cents(initial_price * (100 + retry * price_improvement_pct) / 100)
-            else:
-                # For credit orders, decrease the price we're willing to accept
-                current_price = round_to_nearest_five_cents(initial_price * (100 - retry * price_improvement_pct) / 100)
+            # Try each approach
+            for approach_name, params in approaches:
+                try:
+                    logger.debug(f"Trying order retrieval approach: {approach_name}")
 
-            if retry > 0:
-                if is_debit_order:
-                    print(f"\nAttempt {retry + 1}/{max_retries}")
-                    print(f"Improving price by paying {retry * price_improvement_pct}% more to {current_price}")
-                else:
-                    print(f"\nAttempt {retry + 1}/{max_retries}")
-                    print(f"Improving price by accepting {retry * price_improvement_pct}% less to {current_price}")
+                    # Remove None values from params
+                    clean_params = {k: v for k, v in params.items() if v is not None}
 
+                    response = self.connectClient.get_orders_for_account(**clean_params)
+
+                    if response.status_code == 200:
+                        orders = response.json()
+                        if orders:
+                            logger.debug(f"Successfully retrieved {len(orders)} orders using {approach_name}")
+                            return orders
+
+                except Exception as e:
+                    logger.debug(f"Approach {approach_name} failed: {e}")
+                    continue
+
+            # If no approach worked, try all linked accounts
             try:
-                # Call order function with params and explicit price kwarg
-                order_id = order_func(*order_params, price=current_price)
+                logger.debug("Trying get_orders_for_all_linked_accounts")
+                response = self.connectClient.get_orders_for_all_linked_accounts(max_results=max_results)
+                if response.status_code == 200:
+                    orders = response.json()
+                    if orders:
+                        logger.debug(f"Retrieved {len(orders)} orders from all linked accounts")
+                        return orders
+            except Exception as e:
+                logger.debug(f"All linked accounts approach failed: {e}")
 
-                if not order_id:
-                    print("Failed to place order")
-                    return False
+            logger.warning("No orders found with any approach")
+            return []
 
-                # Monitor order with longer timeout
-                result = monitor_order(self, order_id, timeout=order_timeout)
+        except Exception as e:
+            logger.error(f"Error retrieving orders: {e}")
+            return []
 
-                if result == True:  # Order filled
-                    return True
-                elif result == "cancelled":  # User cancelled
-                    return False
-                elif result == "timeout":  # Timeout - try price improvement
-                    try:
-                        self.cancelOrder(order_id)
-                        continue
-                    except Exception as e:
-                        print(f"Error cancelling order: {e}")
-                        return False
-                else:  # Other failure
-                    return False
+    def get_order_details(self, order_id):
+        """
+        Get details for a specific order
+        Returns order details dict or None if not found
+        """
+        try:
+            response = self.connectClient.get_order(order_id, self.getAccountHash())
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.error(f"Failed to get order details for {order_id}: HTTP {response.status_code}")
+                return None
+        except Exception as e:
+            logger.error(f"Error getting order details for {order_id}: {e}")
+            return None
+
+    def box_spread_order(self, symbol, expiration_date, low_strike, high_strike, quantity, net_price):
+        """
+        Place a box spread order (4-leg strategy)
+
+        For a SELL box spread (most common - borrowing money):
+        - Sell low strike call
+        - Buy high strike call
+        - Buy low strike put
+        - Sell high strike put
+        """
+        try:
+            if "$" in symbol:
+                # remove $ from symbol
+                symbol = symbol[1:]
+
+            # Create option symbols using the OptionSymbol builder
+            low_call_sym = OptionSymbol(symbol, expiration_date, "C", str(low_strike)).build()
+            high_call_sym = OptionSymbol(symbol, expiration_date, "C", str(high_strike)).build()
+            low_put_sym = OptionSymbol(symbol, expiration_date, "P", str(low_strike)).build()
+            high_put_sym = OptionSymbol(symbol, expiration_date, "P", str(high_strike)).build()
+
+            print(f"Box spread symbols: {low_call_sym}, {high_call_sym}, {low_put_sym}, {high_put_sym}")
+
+            # Build the 4-leg box spread order
+            order = schwab.orders.generic.OrderBuilder()
+
+            # Box spreads are typically net credit orders
+            orderType = schwab.orders.common.OrderType.NET_CREDIT
+            abs_price = abs(float(net_price))
+
+            # If net_price is negative, it's a net debit
+            if net_price < 0:
+                orderType = schwab.orders.common.OrderType.NET_DEBIT
+
+            # Add all 4 legs for the box spread
+            order.add_option_leg(
+                schwab.orders.common.OptionInstruction.SELL_TO_OPEN,  # Sell low call
+                low_call_sym,
+                quantity,
+            ).add_option_leg(
+                schwab.orders.common.OptionInstruction.BUY_TO_OPEN,   # Buy high call
+                high_call_sym,
+                quantity,
+            ).add_option_leg(
+                schwab.orders.common.OptionInstruction.BUY_TO_OPEN,   # Buy low put
+                low_put_sym,
+                quantity,
+            ).add_option_leg(
+                schwab.orders.common.OptionInstruction.SELL_TO_OPEN,  # Sell high put
+                high_put_sym,
+                quantity,
+            ).set_duration(
+                schwab.orders.common.Duration.DAY
+            ).set_session(
+                schwab.orders.common.Session.NORMAL
+            ).set_price(
+                abs_price
+            ).set_order_type(
+                orderType
+            ).set_order_strategy_type(
+                schwab.orders.common.OrderStrategyType.SINGLE
+            ).set_complex_order_strategy_type(
+                schwab.orders.common.ComplexOrderStrategyType.CUSTOM
+            )
+
+            print(f"Placing box spread order: {symbol} {low_strike}-{high_strike} for ${net_price}")
+
+            if not debugCanSendOrders:
+                print("Box spread order not placed: ", order.build())
+                return alert.botFailed(None, "Order not placed: debugCanSendOrders is disabled")
+
+            hash = self.getAccountHash()
+            try:
+                r = self.connectClient.place_order(hash, order)
+                print(f"Box spread order response status: {r.status_code}")
+
+                if r.status_code not in [200, 201]:
+                    error_msg = f"Box spread order failed with status {r.status_code}: {r.text}"
+                    logger.error(error_msg)
+                    return alert.botFailed(None, error_msg)
 
             except Exception as e:
-                print(f"Error during order placement: {str(e)}")
-                return False
+                print(f"Error placing box spread order: {e}")
+                return alert.botFailed(None, f"Error while placing the box spread order: {str(e)}")
 
-        print("\nFailed to fill order after all price improvement attempts")
-        return False
+            order_id = Utils(self.connectClient, hash).extract_order_id(r)
+            if order_id is None:
+                logger.error("Failed to extract order ID from box spread response")
+                return alert.botFailed(None, "Failed to extract order ID from box spread order response")
+
+            print(f"Box spread order placed successfully. Order ID: {order_id}")
+            return order_id
+
+        except Exception as e:
+            error_msg = f"Exception in box_spread_order: {str(e)}"
+            print(error_msg)
+            logger.error(error_msg)
+            import traceback
+            traceback.print_exc()
+            return alert.botFailed(None, error_msg)
+
+    def is_token_valid(self):
+        """
+        Check if the current token is valid by making a lightweight authenticated call.
+        Returns True if valid, False if expired/invalid.
+        """
+        try:
+            if self.connectClient is None:
+                # Try to set up the client if not already done
+                self.setup(retries=1, delay=1)
+            response = self.connectClient.get_account_numbers()
+            if hasattr(response, 'status_code') and response.status_code == 200:
+                return True
+            # If unauthorized or bad request, token is likely invalid
+            if hasattr(response, 'status_code') and response.status_code in (400, 401):
+                return False
+            # If response is not as expected, treat as invalid
+            return False
+        except Exception as e:
+            if "token" in str(e).lower() or "auth" in str(e).lower():
+                return False
+            return False

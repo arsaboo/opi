@@ -1,24 +1,20 @@
 import time
-from datetime import datetime, timedelta, time as time_module
+from datetime import datetime, timedelta
 
 import pytz
 from colorama import Fore, Style
 from tzlocal import get_localzone
 
 import alert
-import support
 from api import Api
 from cc import RollCalls, RollSPX
 from configuration import (
     apiKey,
     apiRedirectUri,
     appSecret,
-    debugMarketOpen,
 )
-from logger_config import get_logger
-from strategies import BoxSpread, find_spreads
+from logger_config_quiet import get_logger
 import traceback
-from order_utils import reset_cancel_flag
 
 logger = get_logger()
 
@@ -141,26 +137,6 @@ def calculate_time_to_market_open():
     return time_to_open
 
 
-def wait_for_execution_window(execWindow):
-    if not execWindow["open"]:
-        time_to_open = calculate_time_to_market_open()
-
-        sleep_time = time_to_open.total_seconds()
-        if sleep_time < 0:
-            return
-
-        seconds = int(sleep_time)
-        minutes = (seconds % 3600) // 60
-        seconds = seconds % 60
-
-        if sleep_time > support.defaultWaitTime:
-            print("\rMarket is closed, rechecking in 30 minutes...", end="")
-            time.sleep(support.defaultWaitTime)
-        else:
-            print(f"Market will open in {minutes} minutes and {seconds} seconds.")
-            time.sleep(sleep_time)
-
-
 def format_amount(amount):
     """Format currency amount with color coding based on value"""
     color = Fore.GREEN if amount >= 0 else Fore.RED
@@ -194,100 +170,23 @@ def print_transaction_table(title, transactions, category):
     print("-" * total_width)
 
 
-def present_menu(default="1"):
-    """Display menu options and get user selection"""
-    # Reset cancel flag before showing menu
-    reset_cancel_flag()
-
-    menu_options = {
-        "1": "Roll Short Options",
-        "2": "Check Box Spreads",
-        "3": "Check Vertical Spreads",
-        "4": "Check Synthetic Covered Calls",
-        "5": "View Margin Requirements",
-        "0": "Exit",
-    }
-
-    while True:
-        print("\n--- Welcome to Options Trading ---")
-        for key, value in menu_options.items():
-            print(f"{key}. {value}")
-
-        choice = input(f"Please choose an option (default is {default}): ")
-        if not choice:  # if user just presses enter, use the default value
-            return default
-        elif choice in menu_options.keys():  # replace with your valid options
-            return choice
-        else:
-            print("Invalid option. Please enter a valid option.")
-
-
-def get_option_function(option, api, shorts=None):
-    """Map option numbers to their corresponding functions"""
-    option_mapping = {
-        "1": lambda: roll_short_positions(api, shorts),
-        "2": lambda: BoxSpread(api, "$SPX"),
-        "3": lambda: find_spreads(api),
-        "4": lambda: find_spreads(api, synthetic=True),
-        "5": lambda: Api.display_margin_requirements(api, shorts),
-    }
-
-    return option_mapping.get(option)
-
-
-def execute_option(api, option, exec_window, shorts=None):
-    """Execute the selected option with error handling and retries"""
-    # Reset cancel flag before executing any option
-    reset_cancel_flag()
-
-    # Display market status information
-    display_market_status(exec_window)
-
-    # Don't proceed if market is closed and we're not in debug mode
-    if not exec_window["open"] and not debugMarketOpen:
-        return False
-
-    # Get and execute the function corresponding to the selected option
-    func = get_option_function(option, api, shorts)
-    if not func:
-        logger.warning(f"Invalid option selected: {option}")
-        print(f"Invalid option: {option}")
-        return False
-
-    # Execute the function with retry logic
-    result = handle_retry(func, max_retries=3)
-
-    # Only sleep if the function executed successfully
-    if result is not False:
-        sleep_time = get_sleep_time(exec_window)
-        print(f"Sleeping for {sleep_time} seconds...")
-        time.sleep(sleep_time)
-
-    return result
-
-
-def display_market_status(exec_window):
-    """Display information about the current market status"""
-    if exec_window["open"]:
-        print("Market is open, running the program now...")
-    else:
-        message = "Market is closed"
-        if debugMarketOpen:
-            message += " but the program will work in debug mode"
-        print(message + ".")
-
-
-def get_sleep_time(exec_window):
-    """Determine how long to sleep after executing an option"""
-    now = datetime.now(get_localzone())
-    current_time = now.time()
-
-    # If market is open and it's after 3:30 PM, use short sleep time
-    if exec_window["open"] and current_time >= time_module(15, 30):
-        return 5
-
-    # Otherwise use longer sleep time
-    return 30
+def run_textual_ui(api):
+    """Run the modern Textual-based UI"""
+    try:
+        from ui.ui_main import run_textual_app
+        run_textual_app(api)
+    except ImportError as e:
+        logger.error(f"Failed to import Textual UI: {e}")
+        raise ImportError(
+            "Textual UI dependencies are missing. Please install with: pip install -r requirements.txt"
+        ) from e
+    except Exception as e:
+        logger.error(f"Error running Textual UI: {e}")
+        # Check if it's an I/O operation error
+        if "I/O operation on closed file" in str(e):
+            logger.error("I/O operation error detected. This may be due to stdin/stdout not being available.")
+            raise RuntimeError("UI initialization failed due to I/O access issues. Try running in a different terminal environment.") from e
+        raise RuntimeError(f"Error starting UI: {e}") from e
 
 
 def setup_api_with_retry(api, max_attempts=3):
@@ -322,6 +221,40 @@ def setup_api_with_retry(api, max_attempts=3):
     return False  # Should not reach here, but added as a fallback
 
 
+# Add timeout protection to API setup
+import threading
+
+def setup_api_with_timeout(api, timeout_seconds=30):
+    """Setup API with timeout protection"""
+    result = [None]
+    exception = [None]
+
+    def target():
+        try:
+            result[0] = api.setup()
+        except Exception as e:
+            exception[0] = e
+
+    print(f"Setting up API connection with {timeout_seconds}s timeout...")
+    thread = threading.Thread(target=target)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout_seconds)
+
+    if thread.is_alive():
+        print(f"WARNING: API setup timed out after {timeout_seconds} seconds")
+        print("This might be due to network issues or API server problems")
+        print("Starting UI anyway - you can try reconnecting from the UI...")
+        return False
+
+    if exception[0]:
+        print(f"API setup failed: {exception[0]}")
+        return False
+
+    print("API setup successful!")
+    return True
+
+
 def get_execution_context(api):
     """Get the current execution context (window and short positions)"""
     execWindow = api.getOptionExecutionWindow()
@@ -332,25 +265,6 @@ def get_execution_context(api):
 
     return execWindow, shorts
 
-def process_menu_option(api, option):
-    """Process a single menu option execution with error handling"""
-    try:
-        def run_option():
-            execWindow, shorts = get_execution_context(api)
-
-            if debugMarketOpen or execWindow["open"]:
-                return execute_option(api, option, execWindow, shorts)
-            else:
-                wait_for_execution_window(execWindow)
-                return None  # Continue the loop after waiting
-
-        result = handle_retry(run_option)
-        return result  # Return the result to main loop
-
-    except KeyboardInterrupt:
-        logger.info("Operation interrupted by user.")
-        print("\nInterrupted. Going back to main menu...")
-        return "interrupted"  # Return a special value to indicate interruption
 
 def main():
     try:
@@ -358,20 +272,9 @@ def main():
         if not setup_api_with_retry(api):
             return
 
-        while True:  # Outer loop for main menu
-            option = present_menu()
-            if option == "0":
-                return
-            try:
-                while True:  # Inner loop for auto-repeat
-                    result = process_menu_option(api, option)
-                    if result == "interrupted":
-                        break  # Break out of inner loop and return to main menu
-            except Exception as e:
-                logger.error(f"Unhandled error: {str(e)}")
-                logger.debug(f"Full traceback: {traceback.format_exc()}")
-                alert.botFailed(None, f"Unhandled error: {str(e)}")
-                break
+        # Run the modern Textual UI
+        print("Starting Options Trading System...")
+        run_textual_ui(api)
 
     except Exception as e:
         logger.error(f"Failed to initialize API: {str(e)}")
@@ -379,5 +282,59 @@ def main():
         alert.botFailed(None, f"Failed to initialize API: {str(e)}")
 
 
+# Updated main function to prevent hanging on API setup
+def main_with_timeout():
+    """Main entry point with timeout protection"""
+    print("=" * 60)
+    print("🏛️  OPTIONS TRADING INTERFACE")
+    print("=" * 60)
+
+    # Use the existing global API instance
+    global api
+
+    # Try to setup API with timeout protection (don't block UI startup)
+    print("🔗 Attempting to connect to Schwab API...")
+    try:
+        api.setup()  # <-- This will block for manual authentication if needed
+        api_connected = True
+    except Exception as e:
+        print(f"API setup failed: {e}")
+        api_connected = False
+
+    # Token validation before UI
+    if api_connected:
+        if not is_token_valid(api):
+            print("❌ Authentication failed or token is invalid. Please try again.")
+            return
+
+    if not api_connected:
+        print("⚠️  API connection failed or timed out")
+        print("📱 Starting UI anyway - you can try to reconnect from the interface")
+        print("🔧 Check your internet connection and API credentials")
+
+    # Always start the UI - user can retry connection from within the app
+    print("🚀 Starting Trading UI...")
+    try:
+        from ui.screen_main import OptionsTradingApp
+        app = OptionsTradingApp(api)
+        app.run()
+    except KeyboardInterrupt:
+        print("👋 Goodbye!")
+    except Exception as e:
+        print(f"❌ UI Error: {e}")
+        import traceback
+        traceback.print_exc()
+
+def is_token_valid(api):
+    """Check if the API token is valid (returns True if valid, False if expired/invalid)"""
+    try:
+        # Try a lightweight API call that requires authentication
+        api.getAccountInfo()  # or any method that fails on invalid token
+        return True
+    except Exception as e:
+        if "token" in str(e).lower() or "authentication" in str(e).lower():
+            return False
+        return True  # If error is not auth-related, assume token is valid
+
 if __name__ == "__main__":
-    main()
+    main_with_timeout()  # Use the timeout-protected version

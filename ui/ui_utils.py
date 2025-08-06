@@ -1,0 +1,277 @@
+"""
+UI Utilities for Options Trading Application
+
+This module contains utility functions for processing data for UI display,
+handling different screen types, and other UI-related business logic.
+"""
+
+from datetime import datetime
+from configuration import configuration, spreads
+from cc import find_best_rollover, get_median_price
+from optionChain import OptionChain
+from strategies import BoxSpread, calculate_spread
+
+
+def process_roll_short_data(api):
+    """Process data for roll short options screen"""
+    try:
+        shorts = api.updateShortPosition()
+        if not shorts:
+            return []
+
+        soon_expiring = []
+        today = datetime.now().date()
+        for short in shorts:
+            exp = datetime.strptime(short["expiration"], "%Y-%m-%d").date()
+            if (exp - today).days <= 14:
+                soon_expiring.append(short)
+
+        if not soon_expiring:
+            return []
+
+        table_data = []
+        for short in soon_expiring:
+            try:
+                days = configuration[short["stockSymbol"]]["maxRollOutWindow"]
+                short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d").date()
+                toDate = short_expiration + datetime.timedelta(days=days)
+                optionChain = OptionChain(api, short["stockSymbol"], toDate, days)
+                chain = optionChain.get()
+                prem_short_contract = get_median_price(short["optionSymbol"], chain)
+                if prem_short_contract is None:
+                    continue
+                roll = find_best_rollover(api, chain, short)
+                if not roll:
+                    continue
+                roll_premium = get_median_price(roll["symbol"], chain)
+                credit = round(roll_premium - prem_short_contract, 2)
+                ret = api.getOptionDetails(roll["symbol"])
+                table_data.append({
+                    'asset': short["stockSymbol"],
+                    'symbol': short["stockSymbol"],
+                    'cur_strike': short["strike"],
+                    'cur_exp': short["expiration"],
+                    'roll_strike': roll["strike"],
+                    'roll_exp': ret["expiration"],
+                    'credit': credit,
+                    'refreshed': datetime.now().strftime('%H:%M:%S')
+                })
+            except Exception as e:
+                continue
+
+        return table_data
+    except Exception as e:
+        return []
+
+
+def process_box_spreads_data(api):
+    """Process data for box spreads screen"""
+    try:
+        results = BoxSpread(api, "$SPX")
+        now_str = datetime.now().strftime('%H:%M:%S')
+
+        if results and isinstance(results, list):
+            table_data = []
+            for result in results:
+                table_data.append({
+                    'asset': '$SPX',
+                    'Date': result.get('date', 'N/A'),
+                    'Direction': result.get('trade_direction', 'N/A'),
+                    'Low Strike': result.get('strike1', 'N/A'),
+                    'High Strike': result.get('strike2', 'N/A'),
+                    'Net Price': result.get('net_debit', 'N/A'),
+                    'CAGR %': f"{result.get('cagr_percentage', 0)}%",
+                    'Borrowed': result.get('total_investment', 'N/A'),
+                    'Repayment': result.get('total_return', 'N/A'),
+                    'Margin Req': result.get('margin_requirement', 'N/A'),
+                    'Ann ROM %': f"{result.get('return_on_margin', 0)}%",
+                    'Refreshed': now_str
+                })
+            return table_data
+        elif results and not isinstance(results, list):
+            # Handle backward compatibility - single result
+            table_data = [{
+                'asset': '$SPX',
+                'Date': results.get('date', 'N/A'),
+                'Direction': results.get('trade_direction', 'N/A'),
+                'Low Strike': results.get('strike1', 'N/A'),
+                'High Strike': results.get('strike2', 'N/A'),
+                'Net Price': results.get('net_debit', 'N/A'),
+                'CAGR %': f"{results.get('cagr_percentage', 0)}%",
+                'Borrowed': results.get('total_investment', 'N/A'),
+                'Repayment': results.get('total_return', 'N/A'),
+                'Margin Req': results.get('margin_requirement', 'N/A'),
+                'Ann ROM %': f"{results.get('return_on_margin', 0)}%",
+                'Refreshed': now_str
+            }]
+            return table_data
+        else:
+            return [{'status': 'No box spread found', 'symbol': '$SPX', 'refreshed': now_str}]
+    except Exception as e:
+        error_msg = f"Error in box spreads: {str(e)}"
+        return [{'error': error_msg, 'symbol': '$SPX', 'refreshed': datetime.now().strftime('%H:%M:%S')}]
+
+
+def process_vertical_spreads_data(api, synthetic=False):
+    """Process data for vertical spreads screen"""
+    try:
+        spreads_data = _find_spreads_no_input(api, synthetic)
+        now_str = datetime.now().strftime('%H:%M:%S')
+        if spreads_data:
+            for row in spreads_data:
+                row['refreshed'] = now_str
+        return spreads_data
+    except Exception as e:
+        return []
+
+
+def process_margin_requirements_data(api):
+    """Process data for margin requirements screen"""
+    try:
+        shorts = api.updateShortPosition()
+        if not shorts:
+            return []
+
+        # Get account data for margin information
+        r = api.connectClient.get_account(
+            api.getAccountHash(), fields=api.connectClient.Account.Fields.POSITIONS
+        )
+        data = r.json()
+        table_data = []
+        total_margin = 0
+        for short in shorts:
+            margin = 0
+            count = 0
+            option_type = "Call" if "C" in short["optionSymbol"] else "Put"
+            for position in data["securitiesAccount"]["positions"]:
+                if position["instrument"]["symbol"] == short["optionSymbol"]:
+                    margin = position.get("maintenanceRequirement", 0)
+                    count = int(position.get("shortQuantity", 0))
+                    break
+            if margin > 0:
+                total_margin += margin
+                table_data.append({
+                    'asset': short["stockSymbol"],
+                    'symbol': short["stockSymbol"],
+                    'type': f"Short {option_type}",
+                    'strike': short["strike"],
+                    'expiry': short["expiration"],
+                    'count': count,
+                    'margin': f"{margin:,.2f}",
+                    'refreshed': datetime.now().strftime('%H:%M:%S')
+                })
+        if table_data:
+            table_data.append({'symbol': 'TOTAL', 'type': '', 'strike': '', 'expiry': '', 'count': '', 'margin': f"{total_margin:,.2f}", 'refreshed': datetime.now().strftime('%H:%M:%S')})
+        return table_data
+    except Exception as e:
+        return []
+
+
+def process_orders_data(api):
+    """Process data for orders screen"""
+    try:
+        orders = api.get_orders(max_results=1000)
+        now_str = datetime.now().strftime('%H:%M:%S')
+
+        if not orders:
+            return []
+
+        table_data = []
+        for order in orders:
+            try:
+                order_id = order.get('orderId', 'Unknown')
+                status = order.get('status', 'Unknown')
+                entered_time = order.get('enteredTime', '')
+                if entered_time:
+                    # Convert from ISO format to readable format
+                    entered_time = entered_time[:19].replace('T', ' ')
+
+                # Get order details from the order instruments
+                instruments = order.get('orderLegCollection', [])
+                if instruments:
+                    instrument = instruments[0].get('instrument', {})
+                    symbol = instrument.get('symbol', 'Unknown')
+                    asset_type = instrument.get('assetType', 'Unknown')
+                    quantity = instruments[0].get('quantity', 0)
+                    instruction = instruments[0].get('instruction', 'Unknown')
+                else:
+                    symbol = 'Unknown'
+                    asset_type = 'Unknown'
+                    quantity = 0
+                    instruction = 'Unknown'
+
+                order_type = order.get('orderType', 'Unknown')
+                price = order.get('price', 0)
+
+                table_data.append({
+                    'order_id': order_id,
+                    'status': status,
+                    'symbol': symbol,
+                    'type': asset_type,
+                    'instruction': instruction,
+                    'quantity': quantity,
+                    'order_type': order_type,
+                    'price': f"${price:.2f}" if price else 'Market',
+                    'entered': entered_time,
+                    'refreshed': now_str
+                })
+            except Exception as e:
+                continue
+
+        return table_data
+    except Exception as e:
+        return []
+
+
+def _find_spreads_no_input(api, synthetic=False):
+    """Wrapper for find_spreads that returns data without requiring user input"""
+    try:
+        spread_dict = {}
+        futures_to_asset = {}
+        with ThreadPoolExecutor() as executor:
+            for asset in spreads:
+                spread = spreads[asset]["spread"]
+                days = spreads[asset]["days"]
+                downsideProtection = spreads[asset]["downsideProtection"]
+                price_method = spreads[asset].get("price", "mid")
+                future = executor.submit(
+                    calculate_spread,
+                    api,
+                    asset,
+                    spread,
+                    days,
+                    downsideProtection,
+                    price_method,
+                    synthetic,
+                )
+                futures_to_asset[future] = asset
+            for future in as_completed(futures_to_asset):
+                asset, result = future.result()
+                if result is not None:
+                    spread_dict[asset] = result
+        spreads_list = []
+        for asset, spread_data in spread_dict.items():
+            if spread_data:
+                table_row = {
+                    'asset': asset,
+                    'expiration': spread_data['date'],
+                    'strike_low': spread_data['strike1'],
+                    'strike_high': spread_data['strike2'],
+                    'call_low_ba': f"{spread_data['bid1']}/{spread_data['ask1']}",
+                    'call_high_ba': f"{spread_data['bid2']}/{spread_data['ask2']}",
+                    'investment': spread_data['total_investment'],
+                    'max_profit': spread_data['total_return'],
+                    'cagr': spread_data['cagr_percentage'],
+                    'protection': f"{spread_data['downside_protection']}%",
+                    'margin_req': spread_data['margin_requirement'],
+                    'ann_rom': f"{spread_data['return_on_margin']}%"
+                }
+                spreads_list.append(table_row)
+        spreads_list.sort(key=lambda x: float(str(x['ann_rom']).replace('%', '')), reverse=True)
+        return spreads_list
+    except Exception as e:
+        return []
+
+
+# Import ThreadPoolExecutor and as_completed at the module level
+from concurrent.futures import ThreadPoolExecutor, as_completed
