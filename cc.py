@@ -12,7 +12,6 @@ from tzlocal import get_localzone
 
 import alert
 from configuration import configuration, spreads
-from config_helper import get_asset_config_safe
 from logger_config_quiet import get_logger
 from margin_utils import (
     calculate_annualized_return_on_margin,
@@ -45,107 +44,120 @@ class Cc:
         return roll
 
 def _calculate_roll_metrics(api, short, chain, roll):
-    """Calculate common metrics for rolling options"""
-    # Get current position details
-    prem_short_contract = get_median_price(short["optionSymbol"], chain)
-    if prem_short_contract is None:
-        print("Short contract not found in chain")
-        return None
+    """Calculate detailed roll metrics for UI display"""
+    try:
+        asset_symbol = short["stockSymbol"]
 
-    # Get underlying price and calculate position metrics
-    underlying_price = api.getATMPrice(short["stockSymbol"])
-    short_strike = float(short["strike"])
-    short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d").date()
-    days_to_expiry = (short_expiration - datetime.now().date()).days
-
-    # Get delta (different approach for SPX vs other assets)
-    if short["stockSymbol"] == "$SPX":
-        short_delta = get_option_delta(short["optionSymbol"], chain)
-    else:
-        option_details = api.getOptionDetails(short["optionSymbol"])
-        if option_details is None:
-            print("Could not get option details for short position")
+        # Get configuration for the asset
+        asset_config = configuration[asset_symbol]
+        if asset_config is None:
+            print(f"Configuration not found for asset: {asset_symbol}")
             return None
-        short_delta = option_details["delta"]
 
-    # Determine position status
-    value = round(short_strike - underlying_price, 2)
-    if value > 0:
-        position_status = f"{Fore.GREEN}OTM{Style.RESET_ALL}"
-    elif value < 0:
-        config = configuration[short["stockSymbol"]]
-        if abs(value) > config.get("deepITMLimit", 50):
-            position_status = f"{Fore.RED}Deep ITM{Style.RESET_ALL}"
-        elif abs(value) > config.get("ITMLimit", 25):
-            position_status = f"{Fore.YELLOW}ITM{Style.RESET_ALL}"
+        # Get current position details
+        prem_short_contract = get_median_price(short["optionSymbol"], chain)
+        if prem_short_contract is None:
+            print("Short contract not found in chain")
+            return None
+
+        # Get underlying price and calculate position metrics
+        underlying_price = api.getATMPrice(short["stockSymbol"])
+        short_strike = float(short["strike"])
+        short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d").date()
+        days_to_expiry = (short_expiration - datetime.now().date()).days
+
+        # Get delta (different approach for SPX vs other assets)
+        if short["stockSymbol"] == "$SPX":
+            short_delta = get_option_delta(short["optionSymbol"], chain)
         else:
-            position_status = f"{Fore.GREEN}Just ITM{Style.RESET_ALL}"
-    else:
-        position_status = "ATM"
+            option_details = api.getOptionDetails(short["optionSymbol"])
+            if option_details is None:
+                print("Could not get option details for short position")
+                return None
+            short_delta = option_details["delta"]
 
-    # Calculate roll metrics
-    roll_premium = get_median_price(roll["symbol"], chain)
-    if roll_premium is None:
-        print("Roll contract not found in chain")
+        # Determine position status
+        value = round(short_strike - underlying_price, 2)
+        if value > 0:
+            position_status = f"{Fore.GREEN}OTM{Style.RESET_ALL}"
+        elif value < 0:
+            config = configuration[short["stockSymbol"]]
+            if abs(value) > config.get("deepITMLimit", 50):
+                position_status = f"{Fore.RED}Deep ITM{Style.RESET_ALL}"
+            elif abs(value) > config.get("ITMLimit", 25):
+                position_status = f"{Fore.YELLOW}ITM{Style.RESET_ALL}"
+            else:
+                position_status = f"{Fore.GREEN}Just ITM{Style.RESET_ALL}"
+        else:
+            position_status = "ATM"
+
+        # Calculate roll metrics
+        roll_premium = get_median_price(roll["symbol"], chain)
+        if roll_premium is None:
+            print("Roll contract not found in chain")
+            return None
+
+        credit = round(roll_premium - prem_short_contract, 2)
+        credit_percent = (credit / underlying_price) * 100
+        ret = api.getOptionDetails(roll["symbol"])
+        if ret is None:
+            print("Could not get option details for roll contract")
+            return None
+
+        ret_expiration = datetime.strptime(ret["expiration"], "%Y-%m-%d").date()
+        roll_out_time = ret_expiration - short_expiration
+        new_strike = float(roll["strike"])
+        strike_improvement = new_strike - short_strike
+        strike_improvement_percent = (strike_improvement / short_strike) * 100
+
+        # Calculate annualized return
+        days_to_new_expiry = (ret_expiration - datetime.now().date()).days
+        if days_to_new_expiry > 0:
+            annualized_return = (credit / underlying_price) * (365 / days_to_new_expiry) * 100
+        else:
+            annualized_return = 0
+
+        # Calculate margin requirement and return on margin for new position
+        otm_amount = max(0, new_strike - underlying_price)
+        margin_req = calculate_margin_requirement(
+            short["stockSymbol"],
+            'naked_call',
+            underlying_value=underlying_price,
+            otm_amount=otm_amount,
+            premium=roll_premium
+        )
+
+        # Calculate return on margin
+        profit = roll_premium * 100  # Convert to dollar amount
+        rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_new_expiry)
+
+        # Calculate break-even
+        break_even = new_strike - credit
+
+        return {
+            "short_strike": short_strike,
+            "days_to_expiry": days_to_expiry,
+            "short_delta": short_delta,
+            "position_status": position_status,
+            "underlying_price": underlying_price,
+            "roll_premium": roll_premium,
+            "credit": credit,
+            "credit_percent": credit_percent,
+            "ret": ret,
+            "ret_expiration": ret_expiration,
+            "roll_out_time": roll_out_time,
+            "new_strike": new_strike,
+            "strike_improvement": strike_improvement,
+            "strike_improvement_percent": strike_improvement_percent,
+            "annualized_return": annualized_return,
+            "margin_req": margin_req,
+            "rom": rom,
+            "break_even": break_even
+        }
+    except Exception as e:
+        print(f"Error calculating roll metrics: {e}")
+        logger.error(f"Error calculating roll metrics: {e}")
         return None
-
-    credit = round(roll_premium - prem_short_contract, 2)
-    credit_percent = (credit / underlying_price) * 100
-    ret = api.getOptionDetails(roll["symbol"])
-    if ret is None:
-        print("Could not get option details for roll contract")
-        return None
-
-    ret_expiration = datetime.strptime(ret["expiration"], "%Y-%m-%d").date()
-    roll_out_time = ret_expiration - short_expiration
-    new_strike = float(roll["strike"])
-    strike_improvement = new_strike - short_strike
-    strike_improvement_percent = (strike_improvement / short_strike) * 100
-
-    # Calculate annualized return
-    days_to_new_expiry = (ret_expiration - datetime.now().date()).days
-    if days_to_new_expiry > 0:
-        annualized_return = (credit / underlying_price) * (365 / days_to_new_expiry) * 100
-    else:
-        annualized_return = 0
-
-    # Calculate margin requirement and return on margin for new position
-    otm_amount = max(0, new_strike - underlying_price)
-    margin_req = calculate_margin_requirement(
-        short["stockSymbol"],
-        'naked_call',
-        underlying_value=underlying_price,
-        otm_amount=otm_amount,
-        premium=roll_premium
-    )
-
-    # Calculate return on margin
-    profit = roll_premium * 100  # Convert to dollar amount
-    rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_new_expiry)
-
-    # Calculate break-even
-    break_even = new_strike - credit
-
-    return {
-        "short_strike": short_strike,
-        "days_to_expiry": days_to_expiry,
-        "short_delta": short_delta,
-        "position_status": position_status,
-        "underlying_price": underlying_price,
-        "roll_premium": roll_premium,
-        "credit": credit,
-        "credit_percent": credit_percent,
-        "ret": ret,
-        "ret_expiration": ret_expiration,
-        "roll_out_time": roll_out_time,
-        "new_strike": new_strike,
-        "strike_improvement": strike_improvement,
-        "strike_improvement_percent": strike_improvement_percent,
-        "annualized_return": annualized_return,
-        "margin_req": margin_req,
-        "rom": rom,
-        "break_even": break_even
-    }
 
 def _display_roll_results(short, metrics):
     """Display roll results in a formatted table"""
@@ -187,36 +199,72 @@ def _display_roll_results(short, metrics):
     print(f"Underlying Price: {round(metrics['underlying_price'], 2)}")
     print("\n" + str(table))
 
-def RollCalls(api, short):
+def RollCalls(api):
     try:
-        if short["stockSymbol"] not in configuration:
-            print(f"Configuration for {short['stockSymbol']} not found")
-            return False
+        shorts = api.updateShortPosition()
 
-        days = configuration[short["stockSymbol"]]["maxRollOutWindow"]
-        short_expiration = datetime.strptime(short["expiration"], "%Y-%m-%d").date()
+        if not shorts or isinstance(shorts, str):
+            print("No short positions found or API error")
+            return
+
+        # Display current positions first
+        print("\n=== Current Short Positions ===")
+        for i, short in enumerate(shorts, 1):
+            asset_symbol = short["stockSymbol"]
+
+            # Skip if not in configuration
+            if asset_symbol not in configuration:
+                continue
+
+            # Get configuration for margin calculation
+            asset_config = configuration[asset_symbol]
+            if asset_config is None:
+                print(f"Configuration not found for asset: {asset_symbol}")
+                continue
+
+            # Calculate metrics for each short position
+            metrics = _calculate_roll_metrics(api, short, [], None)
+            if metrics is None:
+                print(f"Failed to calculate metrics for {asset_symbol}")
+                continue
+
+            # Display metrics
+            print(f"\nPosition {i}: {asset_symbol}")
+            _display_roll_results(short, metrics)
+
+        # Proceed with rolling the first position as an example
+        first_short = shorts[0]
+        asset_symbol = first_short["stockSymbol"]
+
+        if asset_symbol not in configuration:
+            print(f"Configuration for {asset_symbol} not found")
+            return
+
+        days = configuration[asset_symbol]["maxRollOutWindow"]
+        short_expiration = datetime.strptime(first_short["expiration"], "%Y-%m-%d").date()
         toDate = short_expiration + timedelta(days=days)
-        optionChain = OptionChain(api, short["stockSymbol"], toDate, days)
+        optionChain = OptionChain(api, asset_symbol, toDate, days)
         chain = optionChain.get()
 
         # Find roll opportunity
-        roll = find_best_rollover(api, chain, short)
+        roll = find_best_rollover(api, chain, first_short)
         if roll is None:
             print("No rollover contract found")
-            return False
+            return
 
-        # Calculate metrics
-        metrics = _calculate_roll_metrics(api, short, chain, roll)
+        # Calculate metrics for the roll
+        metrics = _calculate_roll_metrics(api, first_short, chain, roll)
         if metrics is None:
             print("Failed to calculate roll metrics")
-            return False
+            return
 
-        # Display results
-        _display_roll_results(short, metrics)
+        # Display roll results
+        print("\n=== Roll Opportunity ===")
+        _display_roll_results(first_short, metrics)
 
         # Execute the roll
         print("Proceeding with roll automatically (Textual UI only, no CLI prompt)...")
-        result = roll_contract(api, short, roll, round(metrics["credit"], 2))
+        result = roll_contract(api, first_short, roll, round(metrics["credit"], 2))
         return result
 
     except Exception as e:
@@ -359,7 +407,7 @@ def find_best_rollover(api, data, short_option):
             return result
 
         # Get configuration safely for roll analysis
-        asset_config = get_asset_config_safe(asset_symbol, configuration)
+        asset_config = configuration[asset_symbol]
 
         # Add timing variables for compatibility
         start_time = time.time()
@@ -549,7 +597,7 @@ def find_best_rollover(api, data, short_option):
 
         print(f"DEBUG: find_best_rollover completed in {time.time() - start_time:.2f} seconds, {attempt_count} attempts")
         if best_option:
-            print(f"DEBUG: Found roll candidate: {best_option['symbol']} at strike {best_option['strike']}")
+            print(f"DEBUG: Found roll candidate: {best_option['symbol']}")
             # Return the roll option with current position details
             best_option.update({
                 "current_strike": short_strike,
@@ -716,7 +764,7 @@ def get_roll_analysis_with_current_data(api, short_option):
         asset_symbol = short_option["stockSymbol"]
 
         # Get configuration safely
-        asset_config = get_asset_config_safe(asset_symbol, configuration)
+        asset_config = configuration[asset_symbol]
         days = asset_config.get("maxRollOutWindow", 30)
 
         # Parse expiration date
@@ -806,7 +854,7 @@ def get_current_position_data_for_ui(short_option, api=None):
         if api and asset_symbol != "Unknown":
             try:
                 # Get option chain data to find current position
-                asset_config = get_asset_config_safe(asset_symbol, configuration)
+                asset_config = configuration[asset_symbol]
                 days = asset_config.get("maxRollOutWindow", 30)
 
                 # Parse expiration date safely

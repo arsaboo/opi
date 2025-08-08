@@ -23,6 +23,11 @@ from order_utils import monitor_order, handle_cancel, cancel_order, reset_cancel
 __all__ = ['monitor_order']
 
 def BoxSpread(api, asset="$SPX"):
+    # Validate that we're only processing SPX-style assets for box spreads
+    if asset not in ["$SPX", "$SPXW"]:
+        print(f"Box spreads are only supported for $SPX and $SPXW. Skipping {asset}")
+        return None
+
     days = spreads[asset].get("days", 2000)
     minDays = spreads[asset].get("minDays", 0)
     strikes = spreads[asset].get("strikes", 500)

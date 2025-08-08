@@ -231,6 +231,55 @@ class MainMenuScreen(Screen):
             # If we can't update the display, at least print to console
             print(f"Button press error: {e}")
 
+    def _show_immediate_loading_table(self, option):
+        """Show an empty table immediately with appropriate columns for the screen type"""
+        # Hide content display immediately
+        content = self.query_one("#content-display")
+        content.display = False
+
+        # Show table immediately with loading row
+        table = self.query_one("#results-table")
+        table.display = True
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+        table.can_focus = True
+        table.show_cursor = True
+        table.clear(columns=True)
+
+        # Set up columns based on screen type
+        if option == "1":  # Roll Short Options
+            columns = ['asset', 'cur_strike', 'cur_exp', 'roll_strike', 'roll_exp', 'credit', 'ann_rom', 'status']
+            self.current_screen_type = "roll_short"
+        elif option == "2":  # Box Spreads
+            columns = ['asset', 'Date', 'Direction', 'Low Strike', 'High Strike', 'Net Price', 'Investment', 'Borrowed', 'Repayment', 'CAGR', 'Margin Req', 'Ann ROM %']
+            self.current_screen_type = "box_spreads"
+        elif option == "3":  # Vertical Spreads
+            columns = ['asset', 'expiration', 'strike_low', 'strike_high', 'investment', 'max_profit', 'ann_rom']
+            self.current_screen_type = "spreads"
+        elif option == "4":  # Synthetic Calls
+            columns = ['asset', 'expiration', 'strike_low', 'strike_high', 'investment', 'max_profit', 'ann_rom']
+            self.current_screen_type = "synthetic"
+        elif option == "5":  # Margin Requirements
+            columns = ['symbol', 'position_type', 'quantity', 'margin_req', 'current_value']
+            self.current_screen_type = "margin"
+        elif option == "6":  # Orders
+            columns = ['order_id', 'symbol', 'status', 'order_type', 'quantity']
+            self.current_screen_type = "orders"
+        else:
+            columns = ['status']
+
+        table.add_columns(*columns)
+
+        # Add a loading row immediately
+        loading_row = ['Loading...' if i == 0 else '' for i in range(len(columns))]
+        table.add_row(*loading_row)
+
+        # Focus the table
+        table.focus()
+
+        # Clear current spreads data
+        self.current_spreads_data = []
+
     def show_spreads_table(self, spreads_data, screen_type="spreads"):
         """Show spreads table in the main menu DataTable widget (in-place update)"""
         try:
@@ -244,23 +293,44 @@ class MainMenuScreen(Screen):
 
             table = self.query_one("#results-table")
             table.display = True
-            table.cursor_type = "row"  # Enable row cursor navigation
-            table.zebra_stripes = True  # Makes rows easier to distinguish
-            table.can_focus = True  # Allow table to receive focus for navigation
-            table.show_cursor = True  # Make cursor visible
-            table.clear(columns=True)  # Clear both rows and columns for perfect alignment
-            if not spreads_data:
-                return
-            # Use keys from the first row as columns
-            columns = list(spreads_data[0].keys())
-            table.add_columns(*columns)
+            table.cursor_type = "row"
+            table.zebra_stripes = True
+            table.can_focus = True
+            table.show_cursor = True
 
-            # Add rows with color formatting
+            # Clear existing data but keep columns if they match
+            try:
+                current_columns = [col.label if hasattr(col, 'label') else str(col) for col in table.columns] if table.columns else []
+            except AttributeError:
+                current_columns = []
+
+            new_columns = list(spreads_data[0].keys()) if spreads_data else []
+
+            if current_columns != new_columns:
+                table.clear(columns=True)
+                if spreads_data and new_columns:
+                    table.add_columns(*new_columns)
+            else:
+                # Just clear rows, keep columns
+                table.clear()
+
+            if not spreads_data:
+                # Show "No data found" message
+                if new_columns:
+                    no_data_row = ['No data found' if i == 0 else '' for i in range(len(new_columns))]
+                    table.add_row(*no_data_row)
+                else:
+                    # No columns at all, create a basic one
+                    table.add_columns("Status")
+                    table.add_row("No data found")
+                return
+
+            # Add rows with color formatting (existing color logic)
             for row_idx, row in enumerate(spreads_data):
                 formatted_row = []
-                row_key = row.get('asset', row_idx)  # Use asset as key, fallback to index
+                row_key = row.get('asset', row_idx)
 
-                for col in columns:
+                for col in new_columns:
                     value = str(row.get(col, ''))
 
                     # Get previous value for comparison
@@ -286,13 +356,12 @@ class MainMenuScreen(Screen):
                                 # Determine color based on value and change
                                 if prev_num is not None:
                                     if num_val > prev_num:
-                                        value = f"[bold bright_green]↗ {value}[/bold bright_green]"  # Up arrow + green
+                                        value = f"[bold bright_green]↗ {value}[/bold bright_green]"
                                     elif num_val < prev_num:
-                                        value = f"[bold bright_red]↘ {value}[/bold bright_red]"    # Down arrow + red
+                                        value = f"[bold bright_red]↘ {value}[/bold bright_red]"
                                     else:
-                                        value = f"[yellow]→ {value}[/yellow]"         # No change
+                                        value = f"[yellow]→ {value}[/yellow]"
                                 else:
-                                    # First time or no previous data - reserve space for arrow
                                     if num_val > 0:
                                         value = f"[green]  {value}[/green]"
                                     elif num_val < 0:
@@ -345,7 +414,6 @@ class MainMenuScreen(Screen):
                                             bid_color = "bright_red"
                                         else:
                                             bid_arrow = " "  # Space instead of arrow for no change
-                                            bid_color = "white"
 
                                         if curr_ask > prev_ask:
                                             ask_arrow = "↗"
@@ -355,7 +423,6 @@ class MainMenuScreen(Screen):
                                             ask_color = "bright_red"
                                         else:
                                             ask_arrow = " "  # Space instead of arrow for no change
-                                            ask_color = "white"
 
                                         # Format with perfect alignment: bid right-aligned, ask left-aligned, centered separator
                                         bid_with_arrow = f"{bid_arrow} {curr_parts[0]}" if bid_arrow.strip() else f"  {curr_parts[0]}"
@@ -428,6 +495,9 @@ class MainMenuScreen(Screen):
                                         value = f"[bold bright_green]↗ {value}[/bold bright_green]"  # More credit = better
                                     elif col.lower() == 'margin':
                                         value = f"[bold bright_red]↗ {value}[/bold bright_red]"    # More margin = worse
+                                    elif col.lower() == 'net price':
+                                        # For box spreads: positive net price means we pay (debit), negative means we receive (credit)
+                                        value = f"[bold bright_red]↗ {value}[/bold bright_red]"    # Higher net price = more we pay
                                     else:
                                         value = f"[bold bright_green]↗ {value}[/bold bright_green]"
                                 elif num_val < prev_num:
@@ -435,22 +505,33 @@ class MainMenuScreen(Screen):
                                         value = f"[bold bright_red]↘ {value}[/bold bright_red]"     # Less credit = worse
                                     elif col.lower() == 'margin':
                                         value = f"[bold bright_green]↘ {value}[/bold bright_green]" # Less margin = better
+                                    elif col.lower() == 'net price':
+                                        value = f"[bold bright_green]↘ {value}[/bold bright_green]" # Lower net price = less we pay
                                     else:
                                         value = f"[bold bright_red]↘ {value}[/bold bright_red]"
                                 else:
                                     value = f"[yellow]→ {value}[/yellow]"
                             else:
-                                # First time display with space reservation
-                                if num_val > 0:
-                                    value = f"[green]  {value}[/green]"
-                                elif num_val < 0:
-                                    value = f"[bright_red]  {value}[/bright_red]"
+                                # First time display with space reservation and proper coloring
+                                if col.lower() == 'net price':
+                                    # For box spreads: show net price with context
+                                    if num_val > 0:
+                                        value = f"[bright_red]  {value}[/bright_red]"  # We pay (debit)
+                                    elif num_val < 0:
+                                        value = f"[green]  {value}[/green]"  # We receive (credit)
+                                    else:
+                                        value = f"  {value}"
                                 else:
-                                    value = f"  {value}"
+                                    if num_val > 0:
+                                        value = f"[green]  {value}[/green]"
+                                    elif num_val < 0:
+                                        value = f"[bright_red]  {value}[/bright_red]"
+                                    else:
+                                        value = f"  {value}"
                         except ValueError:
                             value = f"  {value}"
                     elif col.lower() in ['total_return', 'max_profit', 'borrowed', 'repayment', 'investment']:
-                        # Green for profits/returns with change tracking
+                        # Handle box spread financial columns with proper context
                         try:
                             num_val = float(value)
                             prev_num = None
@@ -459,16 +540,34 @@ class MainMenuScreen(Screen):
 
                             if prev_num is not None:
                                 if num_val > prev_num:
-                                    value = f"[bold bright_green]↗ {value}[/bold bright_green]"
+                                    if col.lower() == 'borrowed':
+                                        value = f"[bold bright_green]↗ {value}[/bold bright_green]"  # More borrowed = more leverage
+                                    elif col.lower() == 'repayment':
+                                        value = f"[bold bright_red]↗ {value}[/bold bright_red]"     # More repayment = higher cost
+                                    else:
+                                        value = f"[bold bright_green]↗ {value}[/bold bright_green]"
                                 elif num_val < prev_num:
-                                    value = f"[bold bright_red]↘ {value}[/bold bright_red]"
+                                    if col.lower() == 'borrowed':
+                                        value = f"[bold bright_red]↘ {value}[/bold bright_red]"     # Less borrowed = less leverage
+                                    elif col.lower() == 'repayment':
+                                        value = f"[bold bright_green]↘ {value}[/bold bright_green]" # Less repayment = lower cost
+                                    else:
+                                        value = f"[bold bright_red]↘ {value}[/bold bright_red]"
                                 else:
                                     value = f"[yellow]→ {value}[/yellow]"
                             else:
-                                if num_val > 0:
-                                    value = f"[green]  {value}[/green]"
+                                # Color based on column meaning
+                                if col.lower() == 'borrowed':
+                                    value = f"[green]  ${num_val:,.2f}[/green]"  # Borrowed amount (what we get)
+                                elif col.lower() == 'repayment':
+                                    value = f"[cyan]  ${num_val:,.2f}[/cyan]"    # What we must pay back
+                                elif col.lower() == 'investment':
+                                    value = f"[yellow]  ${num_val:,.2f}[/yellow]" # Our investment
                                 else:
-                                    value = f"  {value}"
+                                    if num_val > 0:
+                                        value = f"[green]  {value}[/green]"
+                                    else:
+                                        value = f"  {value}"
                         except ValueError:
                             value = f"  {value}"
 
@@ -530,7 +629,22 @@ class MainMenuScreen(Screen):
             # Focus the table so arrow keys work
             table.focus()
 
+            # Update screen title to remove "Loading..."
+            screen_names = {
+                "roll_short": "Roll Short Options",
+                "box_spreads": "Check Box Spreads",
+                "spreads": "Check Vertical Spreads",
+                "synthetic": "Synthetic Covered Calls",
+                "margin": "View Margin Requirements",
+                "orders": "View/Cancel Orders"
+            }
+            current_screen = self.query_one("#current-screen")
+            current_screen.update(f"{screen_names.get(screen_type, 'Unknown')} - {len(spreads_data)} items")
+
         except Exception as e:
+            print(f"DEBUG: Table error: {e}")
+            import traceback
+            traceback.print_exc()
             content = self.query_one("#content-display")
             content.display = True
             content.update(f"[red]Table error: {str(e)}[/red]")
@@ -538,7 +652,7 @@ class MainMenuScreen(Screen):
     def handle_option_sync(self, option):
         import datetime
         try:
-            # Update current screen display
+            # IMMEDIATE UI updates for instant responsiveness
             screen_names = {
                 "1": "Roll Short Options",
                 "2": "Check Box Spreads",
@@ -548,60 +662,37 @@ class MainMenuScreen(Screen):
                 "6": "View/Cancel Orders"
             }
             current_screen = self.query_one("#current-screen")
-            current_screen.update(screen_names.get(option, "Unknown Option"))
+            current_screen.update(f"{screen_names.get(option, 'Unknown Option')} - Loading data...")
 
-            # Hide previous content and table immediately
-            content = self.query_one("#content-display")
-            content.update("")  # Clear the content display
-            content.display = False  # Hide the content display
+            # Immediately show empty table with loading message
+            self._show_immediate_loading_table(option)
 
-            table = self.query_one("#results-table")
-            table.display = False  # Hide previous table immediately
-
-            # Hide loading indicator immediately - don't show it
-            loading = self.query_one("#loading")
-            loading.display = False
-
-            # Stop any previous refresh timer
+            # Stop any previous refresh timer immediately
             if hasattr(self, '_refresh_timer') and self._refresh_timer:
                 self._refresh_timer.stop()
                 self._refresh_timer = None
-            if option == "1":
-                print("DEBUG: Starting roll short options refresh")
-                try:
-                    # Test basic API call first
-                    test_shorts = self.api.updateShortPosition()
-                    print(f"DEBUG: API test returned {len(test_shorts) if test_shorts else 0} short positions")
-                    if test_shorts:
-                        print(f"DEBUG: First short: {test_shorts[0]}")
-                except Exception as test_error:
-                    print(f"DEBUG: API test failed: {test_error}")
-                    content = self.query_one("#content-display")
-                    content.display = True
-                    content.update(f"[red]API Error: {str(test_error)}[/red]")
-                    return
 
-                self._refresh_roll_short_simple()
+            # Schedule the actual data loading to happen after UI update
+            if option == "1":
+                self.call_later(self._refresh_roll_short_simple)
                 self._refresh_timer = self.set_interval(30, self._refresh_roll_short_simple)
-            if option == "2":
-                self._refresh_box_spreads()
+            elif option == "2":
+                self.call_later(self._refresh_box_spreads)
                 self._refresh_timer = self.set_interval(30, self._refresh_box_spreads)
             elif option == "3":
-                self._refresh_vertical_spreads()
+                self.call_later(self._refresh_vertical_spreads)
                 self._refresh_timer = self.set_interval(30, self._refresh_vertical_spreads)
             elif option == "4":
-                self._refresh_synthetic_calls()
+                self.call_later(self._refresh_synthetic_calls)
                 self._refresh_timer = self.set_interval(30, self._refresh_synthetic_calls)
             elif option == "5":
-                self._refresh_margin_requirements()
+                self.call_later(self._refresh_margin_requirements)
                 self._refresh_timer = self.set_interval(30, self._refresh_margin_requirements)
             elif option == "6":
-                self._refresh_orders()
+                self.call_later(self._refresh_orders)
                 self._refresh_timer = self.set_interval(30, self._refresh_orders)
         except Exception as e:
             self.query_one("#content-display").update(f"[red]Error: {str(e)}[/red]")
-        finally:
-            self.query_one("#loading").display = False
 
     def _refresh_roll_short(self):
         import datetime
@@ -883,8 +974,6 @@ class MainMenuScreen(Screen):
 
         except Exception as e:
             print(f"DEBUG: Exception in _refresh_roll_short_simple: {e}")
-            import traceback
-            traceback.print_exc()
             content.update(f"[red]Error loading roll short data: {str(e)}[/red]")
 
     def _refresh_box_spreads(self):
@@ -894,11 +983,122 @@ class MainMenuScreen(Screen):
         try:
             table_data = process_box_spreads_data(self.api)
             if table_data:
+                # Add refreshed timestamp to all rows and fix formatting
+                for row in table_data:
+                    # Fix financial values display based on direction
+                    direction = row.get('Direction', '').lower()
+                    net_price = row.get('Net Price', 0)
+
+                    # Get the strike difference (this is the spread width)
+                    low_strike = float(row.get('Low Strike', 0))
+                    high_strike = float(row.get('High Strike', 0))
+                    spread_width = high_strike - low_strike
+
+                    # Calculate days to expiration for CAGR
+                    try:
+                        exp_date_str = row.get('Date', '')
+                        exp_date = datetime.datetime.strptime(exp_date_str, '%Y-%m-%d').date()
+                        today = datetime.date.today()
+                        days_to_exp = (exp_date - today).days
+                        years_to_exp = days_to_exp / 365.25
+                    except:
+                        days_to_exp = 0
+                        years_to_exp = 1  # Default to prevent division by zero
+
+                    if direction == 'buy':
+                        # Buy box spread: We pay net price upfront, receive spread width at expiration
+                        row['Direction'] = 'Buy (Invest)'
+                        investment = abs(float(str(net_price).replace('$', '').replace(',', ''))) * 100  # Multiply by 100 for lot size
+                        repayment = spread_width * 100  # Convert to per-contract value
+
+                        # Calculate CAGR for investment scenario
+                        if investment > 0 and years_to_exp > 0:
+                            cagr = ((repayment / investment) ** (1 / years_to_exp) - 1) * 100
+                            row['CAGR'] = f"{cagr:.2f}%"
+                        else:
+                            row['CAGR'] = "N/A"
+
+                        row['Investment'] = f"${investment:,.2f}"  # What we pay upfront
+                        row['Borrowed'] = f"$0.00"  # We don't borrow anything
+                        row['Repayment'] = f"${repayment:,.2f}"  # What we receive at expiration
+                        row['Net Price'] = f"${investment:,.2f}"
+
+                    elif direction == 'sell':
+                        # Sell box spread: We receive net price upfront, pay spread width at expiration
+                        row['Direction'] = 'Sell (Borrow)'
+                        borrowed = abs(float(str(net_price).replace('$', '').replace(',', ''))) * 100  # Multiply by 100 for lot size
+                        repayment = spread_width * 100  # What we must pay back
+
+                        # Calculate CAGR for borrowing scenario (cost of borrowing)
+                        if borrowed > 0 and years_to_exp > 0:
+                            cagr = ((repayment / borrowed) ** (1 / years_to_exp) - 1) * 100
+                            row['CAGR'] = f"{cagr:.2f}%"
+                        else:
+                            row['CAGR'] = "N/A"
+
+                        row['Investment'] = f"$0.00"  # We don't invest anything upfront
+                        row['Borrowed'] = f"${borrowed:,.2f}"  # What we receive upfront (the loan)
+                        row['Repayment'] = f"${repayment:,.2f}"  # What we pay back at expiration
+                        row['Net Price'] = f"${borrowed:,.2f}"
+
+                    # Format Ann ROM % to exactly 2 decimal places
+                    ann_rom = row.get('Ann ROM %', '0%')
+                    if isinstance(ann_rom, str) and '%' in ann_rom:
+                        try:
+                            rom_value = float(ann_rom.replace('%', ''))
+                            row['Ann ROM %'] = f"{rom_value:.2f}%"
+                        except ValueError:
+                            row['Ann ROM %'] = "0.00%"
+                    elif isinstance(ann_rom, (int, float)):
+                        row['Ann ROM %'] = f"{ann_rom:.2f}%"
+                    else:
+                        row['Ann ROM %'] = "0.00%"
+
+                    # Format Margin Req properly
+                    margin_req = row.get('Margin Req', 0)
+                    if isinstance(margin_req, (int, float)) and margin_req > 0:
+                        row['Margin Req'] = f"${margin_req:,.2f}"
+                    elif isinstance(margin_req, str) and margin_req.strip():
+                        # If it's already a string, ensure it's properly formatted
+                        try:
+                            clean_margin = margin_req.replace('$', '').replace(',', '')
+                            margin_val = float(clean_margin)
+                            row['Margin Req'] = f"${margin_val:,.2f}"
+                        except ValueError:
+                            row['Margin Req'] = "$0.00"
+                    else:
+                        row['Margin Req'] = "$0.00"
+
+                    # Remove any existing 'refreshed' key to avoid duplicates
+                    if 'refreshed' in row:
+                        del row['refreshed']
+
+                    # Create new ordered dictionary with correct column order
+                    ordered_row = {}
+                    column_order = ['asset', 'Date', 'Direction', 'Low Strike', 'High Strike', 'Net Price', 'Investment', 'Borrowed', 'Repayment', 'CAGR', 'Margin Req', 'Ann ROM %', 'refreshed']
+
+                    for col in column_order:
+                        if col == 'refreshed':
+                            ordered_row[col] = now_str
+                        else:
+                            ordered_row[col] = row.get(col, '')
+
+                    # Replace the row with the ordered version
+                    row.clear()
+                    row.update(ordered_row)
+
                 self.show_spreads_table(table_data, "box_spreads")
             else:
-                content.update(f"[yellow]No box spreads found. (Refreshed: {now_str})[/yellow]")
+                # Show "No data" message in table format with correct column order
+                empty_data = [{'asset': 'No box spreads found', 'Date': '', 'Direction': '', 'Low Strike': '', 'High Strike': '', 'Net Price': '', 'Investment': '', 'Borrowed': '', 'Repayment': '', 'CAGR': '', 'Margin Req': '', 'Ann ROM %': '', 'refreshed': now_str}]
+                self.show_spreads_table(empty_data, "box_spreads")
         except Exception as e:
-            content.update(f"[red]Error in box spreads: {str(e)}[/red]")
+            print(f"DEBUG: Error in _refresh_box_spreads: {e}")
+            import traceback
+            traceback.print_exc()
+            # Show error in table format with correct column order
+            error_data = [{'asset': 'Error loading data', 'Date': str(e)[:50], 'Direction': '', 'Low Strike': '', 'High Strike': '', 'Net Price': '', 'Investment': '', 'Borrowed': '', 'Repayment': '', 'CAGR': '', 'Margin Req': '', 'Ann ROM %': '', 'refreshed': now_str}]
+            self.show_spreads_table(error_data, "box_spreads")
 
     def _refresh_vertical_spreads(self):
         import datetime
@@ -911,11 +1111,16 @@ class MainMenuScreen(Screen):
                     row['refreshed'] = now_str
                 self.show_spreads_table(spreads_data, "spreads")
             else:
-                # Hide content display and show message in table instead
-                content.display = False
-                self.query_one("#results-table").display = False
+                # Show "No data" message in table format
+                empty_data = [{'asset': 'No vertical spreads found', 'expiration': '', 'strike_low': '', 'strike_high': '', 'investment': '', 'max_profit': '', 'ann_rom': '', 'refreshed': now_str}]
+                self.show_spreads_table(empty_data, "spreads")
         except Exception as e:
-            content.update(f"[red]Error finding spreads: {str(e)}[/red]")
+            print(f"DEBUG: Error in _refresh_vertical_spreads: {e}")
+            import traceback
+            traceback.print_exc()
+            # Show error in table format
+            error_data = [{'asset': 'Error loading data', 'expiration': str(e)[:50], 'strike_low': '', 'strike_high': '', 'investment': '', 'max_profit': '', 'ann_rom': '', 'refreshed': datetime.datetime.now().strftime('%H:%M:%S')}]
+            self.show_spreads_table(error_data, "spreads")
 
     def _refresh_synthetic_calls(self):
         import datetime
@@ -928,11 +1133,16 @@ class MainMenuScreen(Screen):
                     row['refreshed'] = now_str
                 self.show_spreads_table(spreads_data, "synthetic")
             else:
-                # Hide content display and table when no data found
-                content.display = False
-                self.query_one("#results-table").display = False
+                # Show "No data" message in table format
+                empty_data = [{'asset': 'No synthetic calls found', 'expiration': '', 'strike_low': '', 'strike_high': '', 'investment': '', 'max_profit': '', 'ann_rom': '', 'refreshed': now_str}]
+                self.show_spreads_table(empty_data, "synthetic")
         except Exception as e:
-            content.update(f"[red]Error finding synthetic calls: {str(e)}[/red]")
+            print(f"DEBUG: Error in _refresh_synthetic_calls: {e}")
+            import traceback
+            traceback.print_exc()
+            # Show error in table format
+            error_data = [{'asset': 'Error loading data', 'expiration': str(e)[:50], 'strike_low': '', 'strike_high': '', 'investment': '', 'max_profit': '', 'ann_rom': '', 'refreshed': now_str}]
+            self.show_spreads_table(error_data, "synthetic")
 
     def _refresh_margin_requirements(self):
         import datetime
@@ -945,13 +1155,18 @@ class MainMenuScreen(Screen):
                 for row in table_data:
                     if 'refreshed' not in row:
                         row['refreshed'] = now_str
-                self.show_spreads_table(table_data)
-                content.update("")
+                self.show_spreads_table(table_data, "margin")  # Fix: was missing screen_type parameter
             else:
-                content.update(f"[yellow]No positions with margin requirements found. (Refreshed: {now_str})[/yellow]")
-                self.query_one("#results-table").display = False
+                # Show "No data" message in table format
+                empty_data = [{'symbol': 'No positions found', 'position_type': '', 'quantity': '', 'margin_req': '', 'current_value': '', 'refreshed': now_str}]
+                self.show_spreads_table(empty_data, "margin")
         except Exception as e:
-            content.update(f"[red]Error in margin requirements: {str(e)}[/red]")
+            print(f"DEBUG: Error in _refresh_margin_requirements: {e}")
+            import traceback
+            traceback.print_exc()
+            # Show error in table format
+            error_data = [{'symbol': 'Error loading data', 'position_type': str(e)[:50], 'quantity': '', 'margin_req': '', 'current_value': '', 'refreshed': now_str}]
+            self.show_spreads_table(error_data, "margin")
 
     def _find_spreads_no_input(self, api, synthetic=False):
         """Wrapper for find_spreads that returns data without requiring user input"""
@@ -1526,6 +1741,7 @@ Ann. ROM: [bold bright_green]{rom}[/bold bright_green]
             # Show confirmation for order cancellation
             if not hasattr(self, 'pending_cancel_order') or not self.pending_cancel_order:
                 # First press - show confirmation
+
                 cancel_details = f"""
 [bold red]CANCEL ORDER CONFIRMATION[/bold red]
 Order ID: [bold white]{order_id}[/bold white]
@@ -1556,8 +1772,11 @@ Status: [yellow]{selected_order.get('status', 'Unknown')}[/yellow]
                     self.pending_cancel_order = None
                     print("DEBUG: Cleared pending_cancel_order")
 
+
+
         except Exception as e:
             content = self.query_one("#content-display")
+
             content.display = True
             content.update(f"[red]Error processing order cancellation: {str(e)}[/red]")
 
@@ -1661,6 +1880,7 @@ class OptionsTradingApp(App):
                 raise
 
     def on_mount(self):
+
         self.push_screen(MainMenuScreen(self.api))
 
     def on_key(self, event):
@@ -1701,6 +1921,18 @@ class OptionsTradingApp(App):
                 return False
 
             # Test 3: Check cc module imports
+            try:
+                from cc import find_best_rollover, _calculate_roll_metrics
+                print("DEBUG: cc module imports successful")
+            except Exception as cc_error:
+                print(f"DEBUG: cc module import failed: {cc_error}")
+                return False
+
+            return True
+
+        except Exception as e:
+            print(f"DEBUG: Test failed with error: {e}")
+            return False
             try:
                 from cc import find_best_rollover, _calculate_roll_metrics
                 print("DEBUG: cc module imports successful")

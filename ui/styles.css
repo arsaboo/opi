@@ -48,69 +48,13 @@ Button {
     height: 1;
 }
 
-#content-section {
-    width: 100%;
-    height: 1fr;  /* Takes remaining space */
-    margin: 0;
-    padding: 0;
-    gap: 0;
-}
-
 #content-display {
     padding: 0;
     margin: 0;
     text-align: center;
-    height: 0;
-    display: none;
 }
 
 #results-table {
-    margin: 0 !important;
-    padding: 0 !important;
-    position: relative !important;
-    top: 0 !important;
-    align-self: flex-start !important;
-}
-
-#loading {
-    margin: 0;
-    padding: 0;
-}
-
-/* Force zero height for hidden elements */
-#content-display[data-hidden="true"] {
-    height: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-}
-
-#loading[data-hidden="true"] {
-    height: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-}
-
-/* Ensure table appears immediately after buttons */
-#menu-buttons-all {
-    margin-bottom: 0 !important;
-}
-
-/* Completely hide loading indicator */
-#loading {
-    display: none !important;
-    height: 0 !important;
-    width: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-}
-
-/* Make sure content display is completely hidden when not shown */
-#content-display {
-    display: none !important;
-}
-
-LoadingIndicator {
-    color: #f7c948;
     margin: 0;
     padding: 0;
 }

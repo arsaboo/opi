@@ -9,6 +9,7 @@ This directory contains the modern terminal user interface for the Options Tradi
 - Keyboard shortcuts for quick navigation
 - Dedicated screens for different operations
 - Async operations for smooth user experience
+- Instant loading indicator for user feedback when switching screens
 
 ## Installation
 

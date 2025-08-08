@@ -6,6 +6,7 @@ handling different screen types, and other UI-related business logic.
 """
 
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from configuration import configuration, spreads
 from cc import find_best_rollover, get_median_price
 from optionChain import OptionChain
@@ -65,51 +66,56 @@ def process_roll_short_data(api):
 
 
 def process_box_spreads_data(api):
-    """Process data for box spreads screen"""
+    """Process box spreads data using the existing BoxSpread function from strategies.py"""
     try:
-        results = BoxSpread(api, "$SPX")
-        now_str = datetime.now().strftime('%H:%M:%S')
+        from strategies import BoxSpread
 
-        if results and isinstance(results, list):
-            table_data = []
-            for result in results:
-                table_data.append({
-                    'asset': '$SPX',
-                    'Date': result.get('date', 'N/A'),
-                    'Direction': result.get('trade_direction', 'N/A'),
-                    'Low Strike': result.get('strike1', 'N/A'),
-                    'High Strike': result.get('strike2', 'N/A'),
-                    'Net Price': result.get('net_debit', 'N/A'),
-                    'CAGR %': f"{result.get('cagr_percentage', 0)}%",
-                    'Borrowed': result.get('total_investment', 'N/A'),
-                    'Repayment': result.get('total_return', 'N/A'),
-                    'Margin Req': result.get('margin_requirement', 'N/A'),
-                    'Ann ROM %': f"{result.get('return_on_margin', 0)}%",
-                    'Refreshed': now_str
-                })
-            return table_data
-        elif results and not isinstance(results, list):
-            # Handle backward compatibility - single result
-            table_data = [{
-                'asset': '$SPX',
-                'Date': results.get('date', 'N/A'),
-                'Direction': results.get('trade_direction', 'N/A'),
-                'Low Strike': results.get('strike1', 'N/A'),
-                'High Strike': results.get('strike2', 'N/A'),
-                'Net Price': results.get('net_debit', 'N/A'),
-                'CAGR %': f"{results.get('cagr_percentage', 0)}%",
-                'Borrowed': results.get('total_investment', 'N/A'),
-                'Repayment': results.get('total_return', 'N/A'),
-                'Margin Req': results.get('margin_requirement', 'N/A'),
-                'Ann ROM %': f"{results.get('return_on_margin', 0)}%",
-                'Refreshed': now_str
-            }]
-            return table_data
-        else:
-            return [{'status': 'No box spread found', 'symbol': '$SPX', 'refreshed': now_str}]
+        # Limit box spreads to SPX/SPXW only (European-style options)
+        spx_assets = ["$SPX", "$SPXW"]
+
+        all_results = []
+
+        for asset in spx_assets:
+            try:
+                # Call the existing BoxSpread function
+                results = BoxSpread(api, asset)
+
+                if results:
+                    for result in results:
+                        # Format Ann ROM % to 2 decimal places
+                        ann_rom = result.get('return_on_margin', 0)
+                        if isinstance(ann_rom, (int, float)):
+                            ann_rom_formatted = f"{ann_rom:.2f}%"
+                        else:
+                            ann_rom_formatted = str(ann_rom)
+                            if '%' not in ann_rom_formatted:
+                                try:
+                                    ann_rom_formatted = f"{float(ann_rom_formatted):.2f}%"
+                                except:
+                                    ann_rom_formatted = "0.00%"
+
+                        # Convert the strategy.py result format to UI format
+                        ui_row = {
+                            'asset': asset,
+                            'Date': result.get('date', ''),
+                            'Direction': result.get('trade_direction', ''),
+                            'Low Strike': result.get('strike1', 0),
+                            'High Strike': result.get('strike2', 0),
+                            'Net Price': result.get('net_debit', 0),
+                            'Margin Req': result.get('margin_requirement', 0),
+                            'Ann ROM %': ann_rom_formatted
+                        }
+                        all_results.append(ui_row)
+
+            except Exception as e:
+                print(f"Error processing box spreads for {asset}: {e}")
+                continue
+
+        return all_results if all_results else None
+
     except Exception as e:
-        error_msg = f"Error in box spreads: {str(e)}"
-        return [{'error': error_msg, 'symbol': '$SPX', 'refreshed': datetime.now().strftime('%H:%M:%S')}]
+        print(f"Error in process_box_spreads_data: {e}")
+        return None
 
 
 def process_vertical_spreads_data(api, synthetic=False):
@@ -271,7 +277,3 @@ def _find_spreads_no_input(api, synthetic=False):
         return spreads_list
     except Exception as e:
         return []
-
-
-# Import ThreadPoolExecutor and as_completed at the module level
-from concurrent.futures import ThreadPoolExecutor, as_completed

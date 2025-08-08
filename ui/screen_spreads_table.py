@@ -52,7 +52,7 @@ class SpreadsTableScreen(Screen):
                 # Format numeric values
                 if isinstance(value, float):
                     if column in ['cagr', 'protection', 'ann_rom']:
-                        row_data.append(f"{value}%")
+                        row_data.append(f"{value:.2f}%")
                     elif column in ['investment', 'max_profit', 'margin_req']:
                         row_data.append(f"${value:,.0f}")
                     else:
@@ -61,6 +61,37 @@ class SpreadsTableScreen(Screen):
                     row_data.append(str(value))
 
             table.add_row(*row_data)
+
+        # Configure table appearance
+        table.set_alternating_row_colors(True)
+        table.set_show_grid(True)
+        table.vertical_header().set_visible(False)
+
+        # Set monospace font for consistent character width
+        font = "Courier New"
+        table.set_font_size(11)
+        table.set_font_family(font)
+
+        # Configure column behavior for consistent alignment
+        header = table.horizontal_header()
+        for i in range(len(columns)):
+            header.set_section_resize_mode(i, "fixed")
+            table.set_column_width(i, 120)  # Fixed width for all columns
+
+        # Set minimum row height for better spacing
+        table.vertical_header().set_default_section_size(30)
+
+        # Style the headers
+        header_style = """
+            QHeaderView::section {
+                background-color: #2b2b2b;
+                color: white;
+                padding: 8px;
+                border: 1px solid #555;
+                font-weight: bold;
+            }
+        """
+        table.set_style_sheet(header_style)
 
     def on_button_pressed(self, event: Button.Pressed):
         """Handle button press events"""
