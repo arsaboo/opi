@@ -16,6 +16,9 @@ from configuration import (
 from logger_config_quiet import get_logger
 import traceback
 
+# Import log cleanup function
+from log_cleanup import cleanup_old_logs
+
 logger = get_logger()
 
 # Initialize API
@@ -286,14 +289,17 @@ def main():
 def main_with_timeout():
     """Main entry point with timeout protection"""
     print("=" * 60)
-    print("🏛️  OPTIONS TRADING INTERFACE")
+    print("OPTIONS TRADING INTERFACE")
     print("=" * 60)
+    
+    # Clean up old log files (keep last 2 days)
+    cleanup_old_logs()
 
     # Use the existing global API instance
     global api
 
     # Try to setup API with timeout protection (don't block UI startup)
-    print("🔗 Attempting to connect to Schwab API...")
+    print("Attempting to connect to Schwab API...")
     try:
         api.setup()  # <-- This will block for manual authentication if needed
         api_connected = True
@@ -304,16 +310,16 @@ def main_with_timeout():
     # Token validation before UI
     if api_connected:
         if not is_token_valid(api):
-            print("❌ Authentication failed or token is invalid. Please try again.")
+            print("Authentication failed or token is invalid. Please try again.")
             return
 
     if not api_connected:
-        print("⚠️  API connection failed or timed out")
-        print("📱 Starting UI anyway - you can try to reconnect from the interface")
-        print("🔧 Check your internet connection and API credentials")
+        print("API connection failed or timed out")
+        print("Starting UI anyway - you can try to reconnect from the interface")
+        print("Check your internet connection and API credentials")
 
     # Always start the UI - user can retry connection from within the app
-    print("🚀 Starting Trading UI...")
+    print("Starting Trading UI...")
     try:
         from ui.screen_main import OptionsTradingApp
         app = OptionsTradingApp(api)

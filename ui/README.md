@@ -4,12 +4,14 @@ This directory contains the modern terminal user interface for the Options Tradi
 
 ## Features
 
+- **Instant screen switching** - Tables appear immediately when switching screens (no loading delays)
+- **Progressive data loading** - Data populates in real-time as it becomes available
+- **Seamless transitions** - Switch between screens instantly with proper table structure
 - Modern, interactive terminal interface
 - Real-time market status display
 - Keyboard shortcuts for quick navigation
 - Dedicated screens for different operations
 - Async operations for smooth user experience
-- Instant loading indicator for user feedback when switching screens
 
 ## Installation
 
@@ -35,15 +37,25 @@ python main.py
 - `3` - Check Vertical Spreads
 - `4` - Check Synthetic Covered Calls
 - `5` - View Margin Requirements
+- `6` - View/Cancel Orders
 - `Escape` - Go back (in sub-screens)
 - `Enter` - Select item (in tables)
+
+## Performance Features
+
+The UI is optimized for maximum responsiveness:
+- **Instant screen switches** - Empty tables with proper columns appear immediately
+- **No loading screens** - Clean, immediate transitions between all screens
+- **Progressive data population** - Data fills in as it becomes available
+- **Real-time updates** - All screens show live progress as data loads
+- **Smooth navigation** - Zero delay when switching between different option screens
 
 ## File Structure
 
 - `ui_main.py` - Main entry point for the UI
-- `screen_main.py` - Main menu screen
-- `screen_spreads_table.py` - Dedicated table display for spreads
+- `screen_main.py` - Main menu screen with instant table switching
 - `styles.css` - Textual CSS styling
+- `ui_utils.py` - Data processing utilities
 
 ## Development
 
