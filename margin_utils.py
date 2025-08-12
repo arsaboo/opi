@@ -1,5 +1,5 @@
 import traceback
-from logger_config import get_logger
+from logger import get_logger
 
 def calculate_margin_requirement(asset, strategy_type, **kwargs):
     """

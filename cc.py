@@ -11,8 +11,7 @@ from prettytable import PrettyTable
 from tzlocal import get_localzone
 
 import alert
-from configuration import configuration, spreads
-from logger_config_quiet import get_logger
+from logger import get_logger
 from margin_utils import (
     calculate_annualized_return_on_margin,
     calculate_margin_requirement,

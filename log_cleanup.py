@@ -1,9 +1,9 @@
 import os
 import re
 from datetime import datetime, timedelta
-from logger_config_quiet import get_logger
+from logger import get_logger
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 def cleanup_old_logs(log_dir="logs", days_to_keep=2):
     """

@@ -1,10 +1,10 @@
 from statistics import median
 
 import alert
-from logger_config import get_logger
+from logger import get_logger
 from support import validDateFormat
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 class OptionChain:
     """

@@ -7,3 +7,4 @@ configuration.py
 *.pickle
 *.env
 *.log
+/.vscode/*

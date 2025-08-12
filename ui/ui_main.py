@@ -1,7 +1,7 @@
 import sys
 import os
 import traceback
-from logger_config import get_logger
+from logger import get_logger
 
 # Add the current directory to path for local imports
 current_dir = os.path.dirname(os.path.abspath(__file__))

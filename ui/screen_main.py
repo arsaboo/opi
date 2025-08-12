@@ -10,7 +10,7 @@ import sys
 import os
 import datetime
 import traceback
-from logger_config import get_logger
+from logger import get_logger
 
 # Add parent directory to path for importing main functions
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

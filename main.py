@@ -13,7 +13,7 @@ from configuration import (
     apiRedirectUri,
     appSecret,
 )
-from logger_config_quiet import get_logger
+from logger import get_logger
 import traceback
 
 # Import log cleanup function

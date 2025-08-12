@@ -16,10 +16,10 @@ from schwab.utils import Utils
 
 import alert
 from configuration import SchwabAccountID, debugCanSendOrders
-from logger_config_quiet import get_logger
+from logger import get_logger
 from support import extract_date, extract_strike_price, validDateFormat
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class Api:
