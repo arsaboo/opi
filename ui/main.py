@@ -5,11 +5,26 @@ from textual.containers import Container
 from textual.widgets import Header, Footer, Static
 from .widgets.status_log import StatusLog
 from .widgets.roll_short_options import RollShortOptionsWidget
+from .widgets.check_box_spreads import CheckBoxSpreadsWidget
+from .widgets.check_vertical_spreads import CheckVerticalSpreadsWidget
+from .widgets.check_synthetic_covered_calls import CheckSyntheticCoveredCallsWidget
+from .widgets.view_margin_requirements import ViewMarginRequirementsWidget
 from api import Api
 from configuration import apiKey, apiRedirectUri, appSecret
 
 class OpiApp(App):
     """A Textual app to manage the options trading bot."""
+
+    CSS = """
+    #main_container {
+        height: 1fr;
+    }
+
+    #status_log {
+        height: 5;
+        border: round green;
+    }
+    """
 
     BINDINGS = [
         ("1", "roll_short_options", "Roll Shorts"),
@@ -83,28 +98,28 @@ class OpiApp(App):
         """Action to check box spreads."""
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(Static("Check Box Spreads - Coming Soon!", id="check_box_spreads_widget"))
+        main_container.mount(CheckBoxSpreadsWidget())
         self.query_one(StatusLog).add_message("Check Box Spreads selected.")
 
     def action_check_vertical_spreads(self) -> None:
         """Action to check vertical spreads."""
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(Static("Check Vertical Spreads - Coming Soon!", id="check_vertical_spreads_widget"))
+        main_container.mount(CheckVerticalSpreadsWidget())
         self.query_one(StatusLog).add_message("Check Vertical Spreads selected.")
 
     def action_check_synthetic_covered_calls(self) -> None:
         """Action to check synthetic covered calls."""
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(Static("Check Synthetic Covered Calls - Coming Soon!", id="check_synthetic_covered_calls_widget"))
+        main_container.mount(CheckSyntheticCoveredCallsWidget())
         self.query_one(StatusLog).add_message("Check Synthetic Covered Calls selected.")
 
     def action_view_margin_requirements(self) -> None:
         """Action to view margin requirements."""
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(Static("View Margin Requirements - Coming Soon!", id="view_margin_requirements_widget"))
+        main_container.mount(ViewMarginRequirementsWidget())
         self.query_one(StatusLog).add_message("View Margin Requirements selected.")
 
     def action_toggle_dark(self) -> None:

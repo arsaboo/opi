@@ -12,8 +12,19 @@ class RollShortOptionsWidget(Static):
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
         table = self.query_one(DataTable)
-        table.add_columns("Ticker", "Expiring Option", "DTE", "Roll To", "Config Status")
-        table.add_row("Loading...", "", "", "", "")
+        table.add_columns(
+            "Ticker",
+            "Current Strike",
+            "Expiration",
+            "DTE",
+            "New Strike",
+            "New Expiration",
+            "Roll Out (Days)",
+            "Credit",
+            "Strike Δ",
+            "Config Status",
+        )
+        table.add_row("Loading...", "", "", "", "", "", "", "", "", "")
         self.run_get_expiring_shorts_data()
 
     @work
@@ -24,6 +35,17 @@ class RollShortOptionsWidget(Static):
         table.clear()
         if data:
             for row in data:
-                table.add_row(row["Ticker"], row["Expiring Option"], row["DTE"], row["Roll To"], row["Config Status"])
+                table.add_row(
+                    row["Ticker"],
+                    row["Current Strike"],
+                    row["Expiration"],
+                    row["DTE"],
+                    row["New Strike"],
+                    row["New Expiration"],
+                    row["Roll Out (Days)"],
+                    row["Credit"],
+                    row["Strike Δ"],
+                    row["Config Status"],
+                )
         else:
-            table.add_row("No expiring options found.", "", "", "", "")
+            table.add_row("No expiring options found.", "", "", "", "", "", "", "", "", "")
