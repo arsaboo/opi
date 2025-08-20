@@ -24,6 +24,68 @@ class OpiApp(App):
         height: 5;
         border: round green;
     }
+
+    /* Table styling */
+    DataTable {
+        height: 1fr;
+    }
+
+    /* Header styling */
+    Header {
+        background: darkblue;
+        color: white;
+        text-style: bold;
+    }
+
+    /* Row styling */
+    DataTable Row {
+        color: white;
+    }
+
+    /* Welcome message */
+    #welcome_message {
+        content-align: center middle;
+        width: 100%;
+        height: 100%;
+        color: yellow;
+        text-style: bold;
+    }
+
+    /* Cell Styles */
+    .positive {
+        color: green;
+        text-style: bold;
+    }
+    .negative {
+        color: red;
+        text-style: bold;
+    }
+    .warning {
+        color: yellow;
+        text-style: bold;
+    }
+    .high {
+        color: lime;
+        text-style: bold;
+    }
+    .low {
+        color: orange;
+        text-style: bold;
+    }
+    .info {
+        color: blue;
+        text-style: bold;
+    }
+    .changed-up {
+        background: #003300;
+        color: lime;
+        text-style: bold;
+    }
+    .changed-down {
+        background: #330000;
+        color: red;
+        text-style: bold;
+    }
     """
 
     BINDINGS = [

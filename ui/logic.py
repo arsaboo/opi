@@ -18,7 +18,7 @@ async def get_expiring_shorts_data(api):
 
         today = datetime.now().date()
         expiring_shorts = [
-            p for p in short_positions 
+            p for p in short_positions
             if (datetime.strptime(p["expiration"], "%Y-%m-%d").date() - today).days <= 30
         ]
 
@@ -27,7 +27,7 @@ async def get_expiring_shorts_data(api):
 
         tasks = [process_short_position(api, short) for short in expiring_shorts]
         results = await asyncio.gather(*tasks)
-        
+
         return [res for res in results if res]
 
     except Exception as e:
@@ -56,7 +56,7 @@ async def process_short_position(api, short):
         else:
             days = configuration[stock_symbol].get("maxRollOutWindow", 30)
             toDate = short_expiration_date + timedelta(days=days)
-            
+
             option_chain_obj = await asyncio.to_thread(OptionChain, api, stock_symbol, toDate, days)
             chain = await asyncio.to_thread(option_chain_obj.get)
 
@@ -68,19 +68,19 @@ async def process_short_position(api, short):
                 if roll_option:
                     new_strike = float(roll_option["strike"])
                     strike_delta = new_strike - current_strike
-                    
+
                     prem_short_contract = await asyncio.to_thread(get_median_price, short["optionSymbol"], chain)
                     roll_premium = await asyncio.to_thread(get_median_price, roll_option["symbol"], chain)
 
                     if prem_short_contract is not None and roll_premium is not None:
                         credit = round(roll_premium - prem_short_contract, 2)
-                    
+
                     if 'date' in roll_option:
                          new_expiration_date = datetime.strptime(roll_option['date'], "%Y-%m-%d").date()
                     else:
                         option_details = await asyncio.to_thread(api.getOptionDetails, roll_option['symbol'])
                         new_expiration_date = datetime.strptime(option_details['expiration'], "%Y-%m-%d").date()
-                    
+
                     new_expiration = str(new_expiration_date)
                     roll_out_days = (new_expiration_date - short_expiration_date).days
 
@@ -156,7 +156,7 @@ async def get_box_spreads_data(api, asset="$SPX"):
 
             best_overall_spread["margin_requirement"] = margin_req
             best_overall_spread["return_on_margin"] = rom
-            
+
             return [{
                 "date": best_overall_spread["date"],
                 "low_strike": best_overall_spread["strike1"],
@@ -200,7 +200,7 @@ async def get_vertical_spreads_data(api, synthetic=False):
                     synthetic,
                 )
             )
-        
+
         results = await asyncio.gather(*tasks)
 
         for asset, best_spread in results:
@@ -214,20 +214,21 @@ async def get_vertical_spreads_data(api, synthetic=False):
                     "ask1": best_spread["ask1"],
                     "bid2": best_spread["bid2"],
                     "ask2": best_spread["ask2"],
-                    "investment": f"{best_spread['total_investment']:.2f}",
-                    "max_profit": f"{best_spread['total_return']:.2f}",
-                    "cagr": f"{best_spread['cagr_percentage']:.2f}%",
-                    "protection": f"{best_spread['downside_protection']:.2f}%",
-                    "margin_req": f"{best_spread['margin_requirement']:.2f}",
-                    "ann_rom": f"{best_spread['return_on_margin']:.2f}%",
+                    # Ensure these are floats for UI logic
+                    "investment": float(best_spread['total_investment']),
+                    "max_profit": float(best_spread['total_return']),
+                    "cagr": float(best_spread['cagr_percentage']) / 100.0,
+                    "protection": float(best_spread['downside_protection']) / 100.0,
+                    "margin_req": float(best_spread['margin_requirement']),
+                    "ann_rom": float(best_spread['return_on_margin']) / 100.0,
                 }
                 if synthetic:
                     row["put_bid"] = best_spread["put_bid"]
                     row["put_ask"] = best_spread["put_ask"]
-                
+
                 spread_results.append(row)
-        
-        spread_results.sort(key=lambda x: float(x["ann_rom"].strip('%')), reverse=True)
+
+        spread_results.sort(key=lambda x: x["ann_rom"], reverse=True)
         return spread_results
 
     except Exception as e:
@@ -245,7 +246,7 @@ async def get_margin_requirements_data(api):
 
         account_data = await asyncio.to_thread(api.connectClient.get_account, api.getAccountHash(), fields=api.connectClient.Account.Fields.POSITIONS)
         account_data = account_data.json()
-        
+
         margin_data = []
         total_margin = 0
 
@@ -258,7 +259,7 @@ async def get_margin_requirements_data(api):
                     if "maintenanceRequirement" in position:
                         margin = position["maintenanceRequirement"]
                     break
-            
+
             if margin > 0:
                 total_margin += margin
                 margin_data.append({
@@ -269,7 +270,7 @@ async def get_margin_requirements_data(api):
                     "count": int(short["count"]),
                     "margin": f"${margin:,.2f}"
                 })
-        
+
         margin_data.sort(key=lambda x: float(x["margin"].strip('$').replace(',', '')), reverse=True)
         return margin_data, total_margin
 
