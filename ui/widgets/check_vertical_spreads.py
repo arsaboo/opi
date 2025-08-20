@@ -16,9 +16,9 @@ class CheckVerticalSpreadsWidget(Static):
             "Asset",
             "Expiration",
             "Strike Low",
-            "Call Low B/A",
+            "Call Low B|A",
             "Strike High",
-            "Call High B/A",
+            "Call High B|A",
             "Investment",
             "Max Profit",
             "CAGR",
@@ -37,9 +37,9 @@ class CheckVerticalSpreadsWidget(Static):
         table.clear()
         if data:
             for row in data:
-                # Extract bid/ask values from the data
-                call_low_ba = f"{row['bid1']:.2f}/{row['ask1']:.2f}"
-                call_high_ba = f"{row['bid2']:.2f}/{row['ask2']:.2f}"
+                # Extract bid/ask values from the data with | separator
+                call_low_ba = f"{row['bid1']:.2f}|{row['ask1']:.2f}"
+                call_high_ba = f"{row['bid2']:.2f}|{row['ask2']:.2f}"
                 
                 table.add_row(
                     row["asset"],

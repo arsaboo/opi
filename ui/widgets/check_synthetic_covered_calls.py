@@ -16,10 +16,10 @@ class CheckSyntheticCoveredCallsWidget(Static):
             "Asset",
             "Expiration",
             "Strike Low",
-            "Call Low B/A",
-            "Put Low B/A",
+            "Call Low B|A",
+            "Put Low B|A",
             "Strike High",
-            "Call High B/A",
+            "Call High B|A",
             "Investment",
             "Max Profit",
             "CAGR",
@@ -38,10 +38,10 @@ class CheckSyntheticCoveredCallsWidget(Static):
         table.clear()
         if data:
             for row in data:
-                # Extract bid/ask values from the data
-                call_low_ba = f"{row['bid1']:.2f}/{row['ask1']:.2f}"
-                call_high_ba = f"{row['bid2']:.2f}/{row['ask2']:.2f}"
-                put_low_ba = f"{row['put_bid']:.2f}/{row['put_ask']:.2f}"
+                # Extract bid/ask values from the data with | separator
+                call_low_ba = f"{row['bid1']:.2f}|{row['ask1']:.2f}"
+                call_high_ba = f"{row['bid2']:.2f}|{row['ask2']:.2f}"
+                put_low_ba = f"{row['put_bid']:.2f}|{row['put_ask']:.2f}"
                 
                 table.add_row(
                     row["asset"],
