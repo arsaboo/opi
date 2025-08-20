@@ -3,6 +3,9 @@ from email.message import EmailMessage
 
 from configuration import botAlert, mailConfig
 
+class BotFailedError(Exception):
+    """Custom exception for bot failures."""
+    pass
 
 class Mail:
     def send(self, subject, message):
@@ -40,7 +43,7 @@ def alert(asset, message, isError=False):
         mail.send(subj, message)
 
         if isError:
-            exit(1)
+            raise BotFailedError(message)
     else:
         if asset:
             print("Asset: " + asset)
@@ -48,7 +51,7 @@ def alert(asset, message, isError=False):
         print(message)
 
         if isError:
-            exit(1)
+            raise BotFailedError(message)
 
 
 def botFailed(asset, message):
