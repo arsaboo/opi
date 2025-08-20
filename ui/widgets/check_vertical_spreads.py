@@ -16,7 +16,9 @@ class CheckVerticalSpreadsWidget(Static):
             "Asset",
             "Expiration",
             "Strike Low",
+            "Call Low B/A",
             "Strike High",
+            "Call High B/A",
             "Investment",
             "Max Profit",
             "CAGR",
@@ -24,7 +26,7 @@ class CheckVerticalSpreadsWidget(Static):
             "Margin Req",
             "Ann. ROM %",
         )
-        table.add_row("Loading...", "", "", "", "", "", "", "", "", "")
+        table.add_row("Loading...", "", "", "", "", "", "", "", "", "", "", "")
         self.run_get_vertical_spreads_data()
 
     @work
@@ -35,11 +37,17 @@ class CheckVerticalSpreadsWidget(Static):
         table.clear()
         if data:
             for row in data:
+                # Extract bid/ask values from the data
+                call_low_ba = f"{row['bid1']:.2f}/{row['ask1']:.2f}"
+                call_high_ba = f"{row['bid2']:.2f}/{row['ask2']:.2f}"
+                
                 table.add_row(
                     row["asset"],
                     row["expiration"],
                     row["strike_low"],
+                    call_low_ba,
                     row["strike_high"],
+                    call_high_ba,
                     row["investment"],
                     row["max_profit"],
                     row["cagr"],
@@ -48,4 +56,4 @@ class CheckVerticalSpreadsWidget(Static):
                     row["ann_rom"],
                 )
         else:
-            table.add_row("No vertical spreads found.", "", "", "", "", "", "", "", "", "")
+            table.add_row("No vertical spreads found.", "", "", "", "", "", "", "", "", "", "", "")

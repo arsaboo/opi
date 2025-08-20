@@ -210,8 +210,10 @@ async def get_vertical_spreads_data(api, synthetic=False):
                     "expiration": best_spread["date"],
                     "strike_low": best_spread["strike1"],
                     "strike_high": best_spread["strike2"],
-                    "low_call_ba": f"{best_spread['bid1']:.2f}/{best_spread['ask1']:.2f}",
-                    "high_call_ba": f"{best_spread['bid2']:.2f}/{best_spread['ask2']:.2f}",
+                    "bid1": best_spread["bid1"],
+                    "ask1": best_spread["ask1"],
+                    "bid2": best_spread["bid2"],
+                    "ask2": best_spread["ask2"],
                     "investment": f"{best_spread['total_investment']:.2f}",
                     "max_profit": f"{best_spread['total_return']:.2f}",
                     "cagr": f"{best_spread['cagr_percentage']:.2f}%",
@@ -220,7 +222,8 @@ async def get_vertical_spreads_data(api, synthetic=False):
                     "ann_rom": f"{best_spread['return_on_margin']:.2f}%",
                 }
                 if synthetic:
-                    row["low_put_ba"] = f"{best_spread['put_bid']:.2f}/{best_spread['put_ask']:.2f}"
+                    row["put_bid"] = best_spread["put_bid"]
+                    row["put_ask"] = best_spread["put_ask"]
                 
                 spread_results.append(row)
         
