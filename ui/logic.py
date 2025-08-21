@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 from datetime import datetime, timedelta
 from configuration import configuration, spreads
 from cc import find_best_rollover, get_median_price
@@ -43,6 +44,25 @@ async def process_short_position(api, short):
         current_strike = float(short["strike"])
         short_expiration_date = datetime.strptime(short["expiration"], "%Y-%m-%d").date()
         dte = (short_expiration_date - datetime.now().date()).days
+
+        # Get underlying price
+        underlying_price = await asyncio.to_thread(api.getATMPrice, stock_symbol)
+        # Determine status
+        value = round(current_strike - underlying_price, 2)
+        ITMLimit = configuration.get(stock_symbol, {}).get("ITMLimit", 25)
+        deepITMLimit = configuration.get(stock_symbol, {}).get("deepITMLimit", 50)
+        deepOTMLimit = configuration.get(stock_symbol, {}).get("deepOTMLimit", 10)
+        if value > 0:
+            status = "OTM"
+        elif value < 0:
+            if abs(value) > deepITMLimit:
+                status = "Deep ITM"
+            elif abs(value) > ITMLimit:
+                status = "ITM"
+            else:
+                status = "Just ITM"
+        else:
+            status = "ATM"
 
         new_strike = "N/A"
         new_expiration = "N/A"
@@ -89,6 +109,8 @@ async def process_short_position(api, short):
             "Current Strike": current_strike,
             "Expiration": str(short_expiration_date),
             "DTE": dte,
+            "Underlying Price": round(underlying_price, 2),
+            "Status": status,
             "New Strike": new_strike,
             "New Expiration": new_expiration,
             "Roll Out (Days)": roll_out_days,
@@ -102,7 +124,7 @@ async def process_short_position(api, short):
 
 async def get_box_spreads_data(api, asset="$SPX"):
     """
-    Fetches box spread data.
+    Fetches both buy and sell box spread data, showing only the best buy (lowest cost) and best sell (highest return) per expiry.
     """
     try:
         days = spreads[asset].get("days", 2000)
@@ -124,53 +146,82 @@ async def get_box_spreads_data(api, asset="$SPX"):
         calls = sorted(calls, key=lambda entry: (datetime.strptime(entry["date"], "%Y-%m-%d"), -max(contract["strike"] for contract in entry["contracts"] if "strike" in contract)))
         puts = sorted(puts, key=lambda entry: (datetime.strptime(entry["date"], "%Y-%m-%d"), -max(contract["strike"] for contract in entry["contracts"] if "strike" in contract)))
 
-        best_overall_spread = None
-        best_overall_cagr = float("-inf")
-
         spread_ranges = range(100, 500, 50)
-        tasks = [
-            asyncio.to_thread(calculate_box_spread_wrapper, spread, calls, puts)
-            for spread in spread_ranges
-        ]
-        results = await asyncio.gather(*tasks)
+        results = []
+        for spread in spread_ranges:
+            buy_result = await asyncio.to_thread(calculate_box_spread_wrapper, spread, calls, puts)
+            for result, _, direction in buy_result:
+                if result is not None:
+                    results.append(result)
 
-        for result, spread, trade_direction in results:
-            if result is not None and result["cagr_percentage"] > best_overall_cagr:
-                best_overall_spread = result
-                best_overall_cagr = result["cagr_percentage"]
-                best_overall_spread["trade_direction"] = trade_direction.capitalize()
-
-        if best_overall_spread is not None:
-            margin_req = calculate_margin_requirement(
-                asset,
-                'credit_spread',
-                strike_diff=best_overall_spread["strike2"] - best_overall_spread["strike1"],
-                contracts=1
-            )
-            if best_overall_spread["trade_direction"].lower() == "sell":
-                profit = best_overall_spread["total_investment"] - best_overall_spread["total_return"]
+        # Group by expiry date and direction, keep only best buy (lowest cost) and best sell (highest return)
+        best_spreads = {}
+        for spread in results:
+            key = (spread["date"], spread["direction"])
+            ann_cost_return_val = float(spread["ann_rom"])
+            if spread["direction"] == "Buy":
+                # For buy, keep the lowest (most negative) annualized cost
+                if key not in best_spreads or ann_cost_return_val < float(best_spreads[key]["ann_rom"]):
+                    best_spreads[key] = spread
             else:
-                profit = best_overall_spread["total_return"] - best_overall_spread["total_investment"]
-            days_to_expiry = (datetime.strptime(best_overall_spread["date"], "%Y-%m-%d") - datetime.today()).days
-            rom = calculate_annualized_return_on_margin(profit, margin_req, days_to_expiry)
+                # For sell, keep the highest annualized return
+                if key not in best_spreads or ann_cost_return_val > float(best_spreads[key]["ann_rom"]):
+                    best_spreads[key] = spread
 
-            best_overall_spread["margin_requirement"] = margin_req
-            best_overall_spread["return_on_margin"] = rom
+        box_spreads = []
+        for spread in best_spreads.values():
+            try:
+                start_date = datetime.today()
+                end_date = datetime.strptime(spread["date"], "%Y-%m-%d")
+                days = (end_date - start_date).days
+                spread_amount = abs(float(spread["high_strike"]) - float(spread["low_strike"])) * 100
 
-            return [{
-                "date": best_overall_spread["date"],
-                "low_strike": best_overall_spread["strike1"],
-                "high_strike": best_overall_spread["strike2"],
-                "net_price": best_overall_spread["net_debit"],
-                "cagr": f"{best_overall_spread['cagr_percentage']:.2f}%",
-                "direction": best_overall_spread["trade_direction"],
-                "borrowed": best_overall_spread.get("total_investment", "N/A"),
-                "repayment": best_overall_spread.get("total_return", "N/A"),
-                "margin_req": best_overall_spread["margin_requirement"],
-                "ann_rom": f"{best_overall_spread['return_on_margin']:.2f}%",
-            }]
-        else:
-            return []
+                # For buying a box: pay upfront (investment), get more at expiry (repayment)
+                # For selling a box: receive upfront (borrowed), pay more at expiry (repayment_sell)
+                if spread["direction"] == "Buy":
+                    investment = float(spread.get("investment", 0))
+                    repayment = float(spread.get("repayment", 0))
+                    # Pay investment now, receive repayment at expiry
+                    # Annualized return = ((repayment - investment) / investment) * (365 / days)
+                    if investment > 0 and repayment > 0 and days > 0:
+                        ann_return = ((repayment - investment) / investment) * (365 / days) * 100
+                        ann_cost_return = f"{ann_return:.2f}%"
+                    else:
+                        ann_cost_return = ""
+                else:
+                    borrowed = float(spread.get("borrowed", 0))
+                    repayment_sell = float(spread.get("repayment_sell", 0))
+                    # Receive borrowed now, pay repayment_sell at expiry
+                    # Annualized cost = ((repayment_sell - borrowed) / borrowed) * (365 / days)
+                    # Note: This is a cost to us (negative return) since we pay more than we receive
+                    if borrowed > 0 and repayment_sell > 0 and days > 0:
+                        ann_cost = ((repayment_sell - borrowed) / borrowed) * (365 / days) * 100
+                        ann_cost_return = f"-{ann_cost:.2f}%"  # Negative because it's a cost
+                    else:
+                        ann_cost_return = ""
+            except Exception:
+                ann_cost_return = spread["ann_rom"]
+
+            box_spreads.append({
+                "direction": spread["direction"],
+                "date": spread["date"],
+                "low_strike": spread["strike1"],
+                "high_strike": spread["strike2"],
+                "low_call_ba": f"{spread['low_call_bid']}/{spread['low_call_ask']}",
+                "high_call_ba": f"{spread['high_call_bid']}/{spread['high_call_ask']}",
+                "low_put_ba": f"{spread['low_put_bid']}/{spread['low_put_ask']}",
+                "high_put_ba": f"{spread['high_put_bid']}/{spread['high_put_ask']}",
+                "net_price": spread["net_price"],
+                "investment": spread.get("investment", ""),
+                "repayment": spread.get("repayment", ""),
+                "borrowed": spread.get("borrowed", ""),
+                "repayment_sell": spread.get("repayment_sell", ""),
+                "ann_cost_return": ann_cost_return,
+                "margin_req": spread["margin_req"],
+            })
+        # Sort by expiration date ascending
+        box_spreads.sort(key=lambda x: x["date"])
+        return box_spreads
 
     except Exception as e:
         print(f"Error in get_box_spreads_data: {e}")

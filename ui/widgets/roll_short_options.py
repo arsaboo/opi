@@ -23,6 +23,8 @@ class RollShortOptionsWidget(Static):
             "Current Strike",
             "Expiration",
             "DTE",
+            "Underlying Price",
+            "Status",
             "New Strike",
             "New Expiration",
             "Roll Out (Days)",
@@ -34,7 +36,6 @@ class RollShortOptionsWidget(Static):
         # Style the header
         table.zebra_stripes = True
         table.header_style = "bold on blue"
-        table.add_row("Loading...", "", "", "", "", "", "", "", "", "", "")
         self.run_get_expiring_shorts_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_expiring_shorts_data)
@@ -80,26 +81,28 @@ class RollShortOptionsWidget(Static):
             prev_rows = self._prev_rows or []
             for idx, row in enumerate(data):
                 prev_row = prev_rows[idx] if idx < len(prev_rows) else {}
-                
+
                 # Function to style a cell value
                 def style_cell(col_name, col_index):
                     val = str(row[col_name])
                     prev_val = prev_row.get(col_name)
                     style = get_cell_class(col_name, val, prev_val)
                     # Justify Credit and Strike Δ to the right
-                    justify = "right" if col_index in [7, 8] else "left"
+                    justify = "right" if col_index in [9, 10] else "left"
                     return Text(val, style=style, justify=justify)
-                
+
                 cells = [
                     Text(str(row["Ticker"]), style="", justify="left"),
                     Text(str(row["Current Strike"]), style="", justify="right"),
                     Text(str(row["Expiration"]), style="", justify="left"),
                     Text(str(row["DTE"]), style="", justify="right"),
+                    Text(str(row.get("Underlying Price", "")), style="", justify="right"),
+                    Text(str(row.get("Status", "")), style="", justify="left"),
                     Text(str(row["New Strike"]), style="", justify="right"),
                     Text(str(row["New Expiration"]), style="", justify="left"),
                     Text(str(row["Roll Out (Days)"]), style="", justify="right"),
-                    style_cell("Credit", 7),
-                    style_cell("Strike Δ", 8),
+                    style_cell("Credit", 9),
+                    style_cell("Strike Δ", 10),
                     Text(str(row["Config Status"]), style=get_cell_class("Config Status", row["Config Status"]), justify="left"),
                     Text(refreshed_time, style="", justify="left")
                 ]
@@ -107,4 +110,4 @@ class RollShortOptionsWidget(Static):
                 table.add_row(*cells)
             self._prev_rows = data
         else:
-            table.add_row("No expiring options found.", "", "", "", "", "", "", "", "", "", refreshed_time)
+            table.add_row("No expiring options found.", *[""] * 12, refreshed_time)

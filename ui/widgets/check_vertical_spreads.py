@@ -36,7 +36,6 @@ class CheckVerticalSpreadsWidget(Static):
         # Style the header
         table.zebra_stripes = True
         table.header_style = "bold on blue"
-        table.add_row("Loading...", "", "", "", "", "", "", "", "", "", "", "", "")
         self.run_get_vertical_spreads_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_vertical_spreads_data)
