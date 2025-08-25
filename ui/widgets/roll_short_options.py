@@ -25,6 +25,7 @@ class RollShortOptionsWidget(Static):
             "DTE",
             "Underlying Price",
             "Status",
+            "Quantity",
             "New Strike",
             "New Expiration",
             "Roll Out (Days)",
@@ -88,7 +89,7 @@ class RollShortOptionsWidget(Static):
                     prev_val = prev_row.get(col_name)
                     style = get_cell_class(col_name, val, prev_val)
                     # Justify Credit and Strike Δ to the right
-                    justify = "right" if col_index in [9, 10] else "left"
+                    justify = "right" if col_index in [10, 11] else "left"
                     return Text(val, style=style, justify=justify)
 
                 cells = [
@@ -98,11 +99,12 @@ class RollShortOptionsWidget(Static):
                     Text(str(row["DTE"]), style="", justify="right"),
                     Text(str(row.get("Underlying Price", "")), style="", justify="right"),
                     Text(str(row.get("Status", "")), style="", justify="left"),
+                    Text(str(row.get("Quantity", row.get("count", ""))), style="", justify="right"),
                     Text(str(row["New Strike"]), style="", justify="right"),
                     Text(str(row["New Expiration"]), style="", justify="left"),
                     Text(str(row["Roll Out (Days)"]), style="", justify="right"),
-                    style_cell("Credit", 9),
-                    style_cell("Strike Δ", 10),
+                    style_cell("Credit", 10),
+                    style_cell("Strike Δ", 11),
                     Text(str(row["Config Status"]), style=get_cell_class("Config Status", row["Config Status"]), justify="left"),
                     Text(refreshed_time, style="", justify="left")
                 ]
@@ -110,4 +112,4 @@ class RollShortOptionsWidget(Static):
                 table.add_row(*cells)
             self._prev_rows = data
         else:
-            table.add_row("No expiring options found.", *[""] * 12, refreshed_time)
+            table.add_row("No expiring options found.", *[""] * 13, refreshed_time)

@@ -111,6 +111,7 @@ async def process_short_position(api, short):
             "DTE": dte,
             "Underlying Price": round(underlying_price, 2),
             "Status": status,
+            "Quantity": int(short.get("count", 0)),
             "New Strike": new_strike,
             "New Expiration": new_expiration,
             "Roll Out (Days)": roll_out_days,
