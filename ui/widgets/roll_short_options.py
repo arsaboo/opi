@@ -112,4 +112,4 @@ class RollShortOptionsWidget(Static):
                 table.add_row(*cells)
             self._prev_rows = data
         else:
-            table.add_row("No expiring options found.", *[""] * 13, refreshed_time)
+            table.add_row("No expiring options found.", *[""] * 12, refreshed_time)
