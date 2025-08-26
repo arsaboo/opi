@@ -2,6 +2,7 @@ from textual.widgets import DataTable, Static, Label
 from textual import work
 from datetime import datetime
 from .. import logic
+from ..widgets.status_log import StatusLog
 from rich.text import Text
 
 class ViewMarginRequirementsWidget(Static):
@@ -18,6 +19,12 @@ class ViewMarginRequirementsWidget(Static):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
+        # Update the header
+        self.app.update_header("Options Trader - Margin Requirements")
+        
+        # Check market status
+        self.check_market_status()
+        
         table = self.query_one(DataTable)
         table.add_columns(
             "Symbol",
@@ -31,9 +38,26 @@ class ViewMarginRequirementsWidget(Static):
         # Style the header
         table.zebra_stripes = True
         table.header_style = "bold on blue"
+        # Enable row selection
+        table.cursor_type = "row"
+        # Make sure the table can receive focus
+        table.focus()
         self.run_get_margin_requirements_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_margin_requirements_data)
+        
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.app.api.getOptionExecutionWindow()
+            if not exec_window["open"]:
+                from configuration import debugMarketOpen
+                if not debugMarketOpen:
+                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
 
     @work
     async def run_get_margin_requirements_data(self) -> None:

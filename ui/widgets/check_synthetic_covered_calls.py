@@ -1,8 +1,13 @@
 from textual.widgets import DataTable, Static
 from textual import work
+from textual.screen import Screen
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from .. import logic
+from ..widgets.status_log import StatusLog
+from ..widgets.order_confirmation import OrderConfirmationDialog
 from rich.text import Text
+import asyncio
 
 class CheckSyntheticCoveredCallsWidget(Static):
     """A widget to display synthetic covered calls."""
@@ -10,6 +15,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
     def __init__(self):
         super().__init__()
         self._prev_rows = None
+        self._synthetic_covered_calls_data = []  # Store actual synthetic covered calls data for order placement
 
     def compose(self):
         """Create child widgets."""
@@ -17,6 +23,12 @@ class CheckSyntheticCoveredCallsWidget(Static):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
+        # Update the header
+        self.app.update_header("Options Trader - Synthetic Covered Calls")
+        
+        # Check market status
+        self.check_market_status()
+        
         table = self.query_one(DataTable)
         table.add_columns(
             "Asset",
@@ -37,9 +49,26 @@ class CheckSyntheticCoveredCallsWidget(Static):
         # Style the header
         table.zebra_stripes = True
         table.header_style = "bold on blue"
+        # Enable row selection
+        table.cursor_type = "row"
+        # Make sure the table can receive focus
+        table.focus()
         self.run_get_synthetic_covered_calls_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_synthetic_covered_calls_data)
+        
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.app.api.getOptionExecutionWindow()
+            if not exec_window["open"]:
+                from configuration import debugMarketOpen
+                if not debugMarketOpen:
+                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
 
     @work
     async def run_get_synthetic_covered_calls_data(self) -> None:
@@ -235,3 +264,73 @@ class CheckSyntheticCoveredCallsWidget(Static):
             self._prev_rows = data
         else:
             table.add_row("No synthetic covered calls found.", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
+
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.app.api.getOptionExecutionWindow()
+            if not exec_window["open"]:
+                from configuration import debugMarketOpen
+                if not debugMarketOpen:
+                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+
+    def on_data_table_row_selected(self, event) -> None:
+        """Handle row selection."""
+        # Get the selected row data
+        row_index = event.cursor_row
+        if hasattr(self, '_synthetic_covered_calls_data') and self._synthetic_covered_calls_data and row_index < len(self._synthetic_covered_calls_data):
+            selected_data = self._synthetic_covered_calls_data[row_index]
+            # Show order confirmation dialog
+            self.show_order_confirmation(selected_data)
+
+    def show_order_confirmation(self, synthetic_covered_call_data) -> None:
+        """Show order confirmation dialog."""
+        # Prepare order details
+        order_details = {
+            "Type": "Synthetic Covered Call",
+            "Asset": synthetic_covered_call_data.get("asset", ""),
+            "Expiration": synthetic_covered_call_data.get("expiration", ""),
+            "Strike Low": synthetic_covered_call_data.get("strike_low", ""),
+            "Strike High": synthetic_covered_call_data.get("strike_high", ""),
+            "Investment": synthetic_covered_call_data.get("investment", ""),
+            "Max Profit": synthetic_covered_call_data.get("max_profit", ""),
+            "Annualized Return": synthetic_covered_call_data.get("ann_rom", "")
+        }
+        
+        # Create and show the dialog
+        dialog = OrderConfirmationDialog(order_details)
+        self.app.push_screen(dialog, callback=self.handle_order_confirmation)
+
+    def handle_order_confirmation(self, confirmed: bool) -> None:
+        """Handle the user's response to the order confirmation."""
+        if confirmed:
+            self.app.query_one(StatusLog).add_message("Order confirmed. Placing synthetic covered call order...")
+            # TODO: Implement actual synthetic covered call order placement logic
+            self.place_synthetic_covered_call_order()
+        else:
+            self.app.query_one(StatusLog).add_message("Synthetic covered call order cancelled by user.")
+
+    @work
+    async def place_synthetic_covered_call_order(self) -> None:
+        """Place the synthetic covered call order."""
+        try:
+            # Get the selected row data
+            table = self.query_one(DataTable)
+            cursor_row = table.cursor_row
+            
+            if cursor_row < len(self._synthetic_covered_calls_data):
+                synthetic_covered_call_data = self._synthetic_covered_calls_data[cursor_row]
+                
+                # TODO: Implement actual synthetic covered call order placement
+                # This would involve calling the appropriate strategy functions
+                # from strategies.py to place the synthetic covered call order
+                
+                self.app.query_one(StatusLog).add_message("Synthetic covered call order placement not yet implemented.")
+            else:
+                self.app.query_one(StatusLog).add_message("Error: No valid row selected for synthetic covered call order placement.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error placing synthetic covered call order: {e}")

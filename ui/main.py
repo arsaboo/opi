@@ -15,6 +15,8 @@ from configuration import apiKey, apiRedirectUri, appSecret
 class OpiApp(App):
     """A Textual app to manage the options trading bot."""
 
+    TITLE = "Options Trader"
+
     CSS = """
     #main_container {
         height: 1fr;
@@ -49,6 +51,53 @@ class OpiApp(App):
         height: 100%;
         color: yellow;
         text-style: bold;
+    }
+
+    /* Order Management Screen */
+    #order_management_container {
+        height: 1fr;
+        align: center middle;
+    }
+
+    #title {
+        content-align: center middle;
+        width: 100%;
+        height: 3;
+        color: yellow;
+        text-style: bold;
+    }
+
+    #buttons {
+        height: 3;
+        margin: 1;
+        align: center middle;
+    }
+
+    /* Order Confirmation Dialog */
+    #overlay {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.5);
+    }
+
+    #dialog {
+        padding: 2;
+        width: 80%;
+        height: auto;
+        background: $surface;
+        border: round $primary;
+        align: center middle;
+    }
+
+    #order_details {
+        margin: 1;
+        padding: 1;
+        border: round white;
+        height: auto;
+    }
+
+    /* Button styling */
+    Button {
+        margin: 1;
     }
 
     /* Cell Styles */
@@ -94,13 +143,14 @@ class OpiApp(App):
         ("3", "check_vertical_spreads", "Vertical Spreads"),
         ("4", "check_synthetic_covered_calls", "Synth Cov Calls"),
         ("5", "view_margin_requirements", "View Margin"),
+        ("6", "order_management", "Order Management"),
         ("d", "toggle_dark", "Toggle dark mode"),
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self):
+    def __init__(self, api=None):
         super().__init__()
-        self.api = Api(apiKey, apiRedirectUri, appSecret)
+        self.api = api  # API instance is passed in
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -111,46 +161,39 @@ class OpiApp(App):
 
     def on_mount(self) -> None:
         """Called when the app is mounted."""
-        self.query_one(StatusLog).add_message("Initializing API...")
-        if not self.setup_api_with_retry():
-            self.query_one(StatusLog).add_message("API initialization failed. Please check your configuration and token.")
-            return
-        self.query_one(StatusLog).add_message("API initialized successfully.")
+        # Check market status
+        self.check_market_status()
+        
         self.query_one(StatusLog).add_message("Welcome to the Options Trading Bot! Press a key to select an option.")
         main_container = self.query_one("#main_container")
-        main_container.mount(Static("Welcome! Please select an option from the footer.", id="welcome_message"))
+        main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
 
-    def setup_api_with_retry(self, max_attempts=3):
-        """Set up the API with retry logic specifically for authentication errors"""
-        for attempt in range(1, max_attempts + 1):
-            try:
-                self.api.setup()
-                return True
-            except Exception as e:
-                error_str = str(e)
-                self.query_one(StatusLog).add_message(f"API setup error: {error_str}")
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.api.getOptionExecutionWindow()
+            if exec_window["open"]:
+                self.query_one(StatusLog).add_message("Market is open, running the program now...")
+            else:
+                message = "Market is closed"
+                from configuration import debugMarketOpen
+                if debugMarketOpen:
+                    message += " but the program will work in debug mode"
+                self.query_one(StatusLog).add_message(message + ".")
 
-                is_last_attempt = attempt >= max_attempts
+        except Exception as e:
+            self.query_one(StatusLog).add_message(f"Error checking market status: {e}")
 
-                if "refresh_token_authentication_error" in error_str and not is_last_attempt:
-                    self.query_one(StatusLog).add_message("Token authentication failed. Deleting token and retrying...")
-                    self.api.delete_token()
-
-                if is_last_attempt:
-                    self.query_one(StatusLog).add_message(f"Failed to initialize API after {max_attempts} attempts")
-                    try:
-                        alert.botFailed(None, f"Failed to initialize API after {max_attempts} attempts: {error_str}")
-                    except alert.BotFailedError:
-                        pass # Error is already logged, just preventing the crash
-                    return False
-
-                self.query_one(StatusLog).add_message(f"Retrying setup (attempt {attempt}/{max_attempts})...")
-                time.sleep(2)
-
-        return False
+    def update_header(self, title: str) -> None:
+        """Update the app title."""
+        self.title = title
+        # Force a refresh of the header
+        header = self.query_one(Header)
+        header.refresh()
 
     def action_roll_short_options(self) -> None:
         """Action to roll short options."""
+        self.update_header("Options Trader - Roll Short Calls")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(RollShortOptionsWidget())
@@ -158,6 +201,7 @@ class OpiApp(App):
 
     def action_check_box_spreads(self) -> None:
         """Action to check box spreads."""
+        self.update_header("Options Trader - Box Spreads")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(CheckBoxSpreadsWidget())
@@ -165,6 +209,7 @@ class OpiApp(App):
 
     def action_check_vertical_spreads(self) -> None:
         """Action to check vertical spreads."""
+        self.update_header("Options Trader - Vertical Spreads")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(CheckVerticalSpreadsWidget())
@@ -172,6 +217,11 @@ class OpiApp(App):
 
     def action_check_synthetic_covered_calls(self) -> None:
         """Action to check synthetic covered calls."""
+        self.update_header("Options Trader - Synthetic Covered Calls")
+        main_container = self.query_one("#main_container")
+        main_container.remove_children()
+        main_container.mount(CheckSyntheticCoveredCallsWidget())
+        self.query_one(StatusLog).add_message("Check Synthetic Covered Calls selected.")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(CheckSyntheticCoveredCallsWidget())
@@ -179,10 +229,20 @@ class OpiApp(App):
 
     def action_view_margin_requirements(self) -> None:
         """Action to view margin requirements."""
+        self.update_header("Options Trader - Margin Requirements")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(ViewMarginRequirementsWidget())
         self.query_one(StatusLog).add_message("View Margin Requirements selected.")
+
+    def action_order_management(self) -> None:
+        """Action to manage orders."""
+        self.update_header("Options Trader - Order Management")
+        from .widgets.order_management import OrderManagementWidget
+        main_container = self.query_one("#main_container")
+        main_container.remove_children()
+        main_container.mount(OrderManagementWidget())
+        self.query_one(StatusLog).add_message("Order Management selected.")
 
     def action_toggle_dark(self) -> None:
         """An action to toggle dark mode."""

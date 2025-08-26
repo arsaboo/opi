@@ -1,8 +1,13 @@
 from textual.widgets import DataTable, Static
 from textual import work
+from textual.screen import Screen
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from .. import logic
+from ..widgets.status_log import StatusLog
+from ..widgets.order_confirmation import OrderConfirmationDialog
 from rich.text import Text
+import asyncio
 
 class CheckBoxSpreadsWidget(Static):
     """A widget to display box spreads."""
@@ -10,6 +15,7 @@ class CheckBoxSpreadsWidget(Static):
     def __init__(self):
         super().__init__()
         self._prev_rows = None  # Store previous data for comparison
+        self._box_spreads_data = []  # Store actual box spreads data for order placement
 
     def compose(self):
         """Create child widgets."""
@@ -17,6 +23,12 @@ class CheckBoxSpreadsWidget(Static):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
+        # Update the header
+        self.app.update_header("Options Trader - Box Spreads")
+        
+        # Check market status
+        self.check_market_status()
+        
         table = self.query_one(DataTable)
         table.add_columns(
             "Direction",
@@ -38,9 +50,80 @@ class CheckBoxSpreadsWidget(Static):
         )
         table.zebra_stripes = True
         table.header_style = "bold on blue"
+        table.cursor_type = "row"
+        table.focus()
         self.run_get_box_spreads_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_box_spreads_data)
+        
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.app.api.getOptionExecutionWindow()
+            if not exec_window["open"]:
+                from configuration import debugMarketOpen
+                if not debugMarketOpen:
+                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+
+    def on_data_table_row_selected(self, event) -> None:
+        """Handle row selection."""
+        # Get the selected row data
+        row_index = event.cursor_row
+        if hasattr(self, '_box_spreads_data') and self._box_spreads_data and row_index < len(self._box_spreads_data):
+            selected_data = self._box_spreads_data[row_index]
+            # Show order confirmation dialog
+            self.show_order_confirmation(selected_data)
+
+    def show_order_confirmation(self, box_spread_data) -> None:
+        """Show order confirmation dialog."""
+        # Prepare order details
+        order_details = {
+            "Type": "Box Spread",
+            "Direction": box_spread_data.get("direction", ""),
+            "Date": box_spread_data.get("date", ""),
+            "Low Strike": box_spread_data.get("low_strike", ""),
+            "High Strike": box_spread_data.get("high_strike", ""),
+            "Net Price": box_spread_data.get("net_price", ""),
+            "Annualized Return": box_spread_data.get("ann_cost_return", "")
+        }
+        
+        # Create and show the dialog
+        dialog = OrderConfirmationDialog(order_details)
+        self.app.push_screen(dialog, callback=self.handle_order_confirmation)
+
+    def handle_order_confirmation(self, confirmed: bool) -> None:
+        """Handle the user's response to the order confirmation."""
+        if confirmed:
+            self.app.query_one(StatusLog).add_message("Order confirmed. Placing box spread order...")
+            # TODO: Implement actual box spread order placement logic
+            self.place_box_spread_order()
+        else:
+            self.app.query_one(StatusLog).add_message("Box spread order cancelled by user.")
+
+    @work
+    async def place_box_spread_order(self) -> None:
+        """Place the box spread order."""
+        try:
+            # Get the selected row data
+            table = self.query_one(DataTable)
+            cursor_row = table.cursor_row
+            
+            if cursor_row < len(self._box_spreads_data):
+                box_spread_data = self._box_spreads_data[cursor_row]
+                
+                # TODO: Implement actual box spread order placement
+                # This would involve calling the appropriate strategy functions
+                # from strategies.py to place the box spread order
+                
+                self.app.query_one(StatusLog).add_message("Box spread order placement not yet implemented.")
+            else:
+                self.app.query_one(StatusLog).add_message("Error: No valid row selected for box spread order placement.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error placing box spread order: {e}")
 
     @work
     async def run_get_box_spreads_data(self) -> None:
@@ -133,8 +216,10 @@ class CheckBoxSpreadsWidget(Static):
 
         if data:
             prev_rows = self._prev_rows or []
+            self._box_spreads_data = []  # Clear previous box spreads data
             for idx, row in enumerate(data):
                 prev_row = prev_rows[idx] if idx < len(prev_rows) else {}
+                self._box_spreads_data.append(row)  # Store actual data for order placement
 
                 # Function to style a cell value
                 def style_cell(col_name):

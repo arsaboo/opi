@@ -470,15 +470,120 @@ class Api:
         # throws error if cant cancel (code 400 - 404)
         assert r.status_code == 200, r.raise_for_status()
 
-    def checkAccountHasEnoughToCover(
-        self,
-        asset,
-        existingSymbol,
-        amountWillBuyBack,
-        amountToCover,
-        optionStrikeToCover,
-        optionDateToCover,
-    ):
+    def getRecentOrders(self, max_results=50):
+        """Get recent orders for the account."""
+        try:
+            # Try different approaches to get orders
+            logger.debug(f"Attempting to fetch orders with account hash: {self.getAccountHash()}")
+            
+            # First try: Get orders with basic parameters using account-specific method
+            try:
+                r = self.connectClient.get_orders_for_account(
+                    self.getAccountHash(),
+                    max_results=max_results
+                )
+                r.raise_for_status()
+                data = r.json()
+                logger.debug(f"Orders fetched successfully: {len(data) if isinstance(data, list) else 'Not a list'}")
+                return data
+            except Exception as e:
+                logger.error(f"Error with basic get_orders_for_account: {e}")
+            
+            # Second try: Get orders with status filter
+            try:
+                r = self.connectClient.get_orders_for_account(
+                    self.getAccountHash(),
+                    max_results=max_results,
+                    status=self.connectClient.Order.Status.ALL
+                )
+                r.raise_for_status()
+                data = r.json()
+                logger.debug(f"Orders with status filter: {len(data) if isinstance(data, list) else 'Not a list'}")
+                return data
+            except Exception as e:
+                logger.error(f"Error with status filter get_orders_for_account: {e}")
+                
+            # Third try: Get orders with different parameters
+            try:
+                from datetime import datetime, timedelta
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=30)
+                
+                r = self.connectClient.get_orders_for_account(
+                    self.getAccountHash(),
+                    max_results=max_results,
+                    from_entered_datetime=start_date,
+                    to_entered_datetime=end_date
+                )
+                r.raise_for_status()
+                data = r.json()
+                logger.debug(f"Orders with date filter: {len(data) if isinstance(data, list) else 'Not a list'}")
+                return data
+            except Exception as e:
+                logger.error(f"Error with date filter get_orders_for_account: {e}")
+                
+            # If all attempts fail, return empty list
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error fetching recent orders: {e}")
+            return []
+
+    def formatOrderForDisplay(self, order):
+        """Format an order for display in the UI."""
+        try:
+            logger.debug(f"Formatting order: {order}")
+            order_id = order.get("orderId", "")
+            status = order.get("status", "")
+            entered_time = order.get("enteredTime", "")
+            
+            # Extract asset and order type information
+            asset = ""
+            order_type = ""
+            quantity = ""
+            price = ""
+            
+            # Handle different order structures
+            if "orderLegCollection" in order and order["orderLegCollection"]:
+                first_leg = order["orderLegCollection"][0]
+                if "instrument" in first_leg:
+                    # Try to get the underlying symbol first, then fall back to symbol
+                    asset = first_leg["instrument"].get("underlyingSymbol", "")
+                    if not asset:
+                        asset = first_leg["instrument"].get("symbol", "")
+                
+                # Use instruction instead of orderLegType for better accuracy
+                order_type = first_leg.get("instruction", first_leg.get("orderLegType", ""))
+                quantity = first_leg.get("quantity", "")
+            
+            # Try different ways to get price
+            if "price" in order:
+                price = order["price"]
+            elif "orderPrice" in order:
+                price = order["orderPrice"]
+            
+            formatted_order = {
+                "order_id": order_id,
+                "status": status,
+                "entered_time": entered_time,
+                "asset": asset,
+                "order_type": order_type,
+                "quantity": quantity,
+                "price": price
+            }
+            logger.debug(f"Formatted order: {formatted_order}")
+            return formatted_order
+        except Exception as e:
+            logger.error(f"Error formatting order: {e}")
+            # Return a more informative error row
+            return {
+                "order_id": "Error",
+                "status": "Format Error",
+                "entered_time": "",
+                "asset": str(e),
+                "order_type": "",
+                "quantity": "",
+                "price": ""
+            }
         r = self.connectClient.get_account(
             self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
         )

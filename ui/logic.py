@@ -8,6 +8,10 @@ from optionChain import OptionChain
 from strategies import calculate_box_spread_wrapper, calculate_spread
 from margin_utils import calculate_margin_requirement, calculate_annualized_return_on_margin
 
+
+# Note: We're using the existing functions from cc.py and strategies.py for order placement
+# rather than implementing new ones here.
+
 async def get_expiring_shorts_data(api):
     """
     Fetches all short positions expiring within 30 days and finds the best rollover for each.

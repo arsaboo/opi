@@ -1,8 +1,13 @@
 from textual.widgets import DataTable, Static
 from textual import work
+from textual.screen import Screen
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from .. import logic
+from ..widgets.status_log import StatusLog
+from ..widgets.order_confirmation import OrderConfirmationDialog
 from rich.text import Text
+import asyncio
 
 class CheckVerticalSpreadsWidget(Static):
     """A widget to display vertical spreads."""
@@ -10,6 +15,7 @@ class CheckVerticalSpreadsWidget(Static):
     def __init__(self):
         super().__init__()
         self._prev_rows = None
+        self._vertical_spreads_data = []  # Store actual vertical spreads data for order placement
 
     def compose(self):
         """Create child widgets."""
@@ -17,6 +23,12 @@ class CheckVerticalSpreadsWidget(Static):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
+        # Update the header
+        self.app.update_header("Options Trader - Vertical Spreads")
+        
+        # Check market status
+        self.check_market_status()
+        
         table = self.query_one(DataTable)
         table.add_columns(
             "Asset",
@@ -36,9 +48,26 @@ class CheckVerticalSpreadsWidget(Static):
         # Style the header
         table.zebra_stripes = True
         table.header_style = "bold on blue"
+        # Enable row selection
+        table.cursor_type = "row"
+        # Make sure the table can receive focus
+        table.focus()
         self.run_get_vertical_spreads_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_vertical_spreads_data)
+        
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.app.api.getOptionExecutionWindow()
+            if not exec_window["open"]:
+                from configuration import debugMarketOpen
+                if not debugMarketOpen:
+                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
 
     @work
     async def run_get_vertical_spreads_data(self) -> None:
@@ -232,3 +261,73 @@ class CheckVerticalSpreadsWidget(Static):
             self._prev_rows = data
         else:
             table.add_row("No vertical spreads found.", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
+
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.app.api.getOptionExecutionWindow()
+            if not exec_window["open"]:
+                from configuration import debugMarketOpen
+                if not debugMarketOpen:
+                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+
+    def on_data_table_row_selected(self, event) -> None:
+        """Handle row selection."""
+        # Get the selected row data
+        row_index = event.cursor_row
+        if hasattr(self, '_vertical_spreads_data') and self._vertical_spreads_data and row_index < len(self._vertical_spreads_data):
+            selected_data = self._vertical_spreads_data[row_index]
+            # Show order confirmation dialog
+            self.show_order_confirmation(selected_data)
+
+    def show_order_confirmation(self, vertical_spread_data) -> None:
+        """Show order confirmation dialog."""
+        # Prepare order details
+        order_details = {
+            "Type": "Vertical Spread",
+            "Asset": vertical_spread_data.get("asset", ""),
+            "Expiration": vertical_spread_data.get("expiration", ""),
+            "Strike Low": vertical_spread_data.get("strike_low", ""),
+            "Strike High": vertical_spread_data.get("strike_high", ""),
+            "Investment": vertical_spread_data.get("investment", ""),
+            "Max Profit": vertical_spread_data.get("max_profit", ""),
+            "Annualized Return": vertical_spread_data.get("ann_rom", "")
+        }
+        
+        # Create and show the dialog
+        dialog = OrderConfirmationDialog(order_details)
+        self.app.push_screen(dialog, callback=self.handle_order_confirmation)
+
+    def handle_order_confirmation(self, confirmed: bool) -> None:
+        """Handle the user's response to the order confirmation."""
+        if confirmed:
+            self.app.query_one(StatusLog).add_message("Order confirmed. Placing vertical spread order...")
+            # TODO: Implement actual vertical spread order placement logic
+            self.place_vertical_spread_order()
+        else:
+            self.app.query_one(StatusLog).add_message("Vertical spread order cancelled by user.")
+
+    @work
+    async def place_vertical_spread_order(self) -> None:
+        """Place the vertical spread order."""
+        try:
+            # Get the selected row data
+            table = self.query_one(DataTable)
+            cursor_row = table.cursor_row
+            
+            if cursor_row < len(self._vertical_spreads_data):
+                vertical_spread_data = self._vertical_spreads_data[cursor_row]
+                
+                # TODO: Implement actual vertical spread order placement
+                # This would involve calling the appropriate strategy functions
+                # from strategies.py to place the vertical spread order
+                
+                self.app.query_one(StatusLog).add_message("Vertical spread order placement not yet implemented.")
+            else:
+                self.app.query_one(StatusLog).add_message("Error: No valid row selected for vertical spread order placement.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error placing vertical spread order: {e}")

@@ -1,8 +1,13 @@
 from textual.widgets import DataTable, Static
 from textual import work
+from textual.screen import Screen
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 from .. import logic
+from ..widgets.status_log import StatusLog
+from ..widgets.order_confirmation import OrderConfirmationDialog
 from rich.text import Text
+import asyncio
 
 class RollShortOptionsWidget(Static):
     """A widget to display short options to be rolled."""
@@ -10,6 +15,7 @@ class RollShortOptionsWidget(Static):
     def __init__(self):
         super().__init__()
         self._prev_rows = None
+        self._roll_data = []  # Store the actual roll data for each row
 
     def compose(self):
         """Create child widgets."""
@@ -17,6 +23,12 @@ class RollShortOptionsWidget(Static):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
+        # Update the header
+        self.app.update_header("Options Trader - Roll Short Calls")
+        
+        # Check market status
+        self.check_market_status()
+        
         table = self.query_one(DataTable)
         table.add_columns(
             "Ticker",
@@ -37,9 +49,100 @@ class RollShortOptionsWidget(Static):
         # Style the header
         table.zebra_stripes = True
         table.header_style = "bold on blue"
+        # Enable row selection
+        table.cursor_type = "row"
+        # Make sure the table can receive focus
+        table.focus()
         self.run_get_expiring_shorts_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_expiring_shorts_data)
+        
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.app.api.getOptionExecutionWindow()
+            if not exec_window["open"]:
+                from configuration import debugMarketOpen
+                if not debugMarketOpen:
+                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+
+    def on_data_table_row_selected(self, event) -> None:
+        """Handle row selection."""
+        # Get the selected row data
+        row_index = event.cursor_row
+        if hasattr(self, '_roll_data') and self._roll_data and row_index < len(self._roll_data):
+            selected_data = self._roll_data[row_index]
+            # Show order confirmation dialog
+            self.show_order_confirmation(selected_data)
+
+    def show_order_confirmation(self, roll_data) -> None:
+        """Show order confirmation dialog."""
+        # Prepare order details
+        order_details = {
+            "Asset": roll_data.get("Ticker", ""),
+            "Current Strike": roll_data.get("Current Strike", ""),
+            "New Strike": roll_data.get("New Strike", ""),
+            "Expiration": roll_data.get("New Expiration", ""),
+            "Credit": roll_data.get("Credit", ""),
+            "Quantity": roll_data.get("Quantity", roll_data.get("count", ""))
+        }
+        
+        # Create and show the dialog
+        dialog = OrderConfirmationDialog(order_details)
+        self.app.push_screen(dialog, callback=self.handle_order_confirmation)
+
+    def handle_order_confirmation(self, confirmed: bool) -> None:
+        """Handle the user's response to the order confirmation."""
+        if confirmed:
+            self.app.query_one(StatusLog).add_message("Order confirmed. Placing order...")
+            # Place the order using the existing functions
+            self.place_order()
+        else:
+            self.app.query_one(StatusLog).add_message("Order cancelled by user.")
+
+    @work
+    async def place_order(self) -> None:
+        """Place the order using the existing functions."""
+        try:
+            # Get the selected row data
+            table = self.query_one(DataTable)
+            cursor_row = table.cursor_row
+            
+            if cursor_row < len(self._roll_data):
+                roll_data = self._roll_data[cursor_row]
+                
+                # We need to convert the roll_data back to the format expected by the existing functions
+                # This is a simplified example - you'll need to adapt this to your actual data structure
+                short_position = {
+                    "stockSymbol": roll_data.get("Ticker", ""),
+                    "strike": roll_data.get("Current Strike", ""),
+                    "expiration": roll_data.get("Expiration", ""),
+                    "optionSymbol": "",  # This would need to be retrieved from the actual position data
+                    "count": roll_data.get("Quantity", roll_data.get("count", 1))
+                }
+                
+                # Call the appropriate roll function based on the asset
+                from cc import RollSPX, RollCalls
+                if roll_data.get("Ticker") == "$SPX":
+                    # Execute RollSPX in a separate thread to avoid blocking the UI
+                    loop = asyncio.get_event_loop()
+                    with ThreadPoolExecutor() as executor:
+                        await loop.run_in_executor(executor, RollSPX, self.app.api, short_position)
+                else:
+                    # Execute RollCalls in a separate thread to avoid blocking the UI
+                    loop = asyncio.get_event_loop()
+                    with ThreadPoolExecutor() as executor:
+                        await loop.run_in_executor(executor, RollCalls, self.app.api, short_position)
+                        
+                self.app.query_one(StatusLog).add_message("Order placement completed!")
+            else:
+                self.app.query_one(StatusLog).add_message("Error: No valid row selected for order placement.")
+        except Exception as e:
+            self.app.query_one(StatusLog).add_message(f"Error placing order: {e}")
 
     @work
     async def run_get_expiring_shorts_data(self) -> None:
@@ -80,8 +183,12 @@ class RollShortOptionsWidget(Static):
 
         if data:
             prev_rows = self._prev_rows or []
+            self._roll_data = []  # Clear previous roll data
             for idx, row in enumerate(data):
                 prev_row = prev_rows[idx] if idx < len(prev_rows) else {}
+
+                # Store the actual roll data for this row
+                self._roll_data.append(row)
 
                 # Function to style a cell value
                 def style_cell(col_name, col_index):
