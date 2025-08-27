@@ -103,43 +103,84 @@ class OrderConfirmationScreen(ModalScreen):
 
         # Investment & Returns Section
         investment_table = Table.grid(padding=(0, 2), expand=True)
-        investment_table.add_row(
-            Text("Investment", style="cyan"),
-            Text(":", style="white"),
-            Text(f"$ {parse_float(self.order_details.get('Investment', 0)):.2f}", style="white", justify="right")
-        )
-        investment_table.add_row(
-            Text("Max Profit", style="cyan"),
-            Text(":", style="white"),
-            Text(f"$ {parse_float(self.order_details.get('Max Profit', 0)):.2f}", style="bold green", justify="right")
-        )
-        investment_table.add_row(
-            Text("Annualized Return", style="cyan"),
-            Text(":", style="white"),
-            Text(f"{parse_float(self.order_details.get('Annualized Return', self.order_details.get('ann_rom', 0))):.2f}%", style="bold green", justify="right")
-        )
-        # Only show CAGR for non-box spreads
-        if not self.order_details.get("Type", "").startswith("Box Spread"):
+        # Handle box spreads differently
+        if self.order_details.get("Type", "").startswith("Box Spread"):
+            upfront_amount = parse_float(self.order_details.get('Upfront Amount', 0))
+            face_value = parse_float(self.order_details.get('Face Value', 0))
+            
             investment_table.add_row(
-                Text("CAGR", style="cyan"),
+                Text("Upfront Amount", style="cyan"),
                 Text(":", style="white"),
-                Text(f"{parse_float(self.order_details.get('CAGR', 0)):.2f}%", style="white", justify="right")
+                Text(f"$ {upfront_amount:.2f}", style="white", justify="right")
             )
+            investment_table.add_row(
+                Text("Face Value", style="cyan"),
+                Text(":", style="white"),
+                Text(f"$ {face_value:.2f}", style="white", justify="right")
+            )
+            # Show both annualized returns if available
+            mid_ann_return = self.order_details.get('Annualized Return (Mid)', 0)
+            nat_ann_return = self.order_details.get('Annualized Return (Nat)', 0)
+            if mid_ann_return and nat_ann_return and (mid_ann_return != nat_ann_return):
+                investment_table.add_row(
+                    Text("Annualized Return (Mid)", style="cyan"),
+                    Text(":", style="white"),
+                    Text(f"{parse_float(mid_ann_return):.2f}%", style="bold green", justify="right")
+                )
+                investment_table.add_row(
+                    Text("Annualized Return (Nat)", style="cyan"),
+                    Text(":", style="white"),
+                    Text(f"{parse_float(nat_ann_return):.2f}%", style="bold green", justify="right")
+                )
+            else:
+                # Fallback to single annualized return
+                ann_return = self.order_details.get('Annualized Return', self.order_details.get('ann_rom', 0))
+                investment_table.add_row(
+                    Text("Annualized Return", style="cyan"),
+                    Text(":", style="white"),
+                    Text(f"{parse_float(ann_return):.2f}%", style="bold green", justify="right")
+                )
+        else:
+            investment_table.add_row(
+                Text("Investment", style="cyan"),
+                Text(":", style="white"),
+                Text(f"$ {parse_float(self.order_details.get('Investment', 0)):.2f}", style="white", justify="right")
+            )
+            investment_table.add_row(
+                Text("Max Profit", style="cyan"),
+                Text(":", style="white"),
+                Text(f"$ {parse_float(self.order_details.get('Max Profit', 0)):.2f}", style="bold green", justify="right")
+            )
+            investment_table.add_row(
+                Text("Annualized Return", style="cyan"),
+                Text(":", style="white"),
+                Text(f"{parse_float(self.order_details.get('Annualized Return', self.order_details.get('ann_rom', 0))):.2f}%", style="bold green", justify="right")
+            )
+            # Only show CAGR for non-box spreads
+            if not self.order_details.get("Type", "").startswith("Box Spread"):
+                investment_table.add_row(
+                    Text("CAGR", style="cyan"),
+                    Text(":", style="white"),
+                    Text(f"{parse_float(self.order_details.get('CAGR', 0)):.2f}%", style="white", justify="right")
+                )
 
-        # Risk & Margin Section
-        risk_table = Table.grid(padding=(0, 2), expand=True)
-        # Only show Downside Protection for non-box spreads
+        # Risk & Margin Section (only for non-box spreads)
+        risk_section = None
         if not self.order_details.get("Type", "").startswith("Box Spread"):
+            risk_table = Table.grid(padding=(0, 2), expand=True)
+            # Only show Downside Protection for non-box spreads
+            if not self.order_details.get("Type", "").startswith("Box Spread"):
+                risk_table.add_row(
+                    Text("Downside Protection", style="cyan"),
+                    Text(":", style="white"),
+                    Text(f"{parse_float(self.order_details.get('Protection', 0)):.2f}%", style="white", justify="right")
+                )
             risk_table.add_row(
-                Text("Downside Protection", style="cyan"),
+                Text("Margin Requirement", style="cyan"),
                 Text(":", style="white"),
-                Text(f"{parse_float(self.order_details.get('Protection', 0)):.2f}%", style="white", justify="right")
+                Text(f"$ {parse_float(self.order_details.get('Margin Req', 0)):.2f}", style="white", justify="right")
             )
-        risk_table.add_row(
-            Text("Margin Requirement", style="cyan"),
-            Text(":", style="white"),
-            Text(f"$ {parse_float(self.order_details.get('Margin Req', 0)):.2f}", style="white", justify="right")
-        )
+            risk_section = risk_table
 
         # Instructions
         instructions = Text(
@@ -164,9 +205,10 @@ class OrderConfirmationScreen(ModalScreen):
             panel_content.add_row(Text("Investment & Returns", style="bold underline"))
             panel_content.add_row(investment_table)
 
-            # Risk & Margin
-            panel_content.add_row(Text("Risk & Margin", style="bold underline"))
-            panel_content.add_row(risk_table)
+            # Risk & Margin (only for non-box spreads)
+            if risk_section:
+                panel_content.add_row(Text("Risk & Margin", style="bold underline"))
+                panel_content.add_row(risk_section)
 
         # Instructions
         panel_content.add_row("")  # Spacer

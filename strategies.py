@@ -60,62 +60,103 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="mid"):
                     high_put_bid = put_contracts[j]["bid"]
                     high_put_ask = put_contracts[j]["ask"]
 
-                    # Calculate net price for buy/sell
-                    if price.lower() in ["mid", "market"]:
-                        low_call = statistics.median([low_call_bid, low_call_ask])
-                        low_put = statistics.median([low_put_bid, low_put_ask])
-                        high_call = statistics.median([high_call_bid, high_call_ask])
-                        high_put = statistics.median([high_put_bid, high_put_ask])
-                    else:  # natural
+                    # Calculate mid-based prices
+                    if None not in [low_call_bid, low_call_ask, high_call_bid, high_call_ask, 
+                                    low_put_bid, low_put_ask, high_put_bid, high_put_ask]:
+                        low_call_mid = statistics.median([low_call_bid, low_call_ask])
+                        low_put_mid = statistics.median([low_put_bid, low_put_ask])
+                        high_call_mid = statistics.median([high_call_bid, high_call_ask])
+                        high_put_mid = statistics.median([high_put_bid, high_put_ask])
+                        
+                        # Mid-based net price for buy/sell
                         if trade.lower() == "buy":
-                            low_call = low_call_ask
-                            low_put = low_put_bid
-                            high_call = high_call_bid
-                            high_put = high_put_ask
+                            mid_trade_price = low_put_mid + high_call_mid - high_put_mid - low_call_mid
+                            mid_trade_price = -mid_trade_price
                         elif trade.lower() == "sell":
-                            low_call = low_call_bid
-                            low_put = low_put_ask
-                            high_call = high_call_ask
-                            high_put = high_put_bid
-
-                    if None not in [low_call, high_put, high_call, low_put]:
-                        if trade.lower() == "buy":
-                            trade_price = low_put + high_call - high_put - low_call
-                            trade_price = -trade_price
-                        elif trade.lower() == "sell":
-                            trade_price = low_call + high_put - high_call - low_put
+                            mid_trade_price = low_call_mid + high_put_mid - high_call_mid - low_put_mid
                     else:
-                        continue
+                        mid_trade_price = None
+
+                    # Calculate natural/executable prices
+                    if trade.lower() == "buy":
+                        # For buying a box: we're buying puts and calls at ask prices, selling at bid prices
+                        low_call_nat = low_call_ask
+                        low_put_nat = low_put_bid
+                        high_call_nat = high_call_bid
+                        high_put_nat = high_put_ask
+                    elif trade.lower() == "sell":
+                        # For selling a box: we're selling puts and calls at bid prices, buying at ask prices
+                        low_call_nat = low_call_bid
+                        low_put_nat = low_put_ask
+                        high_call_nat = high_call_ask
+                        high_put_nat = high_put_bid
+
+                    # Check if all natural prices are available
+                    if None not in [low_call_nat, high_put_nat, high_call_nat, low_put_nat]:
+                        if trade.lower() == "buy":
+                            nat_trade_price = low_put_nat + high_call_nat - high_put_nat - low_call_nat
+                            nat_trade_price = -nat_trade_price
+                        elif trade.lower() == "sell":
+                            nat_trade_price = low_call_nat + high_put_nat - high_call_nat - low_put_nat
+                    else:
+                        nat_trade_price = None
 
                     low_strike = call_contracts[i]["strike"]
                     high_strike = call_contracts[j]["strike"]
                     days = (datetime.strptime(entry[0]["date"], "%Y-%m-%d").date() - datetime.today().date()).days
 
-                    if days > 1 and trade_price > 0:
-                        if trade.lower() == "buy":
-                            # For buying a box: pay net price now, receive spread at expiry
-                            cagr, cagr_percentage = calculate_cagr(trade_price, spread, days)
-                            investment = round(trade_price * 100, 2)
-                            repayment = round(spread * 100, 2)
-                        else:
-                            # For selling a box: receive net price now, pay spread at expiry
-                            cagr, cagr_percentage = calculate_cagr(spread, trade_price, days)
-                            borrowed = round(trade_price * 100, 2)
-                            repayment_sell = round(spread * 100, 2)
+                    # Use mid-based price for determining if the trade is positive
+                    trade_price = mid_trade_price if mid_trade_price is not None else nat_trade_price
+                    
+                    if days > 1 and trade_price is not None and trade_price > 0:
+                        # Calculate annualized returns for both pricing methods using correct formula
+                        mid_metrics = {}
+                        nat_metrics = {}
+                        
+                        # Face value of the box spread (the amount exchanged at expiry)
+                        face_value = spread * 100
+                        # Ensure minimum of 1 day
+                        effective_days = max(days, 1)
+                        
+                        if mid_trade_price is not None:
+                            upfront_amount = mid_trade_price * 100
+                            
+                            # Calculate annualized return using correct formula
+                            if trade.lower() == "buy":
+                                # Buy box: you invest now, receive face at expiry
+                                # ann = ((face$ - investment$) / face$) * (365 / days)
+                                annualized_return = ((face_value - upfront_amount) / face_value) * (365 / effective_days)
+                            else:  # sell
+                                # Sell box: you borrow now, repay face at expiry
+                                # ann = ((borrowed$ - face$) / face$) * (365 / days)
+                                annualized_return = ((upfront_amount - face_value) / face_value) * (365 / effective_days)
 
-                        # Margin requirement and ROM
-                        margin_req = calculate_margin_requirement(
-                            entry[0].get("underlying", "$SPX"),
-                            'credit_spread',
-                            strike_diff=high_strike - low_strike,
-                            contracts=1
-                        )
-                        if trade.lower() == "buy":
-                            profit = repayment - investment  # Receive more at expiry than paid upfront
-                        else:
-                            profit = borrowed - repayment_sell  # Receive more upfront than paid at expiry
-                        rom = calculate_annualized_return_on_margin(profit, margin_req, days)
+                            mid_metrics = {
+                                "net_price": round(mid_trade_price, 2),
+                                "upfront_amount": round(upfront_amount, 2),
+                                "annualized_return": round(annualized_return * 100, 2)  # Convert to percentage
+                            }
 
+                        if nat_trade_price is not None:
+                            upfront_amount = nat_trade_price * 100
+                            
+                            # Calculate annualized return using correct formula
+                            if trade.lower() == "buy":
+                                # Buy box: you invest now, receive face at expiry
+                                # ann = ((face$ - investment$) / face$) * (365 / days)
+                                annualized_return = ((face_value - upfront_amount) / face_value) * (365 / effective_days)
+                            else:  # sell
+                                # Sell box: you borrow now, repay face at expiry
+                                # ann = ((borrowed$ - face$) / face$) * (365 / days)
+                                annualized_return = ((upfront_amount - face_value) / face_value) * (365 / effective_days)
+
+                            nat_metrics = {
+                                "net_price": round(nat_trade_price, 2),
+                                "upfront_amount": round(upfront_amount, 2),
+                                "annualized_return": round(annualized_return * 100, 2)  # Convert to percentage
+                            }
+
+                        # Combine all data into spread_dict
                         spread_dict = {
                             "date": entry[0]["date"],
                             "strike1": low_strike,
@@ -128,21 +169,33 @@ def calculate_box_spread(spread, calls, puts, trade="Sell", price="mid"):
                             "low_put_ask": low_put_ask,
                             "high_put_bid": high_put_bid,
                             "high_put_ask": high_put_ask,
-                            "net_price": round(trade_price, 2),
-                            "cagr": round(cagr, 2),
-                            "cagr_percentage": round(cagr_percentage, 2),
-                            "investment": investment if trade.lower() == "buy" else None,
-                            "repayment": repayment if trade.lower() == "buy" else None,
-                            "borrowed": borrowed if trade.lower() == "sell" else None,
-                            "repayment_sell": repayment_sell if trade.lower() == "sell" else None,
-                            "margin_req": margin_req,
-                            "ann_rom": round(rom, 2),
-                            "direction": trade.capitalize()
+                            "face_value": face_value,
+                            # Mid-based metrics
+                            "mid_net_price": mid_metrics.get("net_price"),
+                            "mid_upfront_amount": mid_metrics.get("upfront_amount"),
+                            "mid_annualized_return": mid_metrics.get("annualized_return"),
+                            # Natural/executable metrics
+                            "nat_net_price": nat_metrics.get("net_price"),
+                            "nat_upfront_amount": nat_metrics.get("upfront_amount"),
+                            "nat_annualized_return": nat_metrics.get("annualized_return"),
+                            # Use mid-based values for backward compatibility
+                            "net_price": mid_metrics.get("net_price", nat_metrics.get("net_price")),
+                            "investment": mid_metrics.get("upfront_amount") if trade.lower() == "buy" else None,
+                            "borrowed": mid_metrics.get("upfront_amount") if trade.lower() == "sell" else None,
+                            "repayment": face_value if trade.lower() == "buy" else None,
+                            "repayment_sell": face_value if trade.lower() == "sell" else None,
+                            "ann_rom": mid_metrics.get("annualized_return", nat_metrics.get("annualized_return")),
+                            "direction": trade.capitalize(),
+                            "days_to_expiry": days
                         }
-                        if (trade.lower() == "buy" and (highest_cagr is None or cagr > highest_cagr)) or \
-                           (trade.lower() == "sell" and (highest_cagr is None or cagr > highest_cagr)):
+                        
+                        # For ranking, use the mid-based annualized return (or natural if mid not available)
+                        ranking_ann_return = spread_dict["ann_rom"]
+                        
+                        if (trade.lower() == "buy" and (highest_cagr is None or ranking_ann_return > highest_cagr)) or \
+                           (trade.lower() == "sell" and (highest_cagr is None or ranking_ann_return > highest_cagr)):
                             best_spread = spread_dict
-                            highest_cagr = round(cagr, 2)
+                            highest_cagr = ranking_ann_return
     return best_spread
 
 

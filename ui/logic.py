@@ -176,14 +176,14 @@ async def get_box_spreads_data(api, asset="$SPX"):
         best_spreads = {}
         for spread in results:
             key = (spread["date"], spread["direction"])
-            ann_cost_return_val = float(spread["ann_rom"])
+            ann_return_val = float(spread["ann_rom"]) if spread["ann_rom"] is not None else 0
             if spread["direction"] == "Buy":
-                # For buy, keep the lowest (most negative) annualized cost
-                if key not in best_spreads or ann_cost_return_val < float(best_spreads[key]["ann_rom"]):
+                # For buy, keep the highest annualized return
+                if key not in best_spreads or ann_return_val > float(best_spreads[key]["ann_rom"] or 0):
                     best_spreads[key] = spread
             else:
-                # For sell, keep the highest annualized return
-                if key not in best_spreads or ann_cost_return_val > float(best_spreads[key]["ann_rom"]):
+                # For sell, keep the highest annualized return (most negative is worst, least negative is best)
+                if key not in best_spreads or ann_return_val > float(best_spreads[key]["ann_rom"] or 0):
                     best_spreads[key] = spread
 
         box_spreads = []
@@ -192,51 +192,101 @@ async def get_box_spreads_data(api, asset="$SPX"):
                 start_date = datetime.today()
                 end_date = datetime.strptime(spread["date"], "%Y-%m-%d")
                 days = (end_date - start_date).days
-                spread_amount = abs(float(spread["high_strike"]) - float(spread["low_strike"])) * 100
 
-                # For buying a box: pay upfront (investment), get more at expiry (repayment)
-                # For selling a box: receive upfront (borrowed), pay more at expiry (repayment_sell)
-                if spread["direction"] == "Buy":
-                    investment = float(spread.get("investment", 0))
-                    repayment = float(spread.get("repayment", 0))
-                    # Pay investment now, receive repayment at expiry
-                    # Annualized return = ((repayment - investment) / investment) * (365 / days)
-                    if investment > 0 and repayment > 0 and days > 0:
-                        ann_return = ((repayment - investment) / investment) * (365 / days) * 100
-                        ann_cost_return = f"{ann_return:.2f}%"
-                    else:
-                        ann_cost_return = ""
-                else:
-                    borrowed = float(spread.get("borrowed", 0))
-                    repayment_sell = float(spread.get("repayment_sell", 0))
-                    # Receive borrowed now, pay repayment_sell at expiry
-                    # Annualized cost = ((repayment_sell - borrowed) / borrowed) * (365 / days)
-                    # Note: This is a cost to us (negative return) since we pay more than we receive
-                    if borrowed > 0 and repayment_sell > 0 and days > 0:
-                        ann_cost = ((repayment_sell - borrowed) / borrowed) * (365 / days) * 100
-                        ann_cost_return = f"-{ann_cost:.2f}%"  # Negative because it's a cost
-                    else:
-                        ann_cost_return = ""
-            except Exception:
-                ann_cost_return = spread["ann_rom"]
+                # Check for impossible mids or suspect quotes
+                flags = []
+                
+                # Check if mid prices are valid (not crossed)
+                low_call_bid = spread.get("low_call_bid")
+                low_call_ask = spread.get("low_call_ask")
+                high_call_bid = spread.get("high_call_bid")
+                high_call_ask = spread.get("high_call_ask")
+                low_put_bid = spread.get("low_put_bid")
+                low_put_ask = spread.get("low_put_ask")
+                high_put_bid = spread.get("high_put_bid")
+                high_put_ask = spread.get("high_put_ask")
+                
+                if all(x is not None for x in [low_call_bid, low_call_ask, high_call_bid, high_call_ask,
+                                               low_put_bid, low_put_ask, high_put_bid, high_put_ask]):
+                    # Check for crossed quotes (bid > ask)
+                    if low_call_bid > low_call_ask:
+                        flags.append("Low Call Crossed")
+                    if high_call_bid > high_call_ask:
+                        flags.append("High Call Crossed")
+                    if low_put_bid > low_put_ask:
+                        flags.append("Low Put Crossed")
+                    if high_put_bid > high_put_ask:
+                        flags.append("High Put Crossed")
+                        
+                    # Check for negative spreads (ask < bid for the same leg)
+                    if low_call_ask < low_call_bid:
+                        flags.append("Low Call Negative Spread")
+                    if high_call_ask < high_call_bid:
+                        flags.append("High Call Negative Spread")
+                    if low_put_ask < low_put_bid:
+                        flags.append("Low Put Negative Spread")
+                    if high_put_ask < high_put_bid:
+                        flags.append("High Put Negative Spread")
 
-            box_spreads.append({
-                "direction": spread["direction"],
-                "date": spread["date"],
-                "low_strike": spread["strike1"],
-                "high_strike": spread["strike2"],
-                "low_call_ba": f"{spread['low_call_bid']}/{spread['low_call_ask']}",
-                "high_call_ba": f"{spread['high_call_bid']}/{spread['high_call_ask']}",
-                "low_put_ba": f"{spread['low_put_bid']}/{spread['low_put_ask']}",
-                "high_put_ba": f"{spread['high_put_bid']}/{spread['high_put_ask']}",
-                "net_price": spread["net_price"],
-                "investment": spread.get("investment", ""),
-                "repayment": spread.get("repayment", ""),
-                "borrowed": spread.get("borrowed", ""),
-                "repayment_sell": spread.get("repayment_sell", ""),
-                "ann_cost_return": ann_cost_return,
-                "margin_req": spread["margin_req"],
-            })
+                box_spreads.append({
+                    "direction": spread["direction"],
+                    "date": spread["date"],
+                    "low_strike": spread["strike1"],
+                    "high_strike": spread["strike2"],
+                    "low_call_ba": f"{spread['low_call_bid']}/{spread['low_call_ask']}",
+                    "high_call_ba": f"{spread['high_call_bid']}/{spread['high_call_ask']}",
+                    "low_put_ba": f"{spread['low_put_bid']}/{spread['low_put_ask']}",
+                    "high_put_ba": f"{spread['high_put_bid']}/{spread['high_put_ask']}",
+                    # Mid-based prices and metrics
+                    "mid_net_price": spread.get("mid_net_price", ""),
+                    "mid_upfront_amount": spread.get("mid_upfront_amount", ""),
+                    "mid_annualized_return": spread.get("mid_annualized_return", ""),
+                    # Natural/executable prices and metrics
+                    "nat_net_price": spread.get("nat_net_price", ""),
+                    "nat_upfront_amount": spread.get("nat_upfront_amount", ""),
+                    "nat_annualized_return": spread.get("nat_annualized_return", ""),
+                    # Face value
+                    "face_value": spread.get("face_value", ""),
+                    # Backward compatibility fields (using mid-based values)
+                    "net_price": spread.get("net_price", ""),
+                    "investment": spread.get("investment", ""),
+                    "borrowed": spread.get("borrowed", ""),
+                    "repayment": spread.get("repayment", ""),
+                    "repayment_sell": spread.get("repayment_sell", ""),
+                    "ann_cost_return": spread.get("ann_rom", ""),
+                    "days_to_expiry": spread.get("days_to_expiry", ""),
+                    # Flags for suspect quotes
+                    "flags": ", ".join(flags) if flags else ""
+                })
+            except Exception as e:
+                print(f"Error processing spread data: {e}")
+                # Add a basic entry even if there's an error
+                box_spreads.append({
+                    "direction": spread.get("direction", ""),
+                    "date": spread.get("date", ""),
+                    "low_strike": spread.get("strike1", ""),
+                    "high_strike": spread.get("strike2", ""),
+                    "low_call_ba": f"{spread.get('low_call_bid', '')}/{spread.get('low_call_ask', '')}",
+                    "high_call_ba": f"{spread.get('high_call_bid', '')}/{spread.get('high_call_ask', '')}",
+                    "low_put_ba": f"{spread.get('low_put_bid', '')}/{spread.get('low_put_ask', '')}",
+                    "high_put_ba": f"{spread.get('high_put_bid', '')}/{spread.get('high_put_ask', '')}",
+                    "mid_net_price": spread.get("mid_net_price", ""),
+                    "mid_upfront_amount": spread.get("mid_upfront_amount", ""),
+                    "mid_annualized_return": spread.get("mid_annualized_return", ""),
+                    "nat_net_price": spread.get("nat_net_price", ""),
+                    "nat_upfront_amount": spread.get("nat_upfront_amount", ""),
+                    "nat_annualized_return": spread.get("nat_annualized_return", ""),
+                    "face_value": spread.get("face_value", ""),
+                    "net_price": spread.get("net_price", ""),
+                    "investment": spread.get("investment", ""),
+                    "borrowed": spread.get("borrowed", ""),
+                    "repayment": spread.get("repayment", ""),
+                    "repayment_sell": spread.get("repayment_sell", ""),
+                    "ann_cost_return": spread.get("ann_rom", ""),
+                    "days_to_expiry": spread.get("days_to_expiry", ""),
+                    "flags": "Error processing data"
+                })
+
         # Sort by expiration date ascending
         box_spreads.sort(key=lambda x: x["date"])
         return box_spreads

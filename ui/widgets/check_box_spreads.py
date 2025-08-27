@@ -33,19 +33,21 @@ class CheckBoxSpreadsWidget(Static):
         table.add_columns(
             "Direction",
             "Date",
+            "DTE",
             "Low Strike",
             "High Strike",
             "Low Call B/A",
             "High Call B/A",
             "Low Put B/A",
             "High Put B/A",
-            "Net Price",
+            "Mid Net Price",
+            "Nat Net Price",
             "Investment",
-            "Repayment",
             "Borrowed",
-            "Repayment (Sell)",
-            "Ann. Cost/Return %",
-            "Margin Req",
+            "Face Value",
+            "Mid Ann. Return %",
+            "Nat Ann. Return %",
+            "Flags",
             "Refreshed"
         )
         table.zebra_stripes = True
@@ -92,43 +94,37 @@ class CheckBoxSpreadsWidget(Static):
 
     def show_order_confirmation(self, box_spread_data) -> None:
         """Show order confirmation screen."""
-        # Calculate spread width
-        try:
-            spread_width = float(box_spread_data.get("high_strike", 0)) - float(box_spread_data.get("low_strike", 0))
-        except Exception:
-            spread_width = ""
-
-        # Set type to "Box Spread: Buy" or "Box Spread: Sell" (remove extra colon)
+        # Set type to "Box Spread: Buy" or "Box Spread: Sell"
         direction = box_spread_data.get("direction", "")
         type_label = f"Box Spread {direction}" if direction else "Box Spread"
 
-        # Calculate Max Profit for Buy: repayment - investment
-        investment = box_spread_data.get("investment", 0)
-        repayment = box_spread_data.get("repayment", 0)
-        try:
-            max_profit = float(repayment) - float(investment) if direction == "Buy" else box_spread_data.get("max_profit", 0)
-        except Exception:
-            max_profit = 0.0
-
-        # Get CAGR if available
-        cagr = box_spread_data.get("cagr", "")
+        # Get values for order details directly from the data
+        mid_net_price = box_spread_data.get("mid_net_price", "")
+        nat_net_price = box_spread_data.get("nat_net_price", "")
+        mid_annualized_return = box_spread_data.get("mid_annualized_return", "")
+        nat_annualized_return = box_spread_data.get("nat_annualized_return", "")
+        days_to_expiry = box_spread_data.get("days_to_expiry", "")
+        face_value = box_spread_data.get("face_value", "")
+        
+        # Get upfront amount based on direction
+        upfront_amount = box_spread_data.get("mid_upfront_amount", 
+                                           box_spread_data.get("investment", 
+                                           box_spread_data.get("borrowed", 0)))
 
         order_details = {
             "Type": type_label,
             "Direction": direction,
             "Expiration": box_spread_data.get("date", ""),
+            "Days to Expiry": days_to_expiry,
             "Strike Low": box_spread_data.get("low_strike", ""),
             "Strike High": box_spread_data.get("high_strike", ""),
-            "Spread Width": spread_width,
-            "Net Price": box_spread_data.get("net_price", ""),
-            "Investment": investment,
-            "Repayment": repayment,
-            "Borrowed": box_spread_data.get("borrowed", ""),
-            "Repayment (Sell)": box_spread_data.get("repayment_sell", ""),
-            "Annualized Return": box_spread_data.get("ann_cost_return", ""),
-            "Margin Req": box_spread_data.get("margin_req", ""),
-            "Max Profit": max_profit,
-            "CAGR": cagr
+            "Spread Width": float(box_spread_data.get("high_strike", 0)) - float(box_spread_data.get("low_strike", 0)) if box_spread_data.get("high_strike") and box_spread_data.get("low_strike") else "",
+            "Face Value": face_value,  # Pass numeric value, let order confirmation screen format it
+            "Mid Net Price": mid_net_price,
+            "Nat Net Price": nat_net_price,
+            "Upfront Amount": upfront_amount,  # Pass numeric value, let order confirmation screen format it
+            "Annualized Return (Mid)": mid_annualized_return,  # Pass numeric value, let order confirmation screen format it
+            "Annualized Return (Nat)": nat_annualized_return,  # Pass numeric value, let order confirmation screen format it
             # Do not include "Protection" for box spreads
         }
         screen = OrderConfirmationScreen(order_details)
@@ -183,11 +179,14 @@ class CheckBoxSpreadsWidget(Static):
 
         def get_cell_style(col, val, prev_val=None):
             # Color coding logic
-            if col in ["cagr", "ann_rom"]:
+            if col in ["cagr", "ann_rom", "mid_annualized_return", "nat_annualized_return"]:
                 try:
                     v = float(str(val).replace("%", ""))
                     pv = float(str(prev_val).replace("%", "")) if prev_val is not None else None
-                    # Base style - color based on value (positive/negative)
+                    # For box spreads:
+                    # - Buying: Higher positive returns are better (green)
+                    # - Selling: Higher (less negative) returns are better (green)
+                    # Base style - color based on value (positive/green, negative/red)
                     style = "green" if v > 0 else "red" if v < 0 else ""
                     # Highlight changes - override with bold colors for increase/decrease
                     if pv is not None:
@@ -217,7 +216,7 @@ class CheckBoxSpreadsWidget(Static):
                     return style
                 except:
                     pass
-            if col == "net_price":
+            if col in ["net_price", "mid_net_price", "nat_net_price"]:
                 try:
                     v = float(val)
                     pv = float(prev_val) if prev_val is not None else None
@@ -245,7 +244,7 @@ class CheckBoxSpreadsWidget(Static):
                     return style
                 except:
                     return ""
-            if col in ["low_strike", "high_strike"]:
+            if col in ["low_strike", "high_strike", "days_to_expiry"]:
                 try:
                     v = float(val)
                     pv = float(prev_val) if prev_val is not None else None
@@ -271,28 +270,49 @@ class CheckBoxSpreadsWidget(Static):
 
                 # Function to style a cell value
                 def style_cell(col_name):
-                    val = str(row[col_name])
+                    val = str(row[col_name]) if row[col_name] is not None else ""
                     prev_val = prev_row.get(col_name)
                     style = get_cell_style(col_name, val, prev_val)
                     # Justify numerical columns to the right
                     right_justify_cols = {
                         "low_strike", "high_strike", "net_price", "investment", "repayment",
-                        "borrowed", "repayment_sell", "ann_cost_return", "margin_req"
+                        "borrowed", "repayment_sell", "ann_cost_return", "margin_req",
+                        "mid_net_price", "nat_net_price", "mid_annualized_return", "nat_annualized_return",
+                        "mid_upfront_amount", "mid_investment", "mid_borrowed", "nat_upfront_amount",
+                        "nat_investment", "nat_borrowed", "face_value", "days_to_expiry"
                     }
                     justify = "right" if col_name in right_justify_cols else "left"
 
                     # Format percentage values
-                    if col_name == "ann_cost_return":
+                    if col_name in ["ann_cost_return", "mid_annualized_return", "nat_annualized_return"]:
                         try:
-                            # Convert to float, multiply by 100, and format with 2 decimal places and % sign
-                            float_val = float(val.replace('%', ''))
+                            # Convert to float and format with 2 decimal places and % sign
+                            float_val = float(val)
                             val = f"{float_val:.2f}%"
                             # Update style after formatting
                             # Convert prev_val to the same format for comparison
                             if prev_val is not None:
                                 try:
-                                    prev_float_val = float(str(prev_val).replace('%', ''))
+                                    prev_float_val = float(prev_val)
                                     formatted_prev_val = f"{prev_float_val:.2f}%"
+                                except ValueError:
+                                    formatted_prev_val = prev_val
+                            else:
+                                formatted_prev_val = prev_val
+                            style = get_cell_style(col_name, val, formatted_prev_val)
+                        except ValueError:
+                            pass  # Keep original value if conversion fails
+                    elif col_name in ["investment", "borrowed", "mid_upfront_amount", "nat_upfront_amount", 
+                                      "face_value"]:
+                        # Format monetary values
+                        try:
+                            float_val = float(val)
+                            val = f"${float_val:,.2f}"
+                            # Update style after formatting
+                            if prev_val is not None:
+                                try:
+                                    prev_float_val = float(prev_val)
+                                    formatted_prev_val = f"${prev_float_val:,.2f}"
                                 except ValueError:
                                     formatted_prev_val = prev_val
                             else:
@@ -399,30 +419,40 @@ class CheckBoxSpreadsWidget(Static):
                         high_put_bid, high_put_ask, prev_high_put_bid, prev_high_put_ask
                     )
 
-                # Compute Ann. Cost/Return % for each row
-                ann_cost_return = row.get("ann_cost_return", "")
-                # The value from logic already includes the appropriate sign and formatting
+                # Style the flags column
+                flags = row.get("flags", "")
+                flags_style = "bold red" if flags else ""
+                flags_text = Text(flags, style=flags_style, justify="left")
+                
+                # Format face value
+                try:
+                    face_value = float(row.get("face_value", 0))
+                    face_value_text = Text(f"${face_value:,.2f}", style="", justify="right")
+                except:
+                    face_value_text = Text("", style="", justify="right")
 
                 cells = [
                     Text(str(row["direction"]), style="", justify="left"),
                     Text(str(row["date"]), style="", justify="left"),
+                    style_cell("days_to_expiry"),
                     style_cell("low_strike"),
                     style_cell("high_strike"),
                     low_call_ba_text,  # Styled B|A
                     high_call_ba_text,  # Styled B|A
                     low_put_ba_text,  # Styled B|A
                     high_put_ba_text,  # Styled B|A
-                    style_cell("net_price"),
-                    style_cell("investment"),
-                    style_cell("repayment"),
-                    style_cell("borrowed"),
-                    style_cell("repayment_sell"),
-                    style_cell("ann_cost_return"),
-                    style_cell("margin_req"),
+                    style_cell("mid_net_price"),
+                    style_cell("nat_net_price"),
+                    style_cell("mid_upfront_amount") if row["direction"] == "Buy" else Text("", justify="right"),
+                    style_cell("mid_upfront_amount") if row["direction"] == "Sell" else Text("", justify="right"),
+                    face_value_text,
+                    style_cell("mid_annualized_return"),
+                    style_cell("nat_annualized_return"),
+                    flags_text,
                     Text(refreshed_time, style="", justify="left")
                 ]
                 # Add row with styled cells
                 table.add_row(*cells)
             self._prev_rows = data
         else:
-            table.add_row("No box spreads found.", *[""] * 14, refreshed_time)
+            table.add_row("No box spreads found.", *[""] * 16, refreshed_time)
