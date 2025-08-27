@@ -5,7 +5,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from .. import logic
 from ..widgets.status_log import StatusLog
-from ..widgets.order_confirmation import OrderConfirmationDialog
+from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 import asyncio
 
@@ -25,10 +25,10 @@ class RollShortOptionsWidget(Static):
         """Called when the widget is mounted."""
         # Update the header
         self.app.update_header("Options Trader - Roll Short Calls")
-        
+
         # Check market status
         self.check_market_status()
-        
+
         table = self.query_one(DataTable)
         table.add_columns(
             "Ticker",
@@ -56,7 +56,7 @@ class RollShortOptionsWidget(Static):
         self.run_get_expiring_shorts_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_expiring_shorts_data)
-        
+
     def check_market_status(self) -> None:
         """Check and display market status information."""
         try:
@@ -80,8 +80,7 @@ class RollShortOptionsWidget(Static):
             self.show_order_confirmation(selected_data)
 
     def show_order_confirmation(self, roll_data) -> None:
-        """Show order confirmation dialog."""
-        # Prepare order details
+        """Show order confirmation screen."""
         order_details = {
             "Asset": roll_data.get("Ticker", ""),
             "Current Strike": roll_data.get("Current Strike", ""),
@@ -90,10 +89,8 @@ class RollShortOptionsWidget(Static):
             "Credit": roll_data.get("Credit", ""),
             "Quantity": roll_data.get("Quantity", roll_data.get("count", ""))
         }
-        
-        # Create and show the dialog
-        dialog = OrderConfirmationDialog(order_details)
-        self.app.push_screen(dialog, callback=self.handle_order_confirmation)
+        screen = OrderConfirmationScreen(order_details)
+        self.app.push_screen(screen, callback=self.handle_order_confirmation)
 
     def handle_order_confirmation(self, confirmed: bool) -> None:
         """Handle the user's response to the order confirmation."""
@@ -111,10 +108,10 @@ class RollShortOptionsWidget(Static):
             # Get the selected row data
             table = self.query_one(DataTable)
             cursor_row = table.cursor_row
-            
+
             if cursor_row < len(self._roll_data):
                 roll_data = self._roll_data[cursor_row]
-                
+
                 # We need to convert the roll_data back to the format expected by the existing functions
                 # This is a simplified example - you'll need to adapt this to your actual data structure
                 short_position = {
@@ -124,7 +121,7 @@ class RollShortOptionsWidget(Static):
                     "optionSymbol": "",  # This would need to be retrieved from the actual position data
                     "count": roll_data.get("Quantity", roll_data.get("count", 1))
                 }
-                
+
                 # Call the appropriate roll function based on the asset
                 from cc import RollSPX, RollCalls
                 if roll_data.get("Ticker") == "$SPX":
@@ -137,7 +134,7 @@ class RollShortOptionsWidget(Static):
                     loop = asyncio.get_event_loop()
                     with ThreadPoolExecutor() as executor:
                         await loop.run_in_executor(executor, RollCalls, self.app.api, short_position)
-                        
+
                 self.app.query_one(StatusLog).add_message("Order placement completed!")
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for order placement.")

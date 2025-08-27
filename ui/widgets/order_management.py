@@ -4,7 +4,7 @@ from textual.screen import Screen
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from ..widgets.status_log import StatusLog
-from ..widgets.order_confirmation import OrderConfirmationDialog
+from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 import asyncio
 
@@ -25,7 +25,7 @@ class OrderManagementWidget(Static):
         """Called when the widget is mounted."""
         # Update the header
         self.app.update_header("Options Trader - Order Management")
-        
+
         table = self.query_one(DataTable)
         table.add_columns(
             "Order ID",
@@ -82,17 +82,17 @@ class OrderManagementWidget(Static):
                 self.app.query_one(StatusLog).add_message("Order cannot be cancelled (not in ACCEPTED/WORKING status).")
 
     def show_cancel_confirmation(self, order) -> None:
-        """Show confirmation dialog for cancelling an order."""
+        """Show order cancellation confirmation screen."""
         order_details = {
             "Order ID": order.get("orderId", ""),
             "Status": order.get("status", ""),
-            "Asset": order.get("orderLegCollection", [{}])[0].get("instrument", {}).get("underlyingSymbol", ""),
+            "Asset": order.get("orderLegCollection", [{}])[0].get("instrument", {}).get("symbol", ""),
             "Order Type": order.get("orderLegCollection", [{}])[0].get("instruction", ""),
             "Quantity": order.get("orderLegCollection", [{}])[0].get("quantity", ""),
             "Price": order.get("price", "")
         }
-        dialog = OrderConfirmationDialog(order_details, confirm_text="Cancel Order")
-        self.app.push_screen(dialog, callback=lambda confirmed: self.handle_cancel_confirmation(confirmed, order))
+        screen = OrderConfirmationScreen(order_details, confirm_text="Cancel Order", cancel_text="Keep Order")
+        self.app.push_screen(screen, callback=lambda confirmed: self.handle_cancel_confirmation(confirmed, order))
 
     def handle_cancel_confirmation(self, confirmed: bool, order) -> None:
         """Handle user's response to cancel confirmation."""
@@ -117,7 +117,7 @@ class OrderManagementWidget(Static):
         """Show the main menu."""
         # Update the header
         self.app.update_header("Options Trader")
-        
+
         # Remove this widget and show the welcome message
         main_container = self.app.query_one("#main_container")
         main_container.remove_children()

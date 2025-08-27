@@ -259,8 +259,11 @@ async def get_vertical_spreads_data(api, synthetic=False):
 
         results = await asyncio.gather(*tasks)
 
+        print(f"Vertical spreads results: {results}")  # Debug print
+
         for asset, best_spread in results:
             if best_spread:
+                print(f"Best spread for {asset}: {best_spread}")  # Debug print
                 row = {
                     "asset": asset,
                     "expiration": best_spread["date"],
@@ -285,6 +288,7 @@ async def get_vertical_spreads_data(api, synthetic=False):
                 spread_results.append(row)
 
         spread_results.sort(key=lambda x: x["ann_rom"], reverse=True)
+        print(f"Final spread results: {spread_results}")  # Debug print
         return spread_results
 
     except Exception as e:

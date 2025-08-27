@@ -5,7 +5,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from .. import logic
 from ..widgets.status_log import StatusLog
-from ..widgets.order_confirmation import OrderConfirmationDialog
+from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 import asyncio
 
@@ -25,10 +25,10 @@ class CheckBoxSpreadsWidget(Static):
         """Called when the widget is mounted."""
         # Update the header
         self.app.update_header("Options Trader - Box Spreads")
-        
+
         # Check market status
         self.check_market_status()
-        
+
         table = self.query_one(DataTable)
         table.add_columns(
             "Direction",
@@ -55,7 +55,7 @@ class CheckBoxSpreadsWidget(Static):
         self.run_get_box_spreads_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_box_spreads_data)
-        
+
     def check_market_status(self) -> None:
         """Check and display market status information."""
         try:
@@ -79,8 +79,7 @@ class CheckBoxSpreadsWidget(Static):
             self.show_order_confirmation(selected_data)
 
     def show_order_confirmation(self, box_spread_data) -> None:
-        """Show order confirmation dialog."""
-        # Prepare order details
+        """Show order confirmation screen."""
         order_details = {
             "Type": "Box Spread",
             "Direction": box_spread_data.get("direction", ""),
@@ -90,10 +89,8 @@ class CheckBoxSpreadsWidget(Static):
             "Net Price": box_spread_data.get("net_price", ""),
             "Annualized Return": box_spread_data.get("ann_cost_return", "")
         }
-        
-        # Create and show the dialog
-        dialog = OrderConfirmationDialog(order_details)
-        self.app.push_screen(dialog, callback=self.handle_order_confirmation)
+        screen = OrderConfirmationScreen(order_details)
+        self.app.push_screen(screen, callback=self.handle_order_confirmation)
 
     def handle_order_confirmation(self, confirmed: bool) -> None:
         """Handle the user's response to the order confirmation."""
@@ -111,14 +108,14 @@ class CheckBoxSpreadsWidget(Static):
             # Get the selected row data
             table = self.query_one(DataTable)
             cursor_row = table.cursor_row
-            
+
             if cursor_row < len(self._box_spreads_data):
                 box_spread_data = self._box_spreads_data[cursor_row]
-                
+
                 # TODO: Implement actual box spread order placement
                 # This would involve calling the appropriate strategy functions
                 # from strategies.py to place the box spread order
-                
+
                 self.app.query_one(StatusLog).add_message("Box spread order placement not yet implemented.")
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for box spread order placement.")
@@ -269,7 +266,7 @@ class CheckBoxSpreadsWidget(Static):
                                 bid_style = "red"
                         except ValueError:
                             pass
-                    
+
                     # Style for ask (green for decrease, red for increase - since lower ask is better)
                     ask_style = ""
                     if prev_ask_val is not None:
@@ -282,13 +279,13 @@ class CheckBoxSpreadsWidget(Static):
                                 ask_style = "red"
                         except ValueError:
                             pass
-                    
+
                     # Create a Text object with separately styled bid and ask
                     ba_text = Text()
                     ba_text.append(f"{bid_val:.2f}", style=bid_style)
                     ba_text.append("|", style="")  # No style for the separator
                     ba_text.append(f"{ask_val:.2f}", style=ask_style)
-                    
+
                     return ba_text
 
                 # Extract bid/ask values for styling
@@ -296,13 +293,13 @@ class CheckBoxSpreadsWidget(Static):
                 high_call_ba = row["high_call_ba"]
                 low_put_ba = row["low_put_ba"]
                 high_put_ba = row["high_put_ba"]
-                
+
                 # Previous values for comparison
                 prev_low_call_ba = prev_row.get("low_call_ba", "")
                 prev_high_call_ba = prev_row.get("high_call_ba", "")
                 prev_low_put_ba = prev_row.get("low_put_ba", "")
                 prev_high_put_ba = prev_row.get("high_put_ba", "")
-                
+
                 # Parse current bid/ask values
                 try:
                     low_call_bid, low_call_ask = map(float, low_call_ba.split("/"))
@@ -321,22 +318,22 @@ class CheckBoxSpreadsWidget(Static):
                         prev_low_call_bid, prev_low_call_ask = map(float, prev_low_call_ba.split("/"))
                     except:
                         prev_low_call_bid, prev_low_call_ask = None, None
-                    
+
                     try:
                         prev_high_call_bid, prev_high_call_ask = map(float, prev_high_call_ba.split("/"))
                     except:
                         prev_high_call_bid, prev_high_call_ask = None, None
-                        
+
                     try:
                         prev_low_put_bid, prev_low_put_ask = map(float, prev_low_put_ba.split("/"))
                     except:
                         prev_low_put_bid, prev_low_put_ask = None, None
-                        
+
                     try:
                         prev_high_put_bid, prev_high_put_ask = map(float, prev_high_put_ba.split("/"))
                     except:
                         prev_high_put_bid, prev_high_put_ask = None, None
-                    
+
                     # Style each B|A price separately
                     low_call_ba_text = style_ba_price(
                         low_call_bid, low_call_ask, prev_low_call_bid, prev_low_call_ask

@@ -222,10 +222,6 @@ class OpiApp(App):
         main_container.remove_children()
         main_container.mount(CheckSyntheticCoveredCallsWidget())
         self.query_one(StatusLog).add_message("Check Synthetic Covered Calls selected.")
-        main_container = self.query_one("#main_container")
-        main_container.remove_children()
-        main_container.mount(CheckSyntheticCoveredCallsWidget())
-        self.query_one(StatusLog).add_message("Check Synthetic Covered Calls selected.")
 
     def action_view_margin_requirements(self) -> None:
         """Action to view margin requirements."""

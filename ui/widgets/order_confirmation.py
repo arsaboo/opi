@@ -1,42 +1,38 @@
-from textual.screen import ModalScreen
-from textual.widgets import Label, Button, Static
-from textual.containers import Container, Vertical, Horizontal
-from textual import work
+from textual.screen import Screen
+from textual.widgets import DataTable, Static
+from textual.containers import Container, Vertical
+from textual import events
 
 
-class OrderConfirmationDialog(ModalScreen):
-    """A modal dialog for confirming order placement."""
+class OrderConfirmationScreen(Screen):
+    """A full-screen confirmation screen for order placement."""
 
-    def __init__(self, order_details):
+    def __init__(self, order_details, confirm_text="Confirm", cancel_text="Cancel"):
         super().__init__()
         self.order_details = order_details
+        self.confirm_text = confirm_text
+        self.cancel_text = cancel_text
 
     def compose(self):
-        """Create child widgets."""
         yield Container(
             Vertical(
-                Label("Confirm Order Placement", id="title"),
-                Static(self.format_order_details(), id="order_details"),
-                Horizontal(
-                    Button("Confirm", id="confirm_btn", variant="primary"),
-                    Button("Cancel", id="cancel_btn", variant="default"),
-                    id="buttons"
-                ),
-                id="dialog"
+                Static("Confirm Order Placement", id="title"),
+                DataTable(id="order_details_table"),
+                Static(f"[Enter/Y] {self.confirm_text}   [Esc/N] {self.cancel_text}", id="confirmation_hint"),
+                id="confirmation_screen"
             ),
-            id="overlay"
+            id="confirmation_overlay"
         )
 
-    def format_order_details(self):
-        """Format the order details for display."""
-        details = "Order Details:\\n"
+    def on_mount(self):
+        table = self.query_one(DataTable)
+        table.add_columns("Field", "Value")
         for key, value in self.order_details.items():
-            details += f"  {key}: {value}\\n"
-        return details
+            table.add_row(str(key), str(value))
+        table.focus()
 
-    def on_button_pressed(self, event) -> None:
-        """Handle button presses."""
-        if event.button.id == "confirm_btn":
-            self.dismiss(True)  # User confirmed
-        elif event.button.id == "cancel_btn":
-            self.dismiss(False)  # User cancelled
+    async def on_key(self, event: events.Key):
+        if event.key in ("enter", "y"):
+            self.dismiss(True)
+        elif event.key in ("escape", "n"):
+            self.dismiss(False)
