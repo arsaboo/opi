@@ -81,13 +81,24 @@ class RollShortOptionsWidget(Static):
 
     def show_order_confirmation(self, roll_data) -> None:
         """Show order confirmation screen."""
+        # Calculate roll up amount (difference between new and current strike)
+        try:
+            roll_up_amount = float(roll_data.get("New Strike", 0)) - float(roll_data.get("Current Strike", 0))
+        except Exception:
+            roll_up_amount = ""
+        roll_out_days = roll_data.get("Roll Out (Days)", "")
+        underlying_value = roll_data.get("Underlying Price", "")
+
         order_details = {
             "Asset": roll_data.get("Ticker", ""),
             "Current Strike": roll_data.get("Current Strike", ""),
             "New Strike": roll_data.get("New Strike", ""),
             "Expiration": roll_data.get("New Expiration", ""),
             "Credit": roll_data.get("Credit", ""),
-            "Quantity": roll_data.get("Quantity", roll_data.get("count", ""))
+            "Quantity": roll_data.get("Quantity", roll_data.get("count", "")),
+            "Roll Up Amount": roll_up_amount,
+            "Roll Out (Days)": roll_out_days,
+            "Current Underlying Value": underlying_value
         }
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)

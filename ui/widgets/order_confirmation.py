@@ -31,23 +31,6 @@ class OrderConfirmationScreen(ModalScreen):
                 Text(str(value), style="white")
             )
 
-        # Add roll-specific fields if present
-        if "Roll Up Amount" in self.order_details:
-            table.add_row(
-                Text("Roll Up Amount", style="bold magenta"),
-                Text(str(self.order_details["Roll Up Amount"]), style="white")
-            )
-        if "Roll Out (Days)" in self.order_details:
-            table.add_row(
-                Text("Roll Out (Days)", style="bold magenta"),
-                Text(str(self.order_details["Roll Out (Days)"]), style="white")
-            )
-        if "Current Underlying Value" in self.order_details:
-            table.add_row(
-                Text("Current Underlying Value", style="bold magenta"),
-                Text(str(self.order_details["Current Underlying Value"]), style="white")
-            )
-
         # Instructions
         instructions = Text(
             "[Enter/Y] Confirm   [Esc/N] Cancel",
@@ -101,3 +84,5 @@ class OrderConfirmationScreen(ModalScreen):
                 self._error = f"Error: {e}"
                 self.refresh()
         asyncio.create_task(do_confirm())
+
+# The dialog will now show "Roll Up Amount", "Roll Out (Days)", and "Current Underlying Value" if present in order_details.
