@@ -56,17 +56,29 @@ class RollShortOptionsWidget(Static):
         self.run_get_expiring_shorts_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_expiring_shorts_data)
+        # Add periodic market status check every 30 seconds
+        self.set_interval(30, self.check_market_status)
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
-            if not exec_window["open"]:
-                from configuration import debugMarketOpen
-                if not debugMarketOpen:
-                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+            current_status = "open" if exec_window["open"] else "closed"
+            
+            # Check if market status has changed
+            if not hasattr(self, '_previous_market_status'):
+                self._previous_market_status = None
+                
+            if self._previous_market_status != current_status:
+                if current_status == "open":
+                    self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
                 else:
-                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+                    from configuration import debugMarketOpen
+                    if not debugMarketOpen:
+                        self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                    else:
+                        self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+                self._previous_market_status = current_status
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
 

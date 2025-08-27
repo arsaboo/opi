@@ -8,9 +8,11 @@ from rich.table import Table
 class OrderConfirmationScreen(ModalScreen):
     """A modal screen for order confirmation."""
 
-    def __init__(self, order_details):
+    def __init__(self, order_details, confirm_text="Confirm Order", cancel_text="Cancel Order"):
         super().__init__()
         self.order_details = order_details
+        self.confirm_text = confirm_text
+        self.cancel_text = cancel_text
         self._loading = False
         self._error = None
 
@@ -26,14 +28,16 @@ class OrderConfirmationScreen(ModalScreen):
         # Order details as a Rich Table
         table = Table.grid(padding=(0, 2))
         for field, value in self.order_details.items():
-            table.add_row(
-                Text(str(field), style="bold cyan"),
-                Text(str(value), style="white")
-            )
+            # Skip the "Type" and "Asset" fields since they're already shown in the header
+            if field not in ["Type", "Asset"]:
+                table.add_row(
+                    Text(str(field), style="bold cyan"),
+                    Text(str(value), style="white")
+                )
 
         # Instructions
         instructions = Text(
-            "[Enter/Y] Confirm   [Esc/N] Cancel",
+            f"[Enter/Y] {self.confirm_text}   [Esc/N] {self.cancel_text}",
             style="bold green",
             justify="center"
         )
@@ -84,5 +88,3 @@ class OrderConfirmationScreen(ModalScreen):
                 self._error = f"Error: {e}"
                 self.refresh()
         asyncio.create_task(do_confirm())
-
-# The dialog will now show "Roll Up Amount", "Roll Out (Days)", and "Current Underlying Value" if present in order_details.

@@ -55,17 +55,29 @@ class CheckBoxSpreadsWidget(Static):
         self.run_get_box_spreads_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_box_spreads_data)
+        # Add periodic market status check every 30 seconds
+        self.set_interval(30, self.check_market_status)
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
-            if not exec_window["open"]:
-                from configuration import debugMarketOpen
-                if not debugMarketOpen:
-                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+            current_status = "open" if exec_window["open"] else "closed"
+            
+            # Check if market status has changed
+            if not hasattr(self, '_previous_market_status'):
+                self._previous_market_status = None
+                
+            if self._previous_market_status != current_status:
+                if current_status == "open":
+                    self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
                 else:
-                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+                    from configuration import debugMarketOpen
+                    if not debugMarketOpen:
+                        self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                    else:
+                        self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+                self._previous_market_status = current_status
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
 
@@ -80,14 +92,26 @@ class CheckBoxSpreadsWidget(Static):
 
     def show_order_confirmation(self, box_spread_data) -> None:
         """Show order confirmation screen."""
+        # Calculate spread width
+        try:
+            spread_width = float(box_spread_data.get("high_strike", 0)) - float(box_spread_data.get("low_strike", 0))
+        except Exception:
+            spread_width = ""
+            
         order_details = {
             "Type": "Box Spread",
             "Direction": box_spread_data.get("direction", ""),
-            "Date": box_spread_data.get("date", ""),
+            "Expiration": box_spread_data.get("date", ""),
             "Low Strike": box_spread_data.get("low_strike", ""),
             "High Strike": box_spread_data.get("high_strike", ""),
+            "Spread Width": spread_width,
             "Net Price": box_spread_data.get("net_price", ""),
-            "Annualized Return": box_spread_data.get("ann_cost_return", "")
+            "Investment": box_spread_data.get("investment", ""),
+            "Repayment": box_spread_data.get("repayment", ""),
+            "Borrowed": box_spread_data.get("borrowed", ""),
+            "Repayment (Sell)": box_spread_data.get("repayment_sell", ""),
+            "Annualized Return": box_spread_data.get("ann_cost_return", ""),
+            "Margin Requirement": box_spread_data.get("margin_req", "")
         }
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)
@@ -96,7 +120,6 @@ class CheckBoxSpreadsWidget(Static):
         """Handle the user's response to the order confirmation."""
         if confirmed:
             self.app.query_one(StatusLog).add_message("Order confirmed. Placing box spread order...")
-            # TODO: Implement actual box spread order placement logic
             self.place_box_spread_order()
         else:
             self.app.query_one(StatusLog).add_message("Box spread order cancelled by user.")
@@ -111,12 +134,22 @@ class CheckBoxSpreadsWidget(Static):
 
             if cursor_row < len(self._box_spreads_data):
                 box_spread_data = self._box_spreads_data[cursor_row]
-
-                # TODO: Implement actual box spread order placement
-                # This would involve calling the appropriate strategy functions
-                # from strategies.py to place the box spread order
-
-                self.app.query_one(StatusLog).add_message("Box spread order placement not yet implemented.")
+                
+                # Extract required data
+                # Note: Box spread order placement is more complex and would require implementing
+                # the actual order construction in the API. For now, we'll just log the attempt.
+                direction = box_spread_data.get("direction", "")
+                expiration = box_spread_data.get("date", "")
+                low_strike = box_spread_data.get("low_strike", "")
+                high_strike = box_spread_data.get("high_strike", "")
+                net_price = box_spread_data.get("net_price", "")
+                
+                self.app.query_one(StatusLog).add_message(f"Box spread order placement not yet implemented.")
+                self.app.query_one(StatusLog).add_message(f"Would place {direction} box spread:")
+                self.app.query_one(StatusLog).add_message(f"  Expiration: {expiration}")
+                self.app.query_one(StatusLog).add_message(f"  Low Strike: {low_strike}")
+                self.app.query_one(StatusLog).add_message(f"  High Strike: {high_strike}")
+                self.app.query_one(StatusLog).add_message(f"  Net Price: {net_price}")
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for box spread order placement.")
         except Exception as e:

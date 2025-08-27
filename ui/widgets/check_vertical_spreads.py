@@ -8,6 +8,8 @@ from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 import asyncio
+import keyboard
+from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
 
 class CheckVerticalSpreadsWidget(Static):
     """A widget to display vertical spreads."""
@@ -55,17 +57,29 @@ class CheckVerticalSpreadsWidget(Static):
         self.run_get_vertical_spreads_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_vertical_spreads_data)
+        # Add periodic market status check every 30 seconds
+        self.set_interval(30, self.check_market_status)
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
-            if not exec_window["open"]:
-                from configuration import debugMarketOpen
-                if not debugMarketOpen:
-                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+            current_status = "open" if exec_window["open"] else "closed"
+            
+            # Check if market status has changed
+            if not hasattr(self, '_previous_market_status'):
+                self._previous_market_status = None
+                
+            if self._previous_market_status != current_status:
+                if current_status == "open":
+                    self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
                 else:
-                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+                    from configuration import debugMarketOpen
+                    if not debugMarketOpen:
+                        self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
+                    else:
+                        self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
+                self._previous_market_status = current_status
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
 
@@ -163,8 +177,12 @@ class CheckVerticalSpreadsWidget(Static):
 
         if data:
             prev_rows = self._prev_rows or []
+            self._vertical_spreads_data = []  # Clear previous vertical spreads data
             for idx, row in enumerate(data):
                 prev_row = prev_rows[idx] if idx < len(prev_rows) else {}
+
+                # Store the actual vertical spread data for this row
+                self._vertical_spreads_data.append(row)
 
                 # Function to style a cell value
                 def style_cell(col_name):
@@ -262,19 +280,6 @@ class CheckVerticalSpreadsWidget(Static):
         else:
             table.add_row("No vertical spreads found.", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
 
-    def check_market_status(self) -> None:
-        """Check and display market status information."""
-        try:
-            exec_window = self.app.api.getOptionExecutionWindow()
-            if not exec_window["open"]:
-                from configuration import debugMarketOpen
-                if not debugMarketOpen:
-                    self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
-                else:
-                    self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
-        except Exception as e:
-            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
-
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
         # Get the selected row data
@@ -286,15 +291,25 @@ class CheckVerticalSpreadsWidget(Static):
 
     def show_order_confirmation(self, vertical_spread_data) -> None:
         """Show order confirmation screen."""
+        # Calculate spread width
+        try:
+            spread_width = float(vertical_spread_data.get("strike_high", 0)) - float(vertical_spread_data.get("strike_low", 0))
+        except Exception:
+            spread_width = ""
+            
         order_details = {
             "Type": "Vertical Spread",
             "Asset": vertical_spread_data.get("asset", ""),
             "Expiration": vertical_spread_data.get("expiration", ""),
             "Strike Low": vertical_spread_data.get("strike_low", ""),
             "Strike High": vertical_spread_data.get("strike_high", ""),
-            "Investment": vertical_spread_data.get("investment", ""),
-            "Max Profit": vertical_spread_data.get("max_profit", ""),
-            "Annualized Return": vertical_spread_data.get("ann_rom", "")
+            "Spread Width": spread_width,
+            "Investment": f"${vertical_spread_data.get('investment', 0):.2f}",
+            "Max Profit": f"${vertical_spread_data.get('max_profit', 0):.2f}",
+            "CAGR": f"{vertical_spread_data.get('cagr', 0)*100:.2f}%",
+            "Downside Protection": f"{vertical_spread_data.get('protection', 0)*100:.2f}%",
+            "Margin Requirement": f"${vertical_spread_data.get('margin_req', 0):.2f}",
+            "Annualized Return": f"{vertical_spread_data.get('ann_rom', 0)*100:.2f}%"
         }
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)
@@ -303,7 +318,6 @@ class CheckVerticalSpreadsWidget(Static):
         """Handle the user's response to the order confirmation."""
         if confirmed:
             self.app.query_one(StatusLog).add_message("Order confirmed. Placing vertical spread order...")
-            # TODO: Implement actual vertical spread order placement logic
             self.place_vertical_spread_order()
         else:
             self.app.query_one(StatusLog).add_message("Vertical spread order cancelled by user.")
@@ -318,13 +332,167 @@ class CheckVerticalSpreadsWidget(Static):
 
             if cursor_row < len(self._vertical_spreads_data):
                 vertical_spread_data = self._vertical_spreads_data[cursor_row]
+                
+                # Extract required data
+                asset = vertical_spread_data.get("asset", "")
+                expiration = datetime.strptime(vertical_spread_data.get("expiration", ""), "%Y-%m-%d").date()
+                strike_low = float(vertical_spread_data.get("strike_low", 0))
+                strike_high = float(vertical_spread_data.get("strike_high", 0))
+                net_debit = float(vertical_spread_data.get("investment", 0)) / 100  # Convert from total to per contract
+                
+                # Place the order using the api method
+                from strategies import monitor_order
+                from order_utils import handle_cancel, reset_cancel_flag
+                import keyboard
+                
+                try:
+                    # Reset cancel flag and clear keyboard hooks
+                    reset_cancel_flag()
+                    keyboard.unhook_all()
+                    keyboard.on_press(handle_cancel)
 
-                # TODO: Implement actual vertical spread order placement
-                # This would involve calling the appropriate strategy functions
-                # from strategies.py to place the vertical spread order
+                    # Try prices in sequence, starting with original price
+                    initial_price = net_debit
+                    order_id = None
+                    filled = False
+                    
+                    for i in range(0, 76):  # 0 = original price, 1-75 = improvements
+                        if not cancel_order:  # Check if cancelled
+                            current_price = (
+                                initial_price if i == 0
+                                else round_to_nearest_five_cents(initial_price * (1 - (i/100)))
+                            )
 
-                self.app.query_one(StatusLog).add_message("Vertical spread order placement not yet implemented.")
+                            if i > 0:
+                                self.app.query_one(StatusLog).add_message(f"Trying new price: ${current_price} (improvement #{i})")
+
+                            # Place order
+                            order_id = await asyncio.to_thread(
+                                self.app.api.vertical_call_order,
+                                asset,
+                                expiration,
+                                strike_low,
+                                strike_high,
+                                1,  # quantity
+                                price=current_price
+                            )
+                            
+                            # Check if order was placed (None when debugCanSendOrders is False)
+                            if order_id is None:
+                                self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
+                                self.app.query_one(StatusLog).add_message(f"Asset: {asset}, Expiration: {expiration}, Strike Low: {strike_low}, Strike High: {strike_high}, Price: {current_price}")
+                                break
+
+                            # Monitor with 60s timeout
+                            self.app.query_one(StatusLog).add_message(f"Monitoring order {order_id}...")
+                            result = await self.monitor_order_ui(order_id, timeout=60)
+                            
+                            # Add status update based on result
+                            if result is True:
+                                self.app.query_one(StatusLog).add_message(f"Order {order_id} filled successfully!")
+                            elif result == "cancelled":
+                                self.app.query_one(StatusLog).add_message(f"Order {order_id} cancelled by user.")
+                            elif result == "rejected":
+                                self.app.query_one(StatusLog).add_message(f"Order {order_id} rejected.")
+                            elif result == "timeout":
+                                self.app.query_one(StatusLog).add_message(f"Order {order_id} timed out.")
+
+                            if result is True:  # Order filled
+                                filled = True
+                                break
+                            elif result == "cancelled":  # User cancelled
+                                break
+                            elif result == "rejected":  # Order rejected
+                                continue  # Try next price
+                            # On timeout, continue to next price improvement
+
+                            # Brief pause between attempts
+                            if i > 0:
+                                await asyncio.sleep(1)
+                        else:
+                            break
+
+                    if filled:
+                        self.app.query_one(StatusLog).add_message("Vertical spread order filled successfully!")
+                    elif cancel_order:
+                        self.app.query_one(StatusLog).add_message("Vertical spread order cancelled by user.")
+                        if order_id:
+                            try:
+                                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+                                self.app.query_one(StatusLog).add_message("Order cancelled successfully.")
+                            except Exception as e:
+                                self.app.query_one(StatusLog).add_message(f"Error cancelling order: {e}")
+                    else:
+                        self.app.query_one(StatusLog).add_message("Vertical spread order not filled after all attempts.")
+                except Exception as e:
+                    self.app.query_one(StatusLog).add_message(f"Error placing vertical spread order: {e}")
+                finally:
+                    keyboard.unhook_all()
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for vertical spread order placement.")
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error placing vertical spread order: {e}")
+
+    async def monitor_order_ui(self, order_id, timeout=60):
+        """Monitor order status and update UI with status changes"""
+        import time
+        start_time = time.time()
+        last_status_check = 0
+        last_print_time = 0
+        print_interval = 1
+
+        while time.time() - start_time < timeout:
+            current_time = time.time()
+            elapsed_time = int(current_time - start_time)
+
+            if cancel_order:
+                try:
+                    await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+                    self.app.query_one(StatusLog).add_message("Order cancelled by user.")
+                    return "cancelled"
+                except Exception as e:
+                    self.app.query_one(StatusLog).add_message(f"Error cancelling order: {e}")
+                    return False
+
+            try:
+                if current_time - last_status_check >= 1:  # Check every second
+                    order_status = await asyncio.to_thread(self.app.api.checkOrder, order_id)
+                    last_status_check = current_time
+
+                    if current_time - last_print_time >= print_interval:
+                        remaining = int(timeout - elapsed_time)
+                        status_str = order_status['status']
+                        rejection_reason = order_status.get('rejection_reason', '')
+                        
+                        status_msg = f"Status: {status_str} {rejection_reason} | Time remaining: {remaining}s | Price: {order_status.get('price', 'N/A')} | Filled: {order_status.get('filledQuantity', '0')}"
+                        self.app.query_one(StatusLog).add_message(status_msg)
+                        last_print_time = current_time
+
+                    if order_status["filled"]:
+                        self.app.query_one(StatusLog).add_message("Order filled successfully!")
+                        return True
+                    elif order_status["status"] == "REJECTED":
+                        rejection_msg = f"Order rejected: {order_status.get('rejection_reason', 'No reason provided')}"
+                        self.app.query_one(StatusLog).add_message(rejection_msg)
+                        return "rejected"
+                    elif order_status["status"] == "CANCELED":
+                        self.app.query_one(StatusLog).add_message("Order cancelled.")
+                        return False
+
+                await asyncio.sleep(0.1)  # Small sleep to prevent CPU thrashing
+
+            except Exception as e:
+                self.app.query_one(StatusLog).add_message(f"Error checking order status: {e}")
+                return False
+
+        # If we reach here, order timed out
+        self.app.query_one(StatusLog).add_message("Order timed out, moving to price improvement...")
+        try:
+            await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+        except:
+            pass
+        return "timeout"
+
+def round_to_nearest_five_cents(price):
+    """Round price to nearest $0.05."""
+    return round(price * 20) / 20

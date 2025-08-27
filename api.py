@@ -811,7 +811,7 @@ class Api:
 
         if not debugCanSendOrders:
             print("Order not placed: ", order.build())
-            exit()
+            return None  # Return None instead of exiting
         hash = self.getAccountHash()
         try:
             r = self.connectClient.place_order(hash, order)
@@ -867,7 +867,7 @@ class Api:
 
         if not debugCanSendOrders:
             print("Order not placed: ", order.build())
-            exit()
+            return None  # Return None instead of exiting
         hash = self.getAccountHash()
         try:
             r = self.connectClient.place_order(hash, order)
