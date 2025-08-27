@@ -9,9 +9,11 @@ from rich.align import Align
 class OrderConfirmationScreen(ModalScreen):
     """A modal screen for order confirmation."""
 
-    def __init__(self, order_details):
+    def __init__(self, order_details, confirm_text="Confirm Order", cancel_text="Cancel"):
         super().__init__()
         self.order_details = order_details
+        self.confirm_text = confirm_text
+        self.cancel_text = cancel_text
         self._loading = False
         self._error = None
 
@@ -27,6 +29,12 @@ class OrderConfirmationScreen(ModalScreen):
             except (ValueError, TypeError):
                 return 0.0
 
+        # Extract underlying asset if it's an option symbol
+        asset = self.order_details.get('Asset', '')
+        if 'C' in asset or 'P' in asset:  # Likely an option symbol
+            # Extract underlying (e.g., 'SPXW' from 'SPXW  251003C06450000')
+            asset = asset.split()[0] if asset else asset
+
         # Title and asset/type
         if self.order_details.get("Type", "").startswith("Box Spread"):
             title = Text("ORDER CONFIRMATION", style="bold white", justify="center")
@@ -38,14 +46,14 @@ class OrderConfirmationScreen(ModalScreen):
         elif "Roll Up Amount" in self.order_details:
             title = Text("ORDER CONFIRMATION", style="bold white", justify="center")
             asset_type = Text(
-                f"Rolling Short Calls: {self.order_details.get('Asset', '')}",
+                f"Rolling Short Calls: {asset}",
                 style="bold yellow",
                 justify="center"
             )
         else:
             title = Text("ORDER CONFIRMATION", style="bold white", justify="center")
             asset_type = Text(
-                f"{self.order_details.get('Type', '')}: {self.order_details.get('Asset', '')}",
+                f"{self.order_details.get('Type', '')}: {asset}",
                 style="bold yellow",
                 justify="center"
             )
@@ -135,7 +143,7 @@ class OrderConfirmationScreen(ModalScreen):
 
         # Instructions
         instructions = Text(
-            "[Y / Enter] Confirm Order     [N / Esc] Cancel",
+            f"[Y / Enter] {self.confirm_text}     [N / Esc] {self.cancel_text}",
             style="bold green",
             justify="center"
         )
