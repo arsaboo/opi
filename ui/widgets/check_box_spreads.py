@@ -63,11 +63,11 @@ class CheckBoxSpreadsWidget(Static):
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
             current_status = "open" if exec_window["open"] else "closed"
-            
+
             # Check if market status has changed
             if not hasattr(self, '_previous_market_status'):
                 self._previous_market_status = None
-                
+
             if self._previous_market_status != current_status:
                 if current_status == "open":
                     self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
@@ -97,21 +97,39 @@ class CheckBoxSpreadsWidget(Static):
             spread_width = float(box_spread_data.get("high_strike", 0)) - float(box_spread_data.get("low_strike", 0))
         except Exception:
             spread_width = ""
-            
+
+        # Set type to "Box Spread: Buy" or "Box Spread: Sell" (remove extra colon)
+        direction = box_spread_data.get("direction", "")
+        type_label = f"Box Spread {direction}" if direction else "Box Spread"
+
+        # Calculate Max Profit for Buy: repayment - investment
+        investment = box_spread_data.get("investment", 0)
+        repayment = box_spread_data.get("repayment", 0)
+        try:
+            max_profit = float(repayment) - float(investment) if direction == "Buy" else box_spread_data.get("max_profit", 0)
+        except Exception:
+            max_profit = 0.0
+
+        # Get CAGR if available
+        cagr = box_spread_data.get("cagr", "")
+
         order_details = {
-            "Type": "Box Spread",
-            "Direction": box_spread_data.get("direction", ""),
+            "Type": type_label,
+            "Direction": direction,
             "Expiration": box_spread_data.get("date", ""),
-            "Low Strike": box_spread_data.get("low_strike", ""),
-            "High Strike": box_spread_data.get("high_strike", ""),
+            "Strike Low": box_spread_data.get("low_strike", ""),
+            "Strike High": box_spread_data.get("high_strike", ""),
             "Spread Width": spread_width,
             "Net Price": box_spread_data.get("net_price", ""),
-            "Investment": box_spread_data.get("investment", ""),
-            "Repayment": box_spread_data.get("repayment", ""),
+            "Investment": investment,
+            "Repayment": repayment,
             "Borrowed": box_spread_data.get("borrowed", ""),
             "Repayment (Sell)": box_spread_data.get("repayment_sell", ""),
             "Annualized Return": box_spread_data.get("ann_cost_return", ""),
-            "Margin Requirement": box_spread_data.get("margin_req", "")
+            "Margin Req": box_spread_data.get("margin_req", ""),
+            "Max Profit": max_profit,
+            "CAGR": cagr
+            # Do not include "Protection" for box spreads
         }
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)
@@ -134,7 +152,7 @@ class CheckBoxSpreadsWidget(Static):
 
             if cursor_row < len(self._box_spreads_data):
                 box_spread_data = self._box_spreads_data[cursor_row]
-                
+
                 # Extract required data
                 # Note: Box spread order placement is more complex and would require implementing
                 # the actual order construction in the API. For now, we'll just log the attempt.
@@ -143,7 +161,7 @@ class CheckBoxSpreadsWidget(Static):
                 low_strike = box_spread_data.get("low_strike", "")
                 high_strike = box_spread_data.get("high_strike", "")
                 net_price = box_spread_data.get("net_price", "")
-                
+
                 self.app.query_one(StatusLog).add_message(f"Box spread order placement not yet implemented.")
                 self.app.query_one(StatusLog).add_message(f"Would place {direction} box spread:")
                 self.app.query_one(StatusLog).add_message(f"  Expiration: {expiration}")

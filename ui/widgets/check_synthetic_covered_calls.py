@@ -67,11 +67,11 @@ class CheckSyntheticCoveredCallsWidget(Static):
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
             current_status = "open" if exec_window["open"] else "closed"
-            
+
             # Check if market status has changed
             if not hasattr(self, '_previous_market_status'):
                 self._previous_market_status = None
-                
+
             if self._previous_market_status != current_status:
                 if current_status == "open":
                     self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
@@ -300,7 +300,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
             spread_width = float(synthetic_covered_call_data.get("strike_high", 0)) - float(synthetic_covered_call_data.get("strike_low", 0))
         except Exception:
             spread_width = ""
-            
+
         order_details = {
             "Type": "Synthetic Covered Call",
             "Asset": synthetic_covered_call_data.get("asset", ""),
@@ -311,8 +311,8 @@ class CheckSyntheticCoveredCallsWidget(Static):
             "Investment": f"${synthetic_covered_call_data.get('investment', 0):.2f}",
             "Max Profit": f"${synthetic_covered_call_data.get('max_profit', 0):.2f}",
             "CAGR": f"{synthetic_covered_call_data.get('cagr', 0)*100:.2f}%",
-            "Downside Protection": f"{synthetic_covered_call_data.get('protection', 0)*100:.2f}%",
-            "Margin Requirement": f"${synthetic_covered_call_data.get('margin_req', 0):.2f}",
+            "Protection": f"{synthetic_covered_call_data.get('protection', 0)*100:.2f}%",
+            "Margin Req": f"${synthetic_covered_call_data.get('margin_req', 0):.2f}",
             "Annualized Return": f"{synthetic_covered_call_data.get('ann_rom', 0)*100:.2f}%"
         }
         screen = OrderConfirmationScreen(order_details)
@@ -336,19 +336,19 @@ class CheckSyntheticCoveredCallsWidget(Static):
 
             if cursor_row < len(self._synthetic_covered_calls_data):
                 synthetic_covered_call_data = self._synthetic_covered_calls_data[cursor_row]
-                
+
                 # Extract required data
                 asset = synthetic_covered_call_data.get("asset", "")
                 expiration = datetime.strptime(synthetic_covered_call_data.get("expiration", ""), "%Y-%m-%d").date()
                 strike_low = float(synthetic_covered_call_data.get("strike_low", 0))
                 strike_high = float(synthetic_covered_call_data.get("strike_high", 0))
                 net_debit = float(synthetic_covered_call_data.get("investment", 0)) / 100  # Convert from total to per contract
-                
+
                 # Place the order using the api method
                 from strategies import monitor_order
                 from order_utils import handle_cancel, reset_cancel_flag
                 import keyboard
-                
+
                 try:
                     # Reset cancel flag and clear keyboard hooks
                     reset_cancel_flag()
@@ -359,7 +359,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
                     initial_price = net_debit
                     order_id = None
                     filled = False
-                    
+
                     for i in range(0, 76):  # 0 = original price, 1-75 = improvements
                         if not cancel_order:  # Check if cancelled
                             current_price = (
@@ -380,7 +380,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
                                 1,  # quantity
                                 price=current_price
                             )
-                            
+
                             # Check if order was placed (None when debugCanSendOrders is False)
                             if order_id is None:
                                 self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
@@ -390,7 +390,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
                             # Monitor with 60s timeout
                             self.app.query_one(StatusLog).add_message(f"Monitoring order {order_id}...")
                             result = await self.monitor_order_ui(order_id, timeout=60)
-                            
+
                             # Add status update based on result
                             if result is True:
                                 self.app.query_one(StatusLog).add_message(f"Order {order_id} filled successfully!")
@@ -467,7 +467,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
                         remaining = int(timeout - elapsed_time)
                         status_str = order_status['status']
                         rejection_reason = order_status.get('rejection_reason', '')
-                        
+
                         status_msg = f"Status: {status_str} {rejection_reason} | Time remaining: {remaining}s | Price: {order_status.get('price', 'N/A')} | Filled: {order_status.get('filledQuantity', '0')}"
                         self.app.query_one(StatusLog).add_message(status_msg)
                         last_print_time = current_time

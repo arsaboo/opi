@@ -64,11 +64,11 @@ class RollShortOptionsWidget(Static):
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
             current_status = "open" if exec_window["open"] else "closed"
-            
+
             # Check if market status has changed
             if not hasattr(self, '_previous_market_status'):
                 self._previous_market_status = None
-                
+
             if self._previous_market_status != current_status:
                 if current_status == "open":
                     self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
@@ -105,7 +105,8 @@ class RollShortOptionsWidget(Static):
             "Asset": roll_data.get("Ticker", ""),
             "Current Strike": roll_data.get("Current Strike", ""),
             "New Strike": roll_data.get("New Strike", ""),
-            "Expiration": roll_data.get("New Expiration", ""),
+            "Current Expiration": roll_data.get("Expiration", ""),  # Current expiration
+            "New Expiration": roll_data.get("New Expiration", ""),  # New expiration
             "Credit": roll_data.get("Credit", ""),
             "Quantity": roll_data.get("Quantity", roll_data.get("count", "")),
             "Roll Up Amount": roll_up_amount,

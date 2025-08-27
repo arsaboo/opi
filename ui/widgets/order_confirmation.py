@@ -1,64 +1,171 @@
 from textual.screen import ModalScreen
-from textual.widgets import Static, LoadingIndicator
+from textual.widgets import Static
 from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
+from rich.align import Align
 
 
 class OrderConfirmationScreen(ModalScreen):
     """A modal screen for order confirmation."""
 
-    def __init__(self, order_details, confirm_text="Confirm Order", cancel_text="Cancel Order"):
+    def __init__(self, order_details):
         super().__init__()
         self.order_details = order_details
-        self.confirm_text = confirm_text
-        self.cancel_text = cancel_text
         self._loading = False
         self._error = None
 
     def compose(self):
-        # Title and asset/type
-        title = Text("Confirm Order", style="bold underline", justify="center")
-        asset_type = Text(
-            f"{self.order_details.get('Type', '')}: {self.order_details.get('Asset', '')}",
-            style="bold yellow",
-            justify="center"
-        )
+        def parse_float(value):
+            """Safely parse float from string, stripping currency/percentage symbols."""
+            if value is None:
+                return 0.0
+            if isinstance(value, str):
+                value = value.replace('$', '').replace('%', '').strip()
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return 0.0
 
-        # Order details as a Rich Table
-        table = Table.grid(padding=(0, 2))
-        for field, value in self.order_details.items():
-            # Skip the "Type" and "Asset" fields since they're already shown in the header
-            if field not in ["Type", "Asset"]:
-                table.add_row(
-                    Text(str(field), style="bold cyan"),
-                    Text(str(value), style="white")
-                )
+        # Title and asset/type
+        if self.order_details.get("Type", "").startswith("Box Spread"):
+            title = Text("ORDER CONFIRMATION", style="bold white", justify="center")
+            asset_type = Text(
+                self.order_details.get("Type", "Box Spread"),
+                style="bold yellow",
+                justify="center"
+            )
+        elif "Roll Up Amount" in self.order_details:
+            title = Text("ORDER CONFIRMATION", style="bold white", justify="center")
+            asset_type = Text(
+                f"Rolling Short Calls: {self.order_details.get('Asset', '')}",
+                style="bold yellow",
+                justify="center"
+            )
+        else:
+            title = Text("ORDER CONFIRMATION", style="bold white", justify="center")
+            asset_type = Text(
+                f"{self.order_details.get('Type', '')}: {self.order_details.get('Asset', '')}",
+                style="bold yellow",
+                justify="center"
+            )
+
+        # Contract Details Section
+        contract_table = Table.grid(padding=(0, 2), expand=True)
+        # Expiration: show current → new with arrow if new is present
+        current_exp = self.order_details.get("Current Expiration", self.order_details.get("Expiration", ""))
+        new_exp = self.order_details.get("New Expiration", "")
+        if new_exp:
+            expiration_display = f"{current_exp} → {new_exp}"
+        else:
+            expiration_display = str(current_exp)
+        contract_table.add_row(
+            Text("Expiration", style="cyan"),
+            Text(":", style="white"),
+            Text(expiration_display, style="white", justify="left")
+        )
+        # Strike: show as "Strike" and use arrow if both old and new are present
+        strike_low = self.order_details.get('Strike Low', self.order_details.get('Current Strike', ''))
+        strike_high = self.order_details.get('Strike High', self.order_details.get('New Strike', ''))
+        contract_table.add_row(
+            Text("Strike", style="cyan"),
+            Text(":", style="white"),
+            Text(f"{strike_low} → {strike_high}", style="white", justify="left")
+        )
+        # For roll short options, show Roll Up and Roll Out if present
+        if "Roll Up Amount" in self.order_details:
+            contract_table.add_row(
+                Text("Roll Up (Amount)", style="cyan"),
+                Text(":", style="white"),
+                Text(f"{self.order_details.get('Roll Up Amount', '')}", style="white", justify="left")
+            )
+        if "Roll Out (Days)" in self.order_details:
+            contract_table.add_row(
+                Text("Roll Out (Days)", style="cyan"),
+                Text(":", style="white"),
+                Text(f"{self.order_details.get('Roll Out (Days)', '')}", style="white", justify="left")
+            )
+        # Only show Spread Width if not a roll
+        if "Roll Up Amount" not in self.order_details and "Roll Out (Days)" not in self.order_details:
+            contract_table.add_row(
+                Text("Spread Width", style="cyan"),
+                Text(":", style="white"),
+                Text(str(parse_float(strike_high) - parse_float(strike_low)), style="white", justify="left")
+            )
+
+        # Investment & Returns Section
+        investment_table = Table.grid(padding=(0, 2), expand=True)
+        investment_table.add_row(
+            Text("Investment", style="cyan"),
+            Text(":", style="white"),
+            Text(f"$ {parse_float(self.order_details.get('Investment', 0)):.2f}", style="white", justify="right")
+        )
+        investment_table.add_row(
+            Text("Max Profit", style="cyan"),
+            Text(":", style="white"),
+            Text(f"$ {parse_float(self.order_details.get('Max Profit', 0)):.2f}", style="bold green", justify="right")
+        )
+        investment_table.add_row(
+            Text("Annualized Return", style="cyan"),
+            Text(":", style="white"),
+            Text(f"{parse_float(self.order_details.get('Annualized Return', self.order_details.get('ann_rom', 0))):.2f}%", style="bold green", justify="right")
+        )
+        # Only show CAGR for non-box spreads
+        if not self.order_details.get("Type", "").startswith("Box Spread"):
+            investment_table.add_row(
+                Text("CAGR", style="cyan"),
+                Text(":", style="white"),
+                Text(f"{parse_float(self.order_details.get('CAGR', 0)):.2f}%", style="white", justify="right")
+            )
+
+        # Risk & Margin Section
+        risk_table = Table.grid(padding=(0, 2), expand=True)
+        # Only show Downside Protection for non-box spreads
+        if not self.order_details.get("Type", "").startswith("Box Spread"):
+            risk_table.add_row(
+                Text("Downside Protection", style="cyan"),
+                Text(":", style="white"),
+                Text(f"{parse_float(self.order_details.get('Protection', 0)):.2f}%", style="white", justify="right")
+            )
+        risk_table.add_row(
+            Text("Margin Requirement", style="cyan"),
+            Text(":", style="white"),
+            Text(f"$ {parse_float(self.order_details.get('Margin Req', 0)):.2f}", style="white", justify="right")
+        )
 
         # Instructions
         instructions = Text(
-            f"[Enter/Y] {self.confirm_text}   [Esc/N] {self.cancel_text}",
+            "[Y / Enter] Confirm Order     [N / Esc] Cancel",
             style="bold green",
             justify="center"
         )
 
-        # Loading indicator or error
-        feedback = ""
-        if self._loading:
-            feedback = LoadingIndicator()
-        elif self._error:
-            feedback = Text(self._error, style="bold red")
-
         # Compose Rich panel content
         panel_content = Table.grid(expand=True)
-        panel_content.add_row(title)
-        panel_content.add_row(asset_type)
-        panel_content.add_row(table)
-        panel_content.add_row(instructions)
-        if feedback:
-            panel_content.add_row(feedback)
+        panel_content.add_row(Align.center(title))
+        panel_content.add_row(Align.center(asset_type))
+        panel_content.add_row("")  # Spacer
 
-        panel = Panel(
+        # Contract Details
+        panel_content.add_row(Text("Contract Details", style="bold underline"))
+        panel_content.add_row(contract_table)
+
+        # Only add Investment & Returns and Risk & Margin for non-roll shorts
+        if "Roll Up Amount" not in self.order_details:
+            # Investment & Returns
+            panel_content.add_row(Text("Investment & Returns", style="bold underline"))
+            panel_content.add_row(investment_table)
+
+            # Risk & Margin
+            panel_content.add_row(Text("Risk & Margin", style="bold underline"))
+            panel_content.add_row(risk_table)
+
+        # Instructions
+        panel_content.add_row("")  # Spacer
+        panel_content.add_row(Align.center(instructions))
+        panel_content.add_row("─" * 50)
+
+        panel = Panel.fit(
             panel_content,
             title="Order Confirmation",
             border_style="bold blue"
