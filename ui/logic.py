@@ -75,15 +75,18 @@ async def process_short_position(api, short):
         strike_delta = "N/A"
         config_status = "Configured"
 
+        # Always try to calculate current short premium for extrinsic_left
+        prem_short_contract = None
+        days = configuration.get(stock_symbol, {}).get("maxRollOutWindow", 30)  # Use default if not configured
+        toDate = short_expiration_date + timedelta(days=days)
+        option_chain_obj = await asyncio.to_thread(OptionChain, api, stock_symbol, toDate, days)
+        chain = await asyncio.to_thread(option_chain_obj.get)
+        if chain:
+            prem_short_contract = await asyncio.to_thread(get_median_price, short["optionSymbol"], chain)
+
         if stock_symbol not in configuration:
             config_status = "Not Configured"
         else:
-            days = configuration[stock_symbol].get("maxRollOutWindow", 30)
-            toDate = short_expiration_date + timedelta(days=days)
-
-            option_chain_obj = await asyncio.to_thread(OptionChain, api, stock_symbol, toDate, days)
-            chain = await asyncio.to_thread(option_chain_obj.get)
-
             if not chain:
                 new_expiration = "No chain"
             else:
@@ -93,7 +96,6 @@ async def process_short_position(api, short):
                     new_strike = float(roll_option["strike"])
                     strike_delta = new_strike - current_strike
 
-                    prem_short_contract = await asyncio.to_thread(get_median_price, short["optionSymbol"], chain)
                     roll_premium = await asyncio.to_thread(get_median_price, roll_option["symbol"], chain)
 
                     if prem_short_contract is not None and roll_premium is not None:
@@ -108,6 +110,15 @@ async def process_short_position(api, short):
                     new_expiration = str(new_expiration_date)
                     roll_out_days = (new_expiration_date - short_expiration_date).days
 
+        # Calculate new fields
+        cr_day = "N/A"
+        extrinsic_left = "N/A"
+        if credit != "N/A" and roll_out_days != "N/A" and roll_out_days > 0:
+            cr_day = round(credit / roll_out_days, 2)
+        if prem_short_contract is not None:
+            intrinsic_value = max(0, underlying_price - current_strike)
+            extrinsic_left = round(prem_short_contract - intrinsic_value, 2)
+
         return {
             "Ticker": stock_symbol,
             "Current Strike": current_strike,
@@ -120,6 +131,8 @@ async def process_short_position(api, short):
             "New Expiration": new_expiration,
             "Roll Out (Days)": roll_out_days,
             "Credit": credit,
+            "Cr/Day": cr_day,
+            "Extrinsic": extrinsic_left,
             "Strike Δ": strike_delta,
             "Config Status": config_status,
         }

@@ -42,6 +42,8 @@ class RollShortOptionsWidget(Static):
             "New Expiration",
             "Roll Out (Days)",
             "Credit",
+            "Cr/Day",
+            "Extrinsic",
             "Strike Δ",
             "Config Status",
             "Refreshed"
@@ -200,6 +202,26 @@ class RollShortOptionsWidget(Static):
             if col == "Config Status":
                 if val == "Not Configured":
                     return "yellow"
+            if col == "Status":
+                if val == "OTM":
+                    return "green"
+                elif val in ("ITM", "Deep ITM"):
+                    return "red"
+                elif val == "Just ITM":
+                    return "yellow"
+                return ""
+            if col == "Cr/Day":
+                try:
+                    v = float(val)
+                    return "green" if v > 0 else "red" if v < 0 else ""
+                except:
+                    return ""
+            if col == "Extrinsic":
+                try:
+                    v = float(val)
+                    return "green" if v < 1 else "red"  # Low extrinsic = low risk
+                except:
+                    return ""
             return ""
 
         if data:
@@ -216,8 +238,8 @@ class RollShortOptionsWidget(Static):
                     val = str(row[col_name])
                     prev_val = prev_row.get(col_name)
                     style = get_cell_class(col_name, val, prev_val)
-                    # Justify Credit and Strike Δ to the right
-                    justify = "right" if col_index in [10, 11] else "left"
+                    # Justify Credit, Cr/Day, Extrinsic, Strike Δ to the right
+                    justify = "right" if col_index in [10, 11, 12, 13] else "left"
                     return Text(val, style=style, justify=justify)
 
                 cells = [
@@ -226,13 +248,15 @@ class RollShortOptionsWidget(Static):
                     Text(str(row["Expiration"]), style="", justify="left"),
                     Text(str(row["DTE"]), style="", justify="right"),
                     Text(str(row.get("Underlying Price", "")), style="", justify="right"),
-                    Text(str(row.get("Status", "")), style="", justify="left"),
+                    Text(str(row.get("Status", "")), style=get_cell_class("Status", row.get("Status", "")), justify="left"),
                     Text(str(row.get("Quantity", row.get("count", ""))), style="", justify="right"),
                     Text(str(row["New Strike"]), style="", justify="right"),
                     Text(str(row["New Expiration"]), style="", justify="left"),
                     Text(str(row["Roll Out (Days)"]), style="", justify="right"),
                     style_cell("Credit", 10),
-                    style_cell("Strike Δ", 11),
+                    style_cell("Cr/Day", 11),
+                    style_cell("Extrinsic", 12),
+                    style_cell("Strike Δ", 13),
                     Text(str(row["Config Status"]), style=get_cell_class("Config Status", row["Config Status"]), justify="left"),
                     Text(refreshed_time, style="", justify="left")
                 ]
@@ -240,4 +264,4 @@ class RollShortOptionsWidget(Static):
                 table.add_row(*cells)
             self._prev_rows = data
         else:
-            table.add_row("No expiring options found.", *[""] * 12, refreshed_time)
+            table.add_row("No expiring options found.", *[""] * 15, refreshed_time)
