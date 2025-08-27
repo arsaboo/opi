@@ -113,8 +113,16 @@ async def process_short_position(api, short):
         # Calculate new fields
         cr_day = "N/A"
         extrinsic_left = "N/A"
+        cr_day_per_pt = "N/A"
         if credit != "N/A" and roll_out_days != "N/A" and roll_out_days > 0:
             cr_day = round(credit / roll_out_days, 2)
+            # Calculate CrDayPerPt (normalized per point of roll-up, in cash dollars)
+            try:
+                delta_k = float(new_strike) - float(current_strike)
+                denom = roll_out_days * max(abs(delta_k), 1e-6)
+                cr_day_per_pt = round((credit * 100) / denom, 2)
+            except Exception:
+                cr_day_per_pt = "N/A"
         if prem_short_contract is not None:
             intrinsic_value = max(0, underlying_price - current_strike)
             extrinsic_left = round(prem_short_contract - intrinsic_value, 2)
@@ -132,6 +140,7 @@ async def process_short_position(api, short):
             "Roll Out (Days)": roll_out_days,
             "Credit": credit,
             "Cr/Day": cr_day,
+            "CrDayPerPt": cr_day_per_pt,
             "Extrinsic": extrinsic_left,
             "Strike Δ": strike_delta,
             "Config Status": config_status,
@@ -195,7 +204,7 @@ async def get_box_spreads_data(api, asset="$SPX"):
 
                 # Check for impossible mids or suspect quotes
                 flags = []
-                
+
                 # Check if mid prices are valid (not crossed)
                 low_call_bid = spread.get("low_call_bid")
                 low_call_ask = spread.get("low_call_ask")
@@ -205,7 +214,7 @@ async def get_box_spreads_data(api, asset="$SPX"):
                 low_put_ask = spread.get("low_put_ask")
                 high_put_bid = spread.get("high_put_bid")
                 high_put_ask = spread.get("high_put_ask")
-                
+
                 if all(x is not None for x in [low_call_bid, low_call_ask, high_call_bid, high_call_ask,
                                                low_put_bid, low_put_ask, high_put_bid, high_put_ask]):
                     # Check for crossed quotes (bid > ask)
@@ -217,7 +226,7 @@ async def get_box_spreads_data(api, asset="$SPX"):
                         flags.append("Low Put Crossed")
                     if high_put_bid > high_put_ask:
                         flags.append("High Put Crossed")
-                        
+
                     # Check for negative spreads (ask < bid for the same leg)
                     if low_call_ask < low_call_bid:
                         flags.append("Low Call Negative Spread")

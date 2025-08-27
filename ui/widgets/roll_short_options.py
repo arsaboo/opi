@@ -16,6 +16,7 @@ class RollShortOptionsWidget(Static):
         super().__init__()
         self._prev_rows = None
         self._roll_data = []  # Store the actual roll data for each row
+        self._previous_market_status = None  # Track previous market status
 
     def compose(self):
         """Create child widgets."""
@@ -23,11 +24,10 @@ class RollShortOptionsWidget(Static):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
-        # Update the header
         self.app.update_header("Options Trader - Roll Short Calls")
-
-        # Check market status
-        self.check_market_status()
+        # Only check market status if not already set
+        if self._previous_market_status is None:
+            self.check_market_status()
 
         table = self.query_one(DataTable)
         table.add_columns(
@@ -43,6 +43,7 @@ class RollShortOptionsWidget(Static):
             "Roll Out (Days)",
             "Credit",
             "Cr/Day",
+            "CrDayPerPt",  # <-- Add this column
             "Extrinsic",
             "Strike Δ",
             "Config Status",
@@ -66,11 +67,7 @@ class RollShortOptionsWidget(Static):
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
             current_status = "open" if exec_window["open"] else "closed"
-
-            # Check if market status has changed
-            if not hasattr(self, '_previous_market_status'):
-                self._previous_market_status = None
-
+            # Only log if status changed
             if self._previous_market_status != current_status:
                 if current_status == "open":
                     self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
@@ -210,7 +207,7 @@ class RollShortOptionsWidget(Static):
                 elif val == "Just ITM":
                     return "yellow"
                 return ""
-            if col == "Cr/Day":
+            if col == "Cr/Day" or col == "CrDayPerPt":
                 try:
                     v = float(val)
                     return "green" if v > 0 else "red" if v < 0 else ""
@@ -238,8 +235,8 @@ class RollShortOptionsWidget(Static):
                     val = str(row[col_name])
                     prev_val = prev_row.get(col_name)
                     style = get_cell_class(col_name, val, prev_val)
-                    # Justify Credit, Cr/Day, Extrinsic, Strike Δ to the right
-                    justify = "right" if col_index in [10, 11, 12, 13] else "left"
+                    # Justify Credit, Cr/Day, CrDayPerPt, Extrinsic, Strike Δ to the right
+                    justify = "right" if col_index in [10, 11, 12, 13, 14] else "left"
                     return Text(val, style=style, justify=justify)
 
                 cells = [
@@ -255,8 +252,9 @@ class RollShortOptionsWidget(Static):
                     Text(str(row["Roll Out (Days)"]), style="", justify="right"),
                     style_cell("Credit", 10),
                     style_cell("Cr/Day", 11),
-                    style_cell("Extrinsic", 12),
-                    style_cell("Strike Δ", 13),
+                    style_cell("CrDayPerPt", 12),  # <-- Add this cell
+                    style_cell("Extrinsic", 13),
+                    style_cell("Strike Δ", 14),
                     Text(str(row["Config Status"]), style=get_cell_class("Config Status", row["Config Status"]), justify="left"),
                     Text(refreshed_time, style="", justify="left")
                 ]
@@ -264,4 +262,4 @@ class RollShortOptionsWidget(Static):
                 table.add_row(*cells)
             self._prev_rows = data
         else:
-            table.add_row("No expiring options found.", *[""] * 15, refreshed_time)
+            table.add_row("No expiring options found.", *[""] * 16, refreshed_time)

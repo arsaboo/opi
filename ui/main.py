@@ -151,6 +151,7 @@ class OpiApp(App):
     def __init__(self, api=None):
         super().__init__()
         self.api = api  # API instance is passed in
+        self._previous_market_status = None  # Track previous market status
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
@@ -161,42 +162,19 @@ class OpiApp(App):
 
     def on_mount(self) -> None:
         """Called when the app is mounted."""
-        # Check market status
         self.check_market_status()
-        
         self.query_one(StatusLog).add_message("Welcome to the Options Trading Bot! Press a key to select an option.")
         main_container = self.query_one("#main_container")
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
-
-    def check_market_status(self) -> None:
-        """Check and display market status information."""
-        try:
-            exec_window = self.api.getOptionExecutionWindow()
-            if exec_window["open"]:
-                self.query_one(StatusLog).add_message("Market is open, running the program now...")
-            else:
-                message = "Market is closed"
-                from configuration import debugMarketOpen
-                if debugMarketOpen:
-                    message += " but the program will work in debug mode"
-                self.query_one(StatusLog).add_message(message + ".")
-
-        except Exception as e:
-            self.query_one(StatusLog).add_message(f"Error checking market status: {e}")
-
-    def update_header(self, title: str) -> None:
-        """Update the app title."""
-        self.title = title
-        # Force a refresh of the header
-        header = self.query_one(Header)
-        header.refresh()
 
     def action_roll_short_options(self) -> None:
         """Action to roll short options."""
         self.update_header("Options Trader - Roll Short Calls")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(RollShortOptionsWidget())
+        widget = RollShortOptionsWidget()
+        widget._previous_market_status = self._previous_market_status  # Pass status
+        main_container.mount(widget)
         self.query_one(StatusLog).add_message("Roll Short Options selected.")
 
     def action_check_box_spreads(self) -> None:
@@ -204,7 +182,9 @@ class OpiApp(App):
         self.update_header("Options Trader - Box Spreads")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(CheckBoxSpreadsWidget())
+        widget = CheckBoxSpreadsWidget()
+        widget._previous_market_status = self._previous_market_status  # Pass status
+        main_container.mount(widget)
         self.query_one(StatusLog).add_message("Check Box Spreads selected.")
 
     def action_check_vertical_spreads(self) -> None:
@@ -212,7 +192,9 @@ class OpiApp(App):
         self.update_header("Options Trader - Vertical Spreads")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(CheckVerticalSpreadsWidget())
+        widget = CheckVerticalSpreadsWidget()
+        widget._previous_market_status = self._previous_market_status  # Pass status
+        main_container.mount(widget)
         self.query_one(StatusLog).add_message("Check Vertical Spreads selected.")
 
     def action_check_synthetic_covered_calls(self) -> None:
@@ -220,7 +202,9 @@ class OpiApp(App):
         self.update_header("Options Trader - Synthetic Covered Calls")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(CheckSyntheticCoveredCallsWidget())
+        widget = CheckSyntheticCoveredCallsWidget()
+        widget._previous_market_status = self._previous_market_status  # Pass status
+        main_container.mount(widget)
         self.query_one(StatusLog).add_message("Check Synthetic Covered Calls selected.")
 
     def action_view_margin_requirements(self) -> None:
@@ -228,7 +212,9 @@ class OpiApp(App):
         self.update_header("Options Trader - Margin Requirements")
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        main_container.mount(ViewMarginRequirementsWidget())
+        widget = ViewMarginRequirementsWidget()
+        widget._previous_market_status = self._previous_market_status  # Pass status
+        main_container.mount(widget)
         self.query_one(StatusLog).add_message("View Margin Requirements selected.")
 
     def action_order_management(self) -> None:
@@ -239,6 +225,32 @@ class OpiApp(App):
         main_container.remove_children()
         main_container.mount(OrderManagementWidget())
         self.query_one(StatusLog).add_message("Order Management selected.")
+
+    def check_market_status(self) -> None:
+        """Check and display market status information."""
+        try:
+            exec_window = self.api.getOptionExecutionWindow()
+            current_status = "open" if exec_window["open"] else "closed"
+            # Only log if status changed
+            if self._previous_market_status != current_status:
+                if current_status == "open":
+                    self.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
+                else:
+                    message = "Market is closed"
+                    from configuration import debugMarketOpen
+                    if debugMarketOpen:
+                        message += " but the program will work in debug mode"
+                    self.query_one(StatusLog).add_message(message + ".")
+                self._previous_market_status = current_status
+        except Exception as e:
+            self.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+
+    def update_header(self, title: str) -> None:
+        """Update the app title."""
+        self.title = title
+        # Force a refresh of the header
+        header = self.query_one(Header)
+        header.refresh()
 
     def action_toggle_dark(self) -> None:
         """An action to toggle dark mode."""

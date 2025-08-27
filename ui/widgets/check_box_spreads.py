@@ -16,6 +16,7 @@ class CheckBoxSpreadsWidget(Static):
         super().__init__()
         self._prev_rows = None  # Store previous data for comparison
         self._box_spreads_data = []  # Store actual box spreads data for order placement
+        self._previous_market_status = None  # Track previous market status
 
     def compose(self):
         """Create child widgets."""
@@ -23,11 +24,10 @@ class CheckBoxSpreadsWidget(Static):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
-        # Update the header
         self.app.update_header("Options Trader - Box Spreads")
-
-        # Check market status
-        self.check_market_status()
+        # Only check market status if not already set
+        if self._previous_market_status is None:
+            self.check_market_status()
 
         table = self.query_one(DataTable)
         table.add_columns(
@@ -65,11 +65,7 @@ class CheckBoxSpreadsWidget(Static):
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
             current_status = "open" if exec_window["open"] else "closed"
-
-            # Check if market status has changed
-            if not hasattr(self, '_previous_market_status'):
-                self._previous_market_status = None
-
+            # Only log if status changed
             if self._previous_market_status != current_status:
                 if current_status == "open":
                     self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
@@ -105,10 +101,10 @@ class CheckBoxSpreadsWidget(Static):
         nat_annualized_return = box_spread_data.get("nat_annualized_return", "")
         days_to_expiry = box_spread_data.get("days_to_expiry", "")
         face_value = box_spread_data.get("face_value", "")
-        
+
         # Get upfront amount based on direction
-        upfront_amount = box_spread_data.get("mid_upfront_amount", 
-                                           box_spread_data.get("investment", 
+        upfront_amount = box_spread_data.get("mid_upfront_amount",
+                                           box_spread_data.get("investment",
                                            box_spread_data.get("borrowed", 0)))
 
         order_details = {
@@ -302,7 +298,7 @@ class CheckBoxSpreadsWidget(Static):
                             style = get_cell_style(col_name, val, formatted_prev_val)
                         except ValueError:
                             pass  # Keep original value if conversion fails
-                    elif col_name in ["investment", "borrowed", "mid_upfront_amount", "nat_upfront_amount", 
+                    elif col_name in ["investment", "borrowed", "mid_upfront_amount", "nat_upfront_amount",
                                       "face_value"]:
                         # Format monetary values
                         try:
@@ -423,7 +419,7 @@ class CheckBoxSpreadsWidget(Static):
                 flags = row.get("flags", "")
                 flags_style = "bold red" if flags else ""
                 flags_text = Text(flags, style=flags_style, justify="left")
-                
+
                 # Format face value
                 try:
                     face_value = float(row.get("face_value", 0))

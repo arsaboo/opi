@@ -82,6 +82,12 @@ class OrderConfirmationScreen(ModalScreen):
         )
         # For roll short options, show Roll Up and Roll Out if present
         if "Roll Up Amount" in self.order_details:
+            # Show Credit Received
+            contract_table.add_row(
+                Text("Credit Received", style="cyan"),
+                Text(":", style="white"),
+                Text(f"{self.order_details.get('Credit', '')}", style="bold green", justify="left")
+            )
             contract_table.add_row(
                 Text("Roll Up (Amount)", style="cyan"),
                 Text(":", style="white"),
@@ -107,7 +113,7 @@ class OrderConfirmationScreen(ModalScreen):
         if self.order_details.get("Type", "").startswith("Box Spread"):
             upfront_amount = parse_float(self.order_details.get('Upfront Amount', 0))
             face_value = parse_float(self.order_details.get('Face Value', 0))
-            
+
             investment_table.add_row(
                 Text("Upfront Amount", style="cyan"),
                 Text(":", style="white"),

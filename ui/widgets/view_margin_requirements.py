@@ -11,6 +11,7 @@ class ViewMarginRequirementsWidget(Static):
     def __init__(self):
         super().__init__()
         self._prev_rows = None
+        self._previous_market_status = None  # Track previous market status
 
     def compose(self):
         """Create child widgets."""
@@ -19,12 +20,11 @@ class ViewMarginRequirementsWidget(Static):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
-        # Update the header
         self.app.update_header("Options Trader - Margin Requirements")
-        
-        # Check market status
-        self.check_market_status()
-        
+        # Only check market status if not already set
+        if self._previous_market_status is None:
+            self.check_market_status()
+
         table = self.query_one(DataTable)
         table.add_columns(
             "Symbol",
@@ -47,17 +47,13 @@ class ViewMarginRequirementsWidget(Static):
         self.set_interval(15, self.run_get_margin_requirements_data)
         # Add periodic market status check every 30 seconds
         self.set_interval(30, self.check_market_status)
-        
+
     def check_market_status(self) -> None:
         """Check and display market status information."""
         try:
             exec_window = self.app.api.getOptionExecutionWindow()
             current_status = "open" if exec_window["open"] else "closed"
-            
-            # Check if market status has changed
-            if not hasattr(self, '_previous_market_status'):
-                self._previous_market_status = None
-                
+            # Only log if status changed
             if self._previous_market_status != current_status:
                 if current_status == "open":
                     self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
@@ -140,7 +136,7 @@ class ViewMarginRequirementsWidget(Static):
             prev_rows = self._prev_rows or []
             for idx, row in enumerate(margin_data):
                 prev_row = prev_rows[idx] if idx < len(prev_rows) else {}
-                
+
                 # Function to style a cell value
                 def style_cell(col_name):
                     val = str(row[col_name])
@@ -150,7 +146,7 @@ class ViewMarginRequirementsWidget(Static):
                     right_justify_cols = {"strike", "count", "margin"}
                     justify = "right" if col_name in right_justify_cols else "left"
                     return Text(val, style=style, justify=justify)
-                
+
                 cells = [
                     Text(str(row["symbol"]), style="", justify="left"),
                     Text(str(row["type"]), style="", justify="left"),
