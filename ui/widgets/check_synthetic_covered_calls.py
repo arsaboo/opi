@@ -290,7 +290,6 @@ class CheckSyntheticCoveredCallsWidget(Static):
 
     def show_order_confirmation(self, synthetic_covered_call_data) -> None:
         """Show order confirmation dialog."""
-        # Prepare order details
         order_details = {
             "Type": "Synthetic Covered Call",
             "Asset": synthetic_covered_call_data.get("asset", ""),
@@ -301,8 +300,6 @@ class CheckSyntheticCoveredCallsWidget(Static):
             "Max Profit": synthetic_covered_call_data.get("max_profit", ""),
             "Annualized Return": synthetic_covered_call_data.get("ann_rom", "")
         }
-
-        # Create and show the dialog
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)
 
@@ -310,7 +307,6 @@ class CheckSyntheticCoveredCallsWidget(Static):
         """Handle the user's response to the order confirmation."""
         if confirmed:
             self.app.query_one(StatusLog).add_message("Order confirmed. Placing synthetic covered call order...")
-            # TODO: Implement actual synthetic covered call order placement logic
             self.place_synthetic_covered_call_order()
         else:
             self.app.query_one(StatusLog).add_message("Synthetic covered call order cancelled by user.")

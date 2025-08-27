@@ -1,38 +1,103 @@
-from textual.screen import Screen
-from textual.widgets import DataTable, Static
-from textual.containers import Container, Vertical
-from textual import events
+from textual.screen import ModalScreen
+from textual.widgets import Static, LoadingIndicator
+from rich.panel import Panel
+from rich.text import Text
+from rich.table import Table
 
 
-class OrderConfirmationScreen(Screen):
-    """A full-screen confirmation screen for order placement."""
+class OrderConfirmationScreen(ModalScreen):
+    """A modal screen for order confirmation."""
 
-    def __init__(self, order_details, confirm_text="Confirm", cancel_text="Cancel"):
+    def __init__(self, order_details):
         super().__init__()
         self.order_details = order_details
-        self.confirm_text = confirm_text
-        self.cancel_text = cancel_text
+        self._loading = False
+        self._error = None
 
     def compose(self):
-        yield Container(
-            Vertical(
-                Static("Confirm Order Placement", id="title"),
-                DataTable(id="order_details_table"),
-                Static(f"[Enter/Y] {self.confirm_text}   [Esc/N] {self.cancel_text}", id="confirmation_hint"),
-                id="confirmation_screen"
-            ),
-            id="confirmation_overlay"
+        # Title and asset/type
+        title = Text("Confirm Order", style="bold underline", justify="center")
+        asset_type = Text(
+            f"{self.order_details.get('Type', '')}: {self.order_details.get('Asset', '')}",
+            style="bold yellow",
+            justify="center"
         )
 
-    def on_mount(self):
-        table = self.query_one(DataTable)
-        table.add_columns("Field", "Value")
-        for key, value in self.order_details.items():
-            table.add_row(str(key), str(value))
-        table.focus()
+        # Order details as a Rich Table
+        table = Table.grid(padding=(0, 2))
+        for field, value in self.order_details.items():
+            table.add_row(
+                Text(str(field), style="bold cyan"),
+                Text(str(value), style="white")
+            )
 
-    async def on_key(self, event: events.Key):
+        # Add roll-specific fields if present
+        if "Roll Up Amount" in self.order_details:
+            table.add_row(
+                Text("Roll Up Amount", style="bold magenta"),
+                Text(str(self.order_details["Roll Up Amount"]), style="white")
+            )
+        if "Roll Out (Days)" in self.order_details:
+            table.add_row(
+                Text("Roll Out (Days)", style="bold magenta"),
+                Text(str(self.order_details["Roll Out (Days)"]), style="white")
+            )
+        if "Current Underlying Value" in self.order_details:
+            table.add_row(
+                Text("Current Underlying Value", style="bold magenta"),
+                Text(str(self.order_details["Current Underlying Value"]), style="white")
+            )
+
+        # Instructions
+        instructions = Text(
+            "[Enter/Y] Confirm   [Esc/N] Cancel",
+            style="bold green",
+            justify="center"
+        )
+
+        # Loading indicator or error
+        feedback = ""
+        if self._loading:
+            feedback = LoadingIndicator()
+        elif self._error:
+            feedback = Text(self._error, style="bold red")
+
+        # Compose Rich panel content
+        panel_content = Table.grid(expand=True)
+        panel_content.add_row(title)
+        panel_content.add_row(asset_type)
+        panel_content.add_row(table)
+        panel_content.add_row(instructions)
+        if feedback:
+            panel_content.add_row(feedback)
+
+        panel = Panel(
+            panel_content,
+            title="Order Confirmation",
+            border_style="bold blue"
+        )
+
+        yield Static(panel, id="order-confirmation-modal")
+
+    def on_key(self, event):
+        if self._loading:
+            event.prevent_default()
+            return
         if event.key in ("enter", "y"):
-            self.dismiss(True)
+            self._loading = True
+            self.refresh()
+            self.confirm_order()
         elif event.key in ("escape", "n"):
             self.dismiss(False)
+
+    def confirm_order(self):
+        import asyncio
+        async def do_confirm():
+            try:
+                await asyncio.sleep(1)
+                self.dismiss(True)
+            except Exception as e:
+                self._loading = False
+                self._error = f"Error: {e}"
+                self.refresh()
+        asyncio.create_task(do_confirm())
