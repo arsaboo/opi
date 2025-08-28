@@ -74,6 +74,7 @@ async def process_short_position(api, short):
         credit = "N/A"
         strike_delta = "N/A"
         config_status = "Configured"
+        new_option_symbol = "N/A"  # Add this for rollOver
 
         # Always try to calculate current short premium for extrinsic_left
         prem_short_contract = None
@@ -95,6 +96,7 @@ async def process_short_position(api, short):
                 if roll_option:
                     new_strike = float(roll_option["strike"])
                     strike_delta = new_strike - current_strike
+                    new_option_symbol = roll_option["symbol"]  # Store for rollOver
 
                     roll_premium = await asyncio.to_thread(get_median_price, roll_option["symbol"], chain)
 
@@ -144,6 +146,8 @@ async def process_short_position(api, short):
             "Extrinsic": extrinsic_left,
             "Strike Δ": strike_delta,
             "Config Status": config_status,
+            "optionSymbol": short["optionSymbol"],  # Add for rollOver
+            "New Option Symbol": new_option_symbol,  # Add for rollOver
         }
     except Exception as e:
         print(f"Error processing position {short.get('optionSymbol', 'N/A')}: {e}")

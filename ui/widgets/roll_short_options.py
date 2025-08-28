@@ -8,6 +8,9 @@ from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 import asyncio
+import keyboard
+from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
+from cc import round_to_nearest_five_cents
 
 class RollShortOptionsWidget(Static):
     """A widget to display short options to be rolled."""
@@ -126,7 +129,7 @@ class RollShortOptionsWidget(Static):
 
     @work
     async def place_order(self) -> None:
-        """Place the order using the existing functions."""
+        """Place the roll order with price improvements and UI monitoring."""
         try:
             # Get the selected row data
             table = self.query_one(DataTable)
@@ -135,34 +138,133 @@ class RollShortOptionsWidget(Static):
             if cursor_row < len(self._roll_data):
                 roll_data = self._roll_data[cursor_row]
 
-                # We need to convert the roll_data back to the format expected by the existing functions
-                # This is a simplified example - you'll need to adapt this to your actual data structure
-                short_position = {
-                    "stockSymbol": roll_data.get("Ticker", ""),
-                    "strike": roll_data.get("Current Strike", ""),
-                    "expiration": roll_data.get("Expiration", ""),
-                    "optionSymbol": "",  # This would need to be retrieved from the actual position data
-                    "count": roll_data.get("Quantity", roll_data.get("count", 1))
-                }
+                # Extract necessary data
+                old_symbol = roll_data.get("optionSymbol", "")
+                new_symbol = roll_data.get("New Option Symbol", "")
+                amount = int(roll_data.get("Quantity", 1))
+                credit = roll_data.get("Credit", "N/A")
 
-                # Call the appropriate roll function based on the asset
-                from cc import RollSPX, RollCalls
-                if roll_data.get("Ticker") == "$SPX":
-                    # Execute RollSPX in a separate thread to avoid blocking the UI
-                    loop = asyncio.get_event_loop()
-                    with ThreadPoolExecutor() as executor:
-                        await loop.run_in_executor(executor, RollSPX, self.app.api, short_position)
-                else:
-                    # Execute RollCalls in a separate thread to avoid blocking the UI
-                    loop = asyncio.get_event_loop()
-                    with ThreadPoolExecutor() as executor:
-                        await loop.run_in_executor(executor, RollCalls, self.app.api, short_position)
+                if not old_symbol or not new_symbol or credit == "N/A":
+                    self.app.query_one(StatusLog).add_message("Error: Missing or invalid data for roll order.")
+                    return
 
-                self.app.query_one(StatusLog).add_message("Order placement completed!")
+                credit = float(credit)
+                initial_price = credit
+                filled = False
+
+                # Try prices in sequence, starting with original price (up to 76 improvements)
+                for i in range(76):
+                    current_price = (
+                        initial_price if i == 0
+                        else round_to_nearest_five_cents(initial_price * (1 - (i / 100)))
+                    )
+
+                    if i > 0:
+                        self.app.query_one(StatusLog).add_message(f"Trying improved price: ${current_price} (attempt #{i})")
+
+                    # Place the order
+                    order_id = await asyncio.to_thread(
+                        self.app.api.rollOver, old_symbol, new_symbol, amount, current_price
+                    )
+
+                    if order_id is None:
+                        self.app.query_one(StatusLog).add_message("Order not placed (debug mode or error).")
+                        break
+
+                    self.app.query_one(StatusLog).add_message(f"Monitoring roll order {order_id}...")
+
+                    # Monitor the order using UI-friendly method
+                    result = await self.monitor_order_ui(order_id, timeout=60)
+
+                    if result is True:
+                        self.app.query_one(StatusLog).add_message("Roll order filled successfully!")
+                        filled = True
+                        break
+                    elif result == "cancelled":
+                        self.app.query_one(StatusLog).add_message("Roll order cancelled.")
+                        break
+                    elif result == "rejected":
+                        self.app.query_one(StatusLog).add_message("Roll order rejected, trying next price...")
+                        continue
+                    elif result == "timeout":
+                        self.app.query_one(StatusLog).add_message("Roll order timed out, trying next price...")
+                        # Cancel the timed-out order before next attempt
+                        try:
+                            await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+                        except Exception as e:
+                            self.app.query_one(StatusLog).add_message(f"Error cancelling timed-out order: {e}")
+                        continue
+
+                    # Brief pause between attempts
+                    if i > 0:
+                        await asyncio.sleep(1)
+
+                if not filled:
+                    self.app.query_one(StatusLog).add_message("Roll order not filled after all attempts.")
             else:
-                self.app.query_one(StatusLog).add_message("Error: No valid row selected for order placement.")
+                self.app.query_one(StatusLog).add_message("Error: No valid row selected for roll order placement.")
         except Exception as e:
-            self.app.query_one(StatusLog).add_message(f"Error placing order: {e}")
+            self.app.query_one(StatusLog).add_message(f"Error in place_order: {e}")
+
+    async def monitor_order_ui(self, order_id, timeout=60):
+        """Monitor order status and update UI with status changes (reused from check_vertical_spreads.py)."""
+        import time
+        start_time = time.time()
+        last_status_check = 0
+        last_print_time = 0
+        print_interval = 1
+
+        while time.time() - start_time < timeout:
+            current_time = time.time()
+            elapsed_time = int(current_time - start_time)
+
+            if cancel_order:
+                try:
+                    await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+                    self.app.query_one(StatusLog).add_message("Order cancelled by user.")
+                    return "cancelled"
+                except Exception as e:
+                    self.app.query_one(StatusLog).add_message(f"Error cancelling order: {e}")
+                    return False
+
+            try:
+                if current_time - last_status_check >= 1:  # Check every second
+                    order_status = await asyncio.to_thread(self.app.api.checkOrder, order_id)
+                    last_status_check = current_time
+
+                    if current_time - last_print_time >= print_interval:
+                        remaining = int(timeout - elapsed_time)
+                        status_str = order_status['status']
+                        rejection_reason = order_status.get('rejection_reason', '')
+
+                        status_msg = f"Status: {status_str} {rejection_reason} | Time remaining: {remaining} s | Price: {order_status.get('price', 'N/A')} | Filled: {order_status.get('filledQuantity', '0')}"
+                        self.app.query_one(StatusLog).add_message(status_msg)
+                        last_print_time = current_time
+
+                    if order_status["filled"]:
+                        self.app.query_one(StatusLog).add_message("Order filled successfully!")
+                        return True
+                    elif order_status["status"] == "REJECTED":
+                        rejection_msg = f"Order rejected: {order_status.get('rejection_reason', 'No reason provided')}"
+                        self.app.query_one(StatusLog).add_message(rejection_msg)
+                        return "rejected"
+                    elif order_status["status"] == "CANCELED":
+                        self.app.query_one(StatusLog).add_message("Order cancelled.")
+                        return False
+
+                await asyncio.sleep(0.1)  # Small sleep to prevent CPU thrashing
+
+            except Exception as e:
+                self.app.query_one(StatusLog).add_message(f"Error checking order status: {e}")
+                return False
+
+        # If we reach here, order timed out
+        self.app.query_one(StatusLog).add_message("Order timed out, moving to price improvement...")
+        try:
+            await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+        except:
+            pass
+        return "timeout"
 
     @work
     async def run_get_expiring_shorts_data(self) -> None:
