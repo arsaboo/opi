@@ -211,6 +211,12 @@ class OrderManagementWidget(Static):
         self._other_orders = []
         self._manual_steps = {}
         self._base_price = {}
+        self._selected_order_id = None
+        self._initialized = False
+        self._row_positions = {"working_header": 0, "working_rows": [], "working_sep": None,
+                               "filled_header": None, "filled_rows": [], "filled_sep": None,
+                               "other_header": None, "other_rows": []}
+        self._col_keys = []
 
     def compose(self):
         """Create child widgets."""
@@ -231,8 +237,15 @@ class OrderManagementWidget(Static):
             "Asset",
             "Type",
             "Qty",
-            "Price"
+            "Price",
+            "Mid",
+            "Nat"
         )
+        # Cache column keys for update_cell
+        try:
+            self._col_keys = list(table.columns.keys())
+        except Exception:
+            self._col_keys = list(range(9))
         table.zebra_stripes = True
         table.header_style = "bold on blue"
         table.cursor_type = "row"
@@ -398,149 +411,211 @@ class OrderManagementWidget(Static):
 
     @work
     async def run_get_orders_data(self) -> None:
-        """Worker to get recent orders data and display in sections."""
+        """Incrementally update orders; rebuild only on first load or layout change."""
         orders = await asyncio.to_thread(self.app.api.getRecentOrders, 50)
         table = self.query_one(DataTable)
-        table.clear()
 
-        self._working_orders = []
-        self._filled_orders = []
-        self._other_orders = []
+        # Partition orders
+        working = []
+        filled = []
+        other = []
+        for order in orders or []:
+            formatted = self.app.api.formatOrderForDisplay(order)
+            status = formatted["status"]
+            if status in ("ACCEPTED", "WORKING"):
+                working.append((order, formatted))
+            elif status == "FILLED":
+                filled.append((order, formatted))
+            else:
+                other.append((order, formatted))
 
-        if orders:
-            # WORKING ORDERS Section
-            table.add_row(
-                Text("WORKING ORDERS", style="bold white on dark_blue"),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style="")
-            )
-            for order in orders:
-                formatted = self.app.api.formatOrderForDisplay(order)
-                status = formatted["status"]
-                if status in ("ACCEPTED", "WORKING"):
-                    order_type = formatted["order_type"]
-                    price = formatted["price"]
-                    type_color = "red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else ""
-                    try:
-                        price = f"{float(price):.2f}"
-                    except (ValueError, TypeError):
-                        price = str(price)
-                    # Show status in the Status column
-                    status_color = "cyan" if status == "WORKING" else ""
-                    table.add_row(
-                        Text(str(formatted["order_id"]), style="", justify="left"),
-                        Text(str(status), style=status_color, justify="left"),
-                        Text(str(formatted["entered_time"]), style="", justify="left"),
-                        Text(str(formatted["asset"]), style="", justify="left"),
-                        Text(str(order_type), style=type_color, justify="left"),
-                        Text(str(formatted["quantity"]), style="", justify="right"),
-                        Text(price, style="", justify="right")
-                    )
-                    self._working_orders.append(order)
+        # Helper to compute Mid/Nat for an order (async)
+        async def compute_mid_nat(order):
+            try:
+                order_type = order.get("orderType", "NET_DEBIT")
+                legs = order.get("orderLegCollection", [])
+                if not legs:
+                    return ("", "")
+                client = self.app.api.connectClient
+                cost_mid = proceeds_mid = cost_nat = proceeds_nat = 0.0
+                for leg in legs:
+                    instr = leg.get("instrument", {})
+                    symbol = instr.get("symbol")
+                    instruction = leg.get("instruction", "BUY_TO_OPEN").upper()
+                    if not symbol:
+                        continue
+                    r = await asyncio.to_thread(client.get_quotes, symbol)
+                    if r.status_code != 200 and r.status_code != 201:
+                        continue
+                    q = r.json()
+                    qd = q.get(symbol, {}).get("quote", {})
+                    bid = qd.get("bidPrice") or 0.0
+                    ask = qd.get("askPrice") or 0.0
+                    mid = (float(bid) + float(ask)) / 2 if (bid and ask) else 0.0
+                    if instruction.startswith("BUY"):
+                        cost_mid += mid
+                        cost_nat += float(ask) if ask else mid
+                    else:
+                        proceeds_mid += mid
+                        proceeds_nat += float(bid) if bid else mid
+                if order_type == "NET_DEBIT":
+                    net_mid = cost_mid - proceeds_mid
+                    net_nat = cost_nat - proceeds_nat
+                else:
+                    net_mid = proceeds_mid - cost_mid
+                    net_nat = proceeds_nat - cost_nat
+                return (f"{net_mid:.2f}", f"{net_nat:.2f}")
+            except Exception:
+                return ("", "")
 
+        if not self._initialized:
+            # Build full table once
+            table.clear()
+            table.add_row(Text("WORKING ORDERS", style="bold white on dark_blue"), *[Text("") for _ in range(8)])
+            self._row_positions["working_header"] = 0
+            self._row_positions["working_rows"] = []
+            # Add working rows
+            for order, formatted in working:
+                order_type = formatted["order_type"]
+                price = formatted["price"]
+                try:
+                    price = f"{float(price):.2f}"
+                except (ValueError, TypeError):
+                    price = str(price)
+                status_color = "cyan" if formatted["status"] == "WORKING" else ""
+                mid_str, nat_str = await compute_mid_nat(order)
+                row_key = table.add_row(
+                    Text(str(formatted["order_id"])),
+                    Text(str(formatted["status"]), style=status_color),
+                    Text(str(formatted["entered_time"])),
+                    Text(str(formatted["asset"])),
+                    Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
+                    Text(str(formatted["quantity"]), justify="right"),
+                    Text(price, justify="right"),
+                    Text(mid_str, justify="right"),
+                    Text(nat_str, justify="right"),
+                )
+                self._row_positions["working_rows"].append(row_key)
             # Separator
-            table.add_row(
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style="")
-            )
-
-            # FILLED ORDERS Section
-            table.add_row(
-                Text("FILLED ORDERS", style="bold white on dark_blue"),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style="")
-            )
-            for order in orders:
-                formatted = self.app.api.formatOrderForDisplay(order)
-                status = formatted["status"]
-                if status == "FILLED":
-                    order_type = formatted["order_type"]
-                    price = formatted["price"]
-                    type_color = "red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else ""
-                    try:
-                        price = f"{float(price):.2f}"
-                    except (ValueError, TypeError):
-                        price = str(price)
-                    # Show status in the Status column
-                    status_color = "green"
-                    table.add_row(
-                        Text(str(formatted["order_id"]), style="", justify="left"),
-                        Text(str(status), style=status_color, justify="left"),
-                        Text(str(formatted["entered_time"]), style="", justify="left"),
-                        Text(str(formatted["asset"]), style="", justify="left"),
-                        Text(str(order_type), style=type_color, justify="left"),
-                        Text(str(formatted["quantity"]), style="", justify="right"),
-                        Text(price, style="", justify="right")
-                    )
-                    self._filled_orders.append(order)
-
+            table.add_row(*[Text("") for _ in range(9)])
+            self._row_positions["working_sep"] = len(self._row_positions["working_rows"]) + 1
+            # Filled header + rows
+            table.add_row(Text("FILLED ORDERS", style="bold white on dark_blue"), *[Text("") for _ in range(8)])
+            for order, formatted in filled:
+                order_type = formatted["order_type"]
+                price = formatted["price"]
+                try:
+                    price = f"{float(price):.2f}"
+                except (ValueError, TypeError):
+                    price = str(price)
+                table.add_row(
+                    Text(str(formatted["order_id"])),
+                    Text(str(formatted["status"]), style="green"),
+                    Text(str(formatted["entered_time"])),
+                    Text(str(formatted["asset"])),
+                    Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
+                    Text(str(formatted["quantity"]), justify="right"),
+                    Text(price, justify="right"),
+                    Text("", justify="right"),
+                    Text("", justify="right"),
+                )
             # Separator
-            table.add_row(
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style="")
-            )
+            table.add_row(*[Text("") for _ in range(9)])
+            # Other header + rows
+            table.add_row(Text("OTHER ORDERS (Canceled / Expired / Replaced)", style="bold white on dark_blue"), *[Text("") for _ in range(8)])
+            for order, formatted in other:
+                order_type = formatted["order_type"]
+                price = formatted["price"]
+                try:
+                    price = f"{float(price):.2f}"
+                except (ValueError, TypeError):
+                    price = str(price)
+                status_color = {"CANCELED": "gray", "EXPIRED": "yellow", "REPLACED": "magenta"}.get(formatted["status"], "")
+                table.add_row(
+                    Text(str(formatted["order_id"])),
+                    Text(str(formatted["status"]), style=status_color),
+                    Text(str(formatted["entered_time"])),
+                    Text(str(formatted["asset"])),
+                    Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
+                    Text(str(formatted["quantity"]), justify="right"),
+                    Text(price, justify="right"),
+                    Text("", justify="right"),
+                    Text("", justify="right"),
+                )
 
-            # OTHER ORDERS Section
-            table.add_row(
-                Text("OTHER ORDERS (Canceled / Expired / Replaced)", style="bold white on dark_blue"),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style=""),
-                Text("", style="")
-            )
-            for order in orders:
-                formatted = self.app.api.formatOrderForDisplay(order)
+            # Update internal lists
+            self._working_orders = [o for o, _ in working]
+            self._filled_orders = [o for o, _ in filled]
+            self._other_orders = [o for o, _ in other]
+            self._initialized = True
+
+            # Default selection: first working order else header
+            try:
+                if working:
+                    if hasattr(table, "move_cursor"):
+                        table.move_cursor(1, 0)
+                    self._selected_order_id = working[0][0].get("orderId")
+                else:
+                    if hasattr(table, "move_cursor"):
+                        table.move_cursor(0, 0)
+                    self._selected_order_id = None
+            except Exception:
+                pass
+            return
+
+        # Incremental update of working rows only (if count/order IDs unchanged)
+        prev_ids = [str(o.get("orderId")) for o in self._working_orders]
+        new_ids = [str(o.get("orderId")) for o, _ in working]
+        if prev_ids == new_ids and len(self._row_positions["working_rows"]) == len(new_ids):
+            # Update cells in place
+            for idx, (order, formatted) in enumerate(working):
+                row_key = self._row_positions["working_rows"][idx]
+                order_type = formatted["order_type"]
+                price = formatted["price"]
+                try:
+                    price = f"{float(price):.2f}"
+                except (ValueError, TypeError):
+                    price = str(price)
                 status = formatted["status"]
-                if status not in ("ACCEPTED", "WORKING", "FILLED"):
-                    order_type = formatted["order_type"]
-                    price = formatted["price"]
-                    status_color = {
-                        "CANCELED": "gray",
-                        "EXPIRED": "yellow",
-                        "REPLACED": "magenta"
-                    }.get(status, "")
-                    type_color = "red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else ""
-                    try:
-                        price = f"{float(price):.2f}"
-                    except (ValueError, TypeError):
-                        price = str(price)
-                    table.add_row(
-                        Text(str(formatted["order_id"]), style="", justify="left"),
-                        Text(str(status), style=status_color, justify="left"),
-                        Text(str(formatted["entered_time"]), style="", justify="left"),
-                        Text(str(formatted["asset"]), style="", justify="left"),
-                        Text(str(order_type), style=type_color, justify="left"),
-                        Text(str(formatted["quantity"]), style="", justify="right"),
-                        Text(price, style="", justify="right")
-                    )
-                    self._other_orders.append(order)
+                status_color = "cyan" if status == "WORKING" else ""
+                mid_str, nat_str = await compute_mid_nat(order)
+                # Update columns 0..8
+                ck = self._col_keys
+                table.update_cell(row_key, ck[0], Text(str(formatted["order_id"])))
+                table.update_cell(row_key, ck[1], Text(str(status), style=status_color))
+                table.update_cell(row_key, ck[2], Text(str(formatted["entered_time"])))
+                table.update_cell(row_key, ck[3], Text(str(formatted["asset"])))
+                table.update_cell(row_key, ck[4], Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")))
+                table.update_cell(row_key, ck[5], Text(str(formatted["quantity"]), justify="right"))
+                table.update_cell(row_key, ck[6], Text(price, justify="right"))
+                table.update_cell(row_key, ck[7], Text(mid_str, justify="right"))
+                table.update_cell(row_key, ck[8], Text(nat_str, justify="right"))
+            return
 
-        else:
-            table.add_row("No recent orders found.", *[""] * 6)
+        # Fallback: layout changed (orders added/removed) — rebuild once (might flicker briefly)
+        self._initialized = False
+        self.run_get_orders_data()
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection by updating selection only; use U/C for actions."""
-        # No automatic action on selection to avoid accidental cancels.
+        try:
+            r = event.cursor_row
+            w = len(self._working_orders)
+            f = len(self._filled_orders)
+            order = None
+            if 1 <= r <= w:
+                order = self._working_orders[r-1]
+            elif r >= w + 3 and r <= w + 2 + f:
+                order = self._filled_orders[r - (w + 3)]
+            elif r >= w + 2 + f + 3:
+                idx = r - (w + 2 + f + 3)
+                if 0 <= idx < len(self._other_orders):
+                    order = self._other_orders[idx]
+            if order:
+                self._selected_order_id = order.get("orderId")
+        except Exception:
+            pass
+        # Friendly hint
         self.app.query_one(StatusLog).add_message("Order selected. Press U to update price or C to cancel.")
 
     def show_cancel_confirmation(self, order) -> None:
@@ -584,3 +659,6 @@ class OrderManagementWidget(Static):
         main_container = self.app.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
+
+
+
