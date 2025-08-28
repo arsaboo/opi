@@ -377,11 +377,12 @@ class CheckSyntheticCoveredCallsWidget(Static):
                     order_id = None
                     filled = False
 
-                    for i in range(0, 76):  # 0 = original price, 1-75 = improvements
+                    attempts = [0] if self._MANUAL_ORDER else range(0, 76)
+                    for i in attempts:  # 0 = original price, 1-75 = improvements
                         if not cancel_order:  # Check if cancelled
                             current_price = (
                                 initial_price if i == 0
-                                else round_to_nearest_five_cents(initial_price * (1 - (i/100)))
+                                else round_to_nearest_five_cents(initial_price + i * 0.05)
                             )
 
                             if i > 0:
@@ -404,9 +405,12 @@ class CheckSyntheticCoveredCallsWidget(Static):
                                 self.app.query_one(StatusLog).add_message(f"Asset: {asset}, Expiration: {expiration}, Strike Low: {strike_low}, Strike High: {strike_high}, Price: {current_price}")
                                 break
 
+                            if self._MANUAL_ORDER:
+                                self.app.query_one(StatusLog).add_message("Manual order placed. Manage from Order Management (U=Update, C=Cancel).")
+                                break
                             # Monitor with 60s timeout
                             self.app.query_one(StatusLog).add_message(f"Monitoring order {order_id}...")
-                            result = await self.monitor_order_ui(order_id, timeout=60)
+                            result = await self.monitor_order_ui(order_id, timeout=60, manual=False)
 
                             # Add status update based on result
                             if result is True:
@@ -424,11 +428,13 @@ class CheckSyntheticCoveredCallsWidget(Static):
                             elif result == "cancelled":  # User cancelled
                                 break
                             elif result == "rejected":  # Order rejected
+                                if self._MANUAL_ORDER:
+                                    break
                                 continue  # Try next price
                             # On timeout, continue to next price improvement
 
                             # Brief pause between attempts
-                            if i > 0:
+                            if i > 0 and not self._MANUAL_ORDER:
                                 await asyncio.sleep(1)
                         else:
                             break
@@ -456,7 +462,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error placing synthetic covered call order: {e}")
 
-    async def monitor_order_ui(self, order_id, timeout=60):
+    async def monitor_order_ui(self, order_id, timeout=60, manual=False):
         """Monitor order status and update UI with status changes"""
         import time
         start_time = time.time()
@@ -509,12 +515,16 @@ class CheckSyntheticCoveredCallsWidget(Static):
                 return False
 
         # If we reach here, order timed out
-        self.app.query_one(StatusLog).add_message("Order timed out, moving to price improvement...")
-        try:
-            await asyncio.to_thread(self.app.api.cancelOrder, order_id)
-        except:
-            pass
-        return "timeout"
+        if manual:
+            self.app.query_one(StatusLog).add_message("Order timed out. Use Order Management (U to update, C to cancel).")
+            return "timeout"
+        else:
+            self.app.query_one(StatusLog).add_message("Order timed out, moving to price improvement...")
+            try:
+                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+            except:
+                pass
+            return "timeout"
 
 def round_to_nearest_five_cents(price):
     """Round price to nearest $0.05."""

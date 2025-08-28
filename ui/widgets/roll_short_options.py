@@ -12,6 +12,12 @@ import keyboard
 from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
 from cc import round_to_nearest_five_cents
 
+# Read manual ordering flag from configuration with safe default
+try:
+    from configuration import manual_order as MANUAL_ORDER
+except Exception:
+    MANUAL_ORDER = False
+
 class RollShortOptionsWidget(Static):
     """A widget to display short options to be rolled."""
 
@@ -159,11 +165,12 @@ class RollShortOptionsWidget(Static):
                 initial_price = self._override_credit if self._override_credit is not None else credit
                 filled = False
 
-                # Try prices in sequence, starting with original price (up to 76 improvements)
-                for i in range(76):
+                # Try prices in sequence; single attempt in manual mode
+                attempts = [0] if MANUAL_ORDER else range(76)
+                for i in attempts:
                     current_price = (
                         initial_price if i == 0
-                        else round_to_nearest_five_cents(initial_price * (1 - (i / 100)))
+                        else round_to_nearest_five_cents(initial_price - i * 0.05)
                     )
 
                     if i > 0:
@@ -180,8 +187,12 @@ class RollShortOptionsWidget(Static):
 
                     self.app.query_one(StatusLog).add_message(f"Monitoring roll order {order_id}...")
 
+                    # Manual mode: do not monitor; use Order Management to manage
+                    if MANUAL_ORDER:
+                        self.app.query_one(StatusLog).add_message("Manual roll order placed. Manage from Order Management (U=Update, C=Cancel).")
+                        break
                     # Monitor the order using UI-friendly method
-                    result = await self.monitor_order_ui(order_id, timeout=60)
+                    result = await self.monitor_order_ui(order_id, timeout=60, manual=False)
 
                     if result is True:
                         self.app.query_one(StatusLog).add_message("Roll order filled successfully!")
@@ -194,16 +205,20 @@ class RollShortOptionsWidget(Static):
                         self.app.query_one(StatusLog).add_message("Roll order rejected, trying next price...")
                         continue
                     elif result == "timeout":
-                        self.app.query_one(StatusLog).add_message("Roll order timed out, trying next price...")
-                        # Cancel the timed-out order before next attempt
-                        try:
-                            await asyncio.to_thread(self.app.api.cancelOrder, order_id)
-                        except Exception as e:
-                            self.app.query_one(StatusLog).add_message(f"Error cancelling timed-out order: {e}")
-                        continue
+                        if MANUAL_ORDER:
+                            self.app.query_one(StatusLog).add_message("Roll order timed out. Use Order Management (U to update, C to cancel).")
+                            break
+                        else:
+                            self.app.query_one(StatusLog).add_message("Roll order timed out, trying next price...")
+                            # Cancel the timed-out order before next attempt
+                            try:
+                                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+                            except Exception as e:
+                                self.app.query_one(StatusLog).add_message(f"Error cancelling timed-out order: {e}")
+                            continue
 
                     # Brief pause between attempts
-                    if i > 0:
+                    if i > 0 and not MANUAL_ORDER:
                         await asyncio.sleep(1)
 
                 if not filled:
@@ -214,7 +229,7 @@ class RollShortOptionsWidget(Static):
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error in place_order: {e}")
 
-    async def monitor_order_ui(self, order_id, timeout=60):
+    async def monitor_order_ui(self, order_id, timeout=60, manual=False):
         """Monitor order status and update UI with status changes (reused from check_vertical_spreads.py)."""
         import time
         start_time = time.time()
@@ -267,12 +282,16 @@ class RollShortOptionsWidget(Static):
                 return False
 
         # If we reach here, order timed out
-        self.app.query_one(StatusLog).add_message("Order timed out, moving to price improvement...")
-        try:
-            await asyncio.to_thread(self.app.api.cancelOrder, order_id)
-        except:
-            pass
-        return "timeout"
+        if manual:
+            self.app.query_one(StatusLog).add_message("Order timed out. Use Order Management (U to update, C to cancel).")
+            return "timeout"
+        else:
+            self.app.query_one(StatusLog).add_message("Order timed out, moving to price improvement...")
+            try:
+                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+            except:
+                pass
+            return "timeout"
 
     @work
     async def run_get_expiring_shorts_data(self) -> None:

@@ -885,7 +885,7 @@ class Api:
         Place an order with automatic price improvements if not filled
         """
         max_retries = 75
-        price_improvement_pct = 1  # percentage to improve price by on each retry
+        fixed_step = 0.05  # fixed $0.05 step per retry
         initial_price = price
 
 
@@ -899,21 +899,21 @@ class Api:
         is_debit_order = price > 0  # Positive price means we're paying
 
         for retry in range(max_retries):
-            # Calculate new price with improvement
+            # Calculate new price with fixed $0.05 step
             if is_debit_order:
                 # For debit orders, increase the price we're willing to pay
-                current_price = round_to_nearest_five_cents(initial_price * (100 + retry * price_improvement_pct) / 100)
+                current_price = round_to_nearest_five_cents(initial_price + retry * fixed_step)
             else:
                 # For credit orders, decrease the price we're willing to accept
-                current_price = round_to_nearest_five_cents(initial_price * (100 - retry * price_improvement_pct) / 100)
+                current_price = round_to_nearest_five_cents(initial_price - retry * fixed_step)
 
             if retry > 0:
                 if is_debit_order:
                     print(f"\nAttempt {retry + 1}/{max_retries}")
-                    print(f"Improving price by paying {retry * price_improvement_pct}% more to {current_price}")
+                    print(f"Improving price by +${retry * fixed_step:.2f} to {current_price}")
                 else:
                     print(f"\nAttempt {retry + 1}/{max_retries}")
-                    print(f"Improving price by accepting {retry * price_improvement_pct}% less to {current_price}")
+                    print(f"Improving price by -${retry * fixed_step:.2f} to {current_price}")
 
             try:
                 # Call order function with params and explicit price kwarg
