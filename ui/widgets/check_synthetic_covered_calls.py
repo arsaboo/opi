@@ -19,6 +19,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
         self._prev_rows = None
         self._synthetic_covered_calls_data = []  # Store actual synthetic covered calls data for order placement
         self._previous_market_status = None  # Track previous market status
+        self._override_price = None  # User-edited initial price
 
     def compose(self):
         """Create child widgets."""
@@ -328,9 +329,15 @@ class CheckSyntheticCoveredCallsWidget(Static):
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)
 
-    def handle_order_confirmation(self, confirmed: bool) -> None:
-        """Handle the user's response to the order confirmation."""
+    def handle_order_confirmation(self, result) -> None:
+        """Handle the user's response to the order confirmation, capturing edited price if provided."""
+        confirmed = result.get("confirmed") if isinstance(result, dict) else bool(result)
         if confirmed:
+            if isinstance(result, dict) and result.get("price") is not None:
+                try:
+                    self._override_price = float(result.get("price"))
+                except Exception:
+                    self._override_price = None
             self.app.query_one(StatusLog).add_message("Order confirmed. Placing synthetic covered call order...")
             self.place_synthetic_covered_call_order()
         else:
@@ -365,8 +372,8 @@ class CheckSyntheticCoveredCallsWidget(Static):
                     keyboard.unhook_all()
                     keyboard.on_press(handle_cancel)
 
-                    # Try prices in sequence, starting with original price
-                    initial_price = net_debit
+                    # Try prices in sequence, starting with user-provided price if present, otherwise original
+                    initial_price = self._override_price if self._override_price is not None else net_debit
                     order_id = None
                     filled = False
 
@@ -428,6 +435,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
 
                     if filled:
                         self.app.query_one(StatusLog).add_message("Synthetic covered call order filled successfully!")
+                        self._override_price = None
                     elif cancel_order:
                         self.app.query_one(StatusLog).add_message("Synthetic covered call order cancelled by user.")
                         if order_id:
@@ -441,6 +449,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
                 except Exception as e:
                     self.app.query_one(StatusLog).add_message(f"Error placing synthetic covered call order: {e}")
                 finally:
+                    self._override_price = None
                     keyboard.unhook_all()
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for synthetic covered call order placement.")

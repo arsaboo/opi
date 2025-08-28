@@ -1,5 +1,5 @@
 from textual.screen import ModalScreen
-from textual.widgets import Static
+from textual.widgets import Static, Input
 from rich.panel import Panel
 from rich.text import Text
 from rich.table import Table
@@ -16,6 +16,8 @@ class OrderConfirmationScreen(ModalScreen):
         self.cancel_text = cancel_text
         self._loading = False
         self._error = None
+        self._has_price_input = False
+        self._has_credit_input = False
 
     def compose(self):
         def parse_float(value):
@@ -152,7 +154,7 @@ class OrderConfirmationScreen(ModalScreen):
                 Text(":", style="white"),
                 Text(f"$ {parse_float(self.order_details.get('Investment', 0)):.2f}", style="white", justify="right")
             )
-            # Optional: show per-contract Price when provided
+            # Optional: show per-contract Price when provided (display value; editable input is below)
             if self.order_details.get('Price') is not None:
                 investment_table.add_row(
                     Text("Price", style="cyan"),
@@ -234,7 +236,20 @@ class OrderConfirmationScreen(ModalScreen):
             border_style="bold blue"
         )
 
+        # Yield the primary panel
         yield Static(panel, id="order-confirmation-modal")
+
+        # Editable inputs (below the panel) for Credit or Price
+        # Roll Short Options: allow editing Credit
+        if "Roll Up Amount" in self.order_details:
+            self._has_credit_input = True
+            yield Static(Text("Edit Credit Received ($)", style="bold white"))
+            yield Input(value=f"{parse_float(self.order_details.get('Credit', 0)):.2f}", id="credit_input")
+        # Vertical/Synthetic: allow editing Price when provided
+        elif self.order_details.get("Price") is not None:
+            self._has_price_input = True
+            yield Static(Text("Edit Price ($ per contract)", style="bold white"))
+            yield Input(value=f"{parse_float(self.order_details.get('Price', 0)):.2f}", id="price_input")
 
     def on_key(self, event):
         if self._loading:
@@ -245,14 +260,27 @@ class OrderConfirmationScreen(ModalScreen):
             self.refresh()
             self.confirm_order()
         elif event.key in ("escape", "n"):
-            self.dismiss(False)
+            self.dismiss({"confirmed": False})
 
     def confirm_order(self):
         import asyncio
         async def do_confirm():
             try:
-                await asyncio.sleep(1)
-                self.dismiss(True)
+                await asyncio.sleep(0.1)
+                payload = {"confirmed": True}
+                try:
+                    if self._has_credit_input:
+                        credit_widget = self.query_one("#credit_input", Input)
+                        credit_val = credit_widget.value.strip()
+                        payload["credit"] = float(credit_val) if credit_val != "" else None
+                    if self._has_price_input:
+                        price_widget = self.query_one("#price_input", Input)
+                        price_val = price_widget.value.strip()
+                        payload["price"] = float(price_val) if price_val != "" else None
+                except Exception:
+                    # On parse error, still return payload without the field
+                    pass
+                self.dismiss(payload)
             except Exception as e:
                 self._loading = False
                 self._error = f"Error: {e}"

@@ -20,6 +20,7 @@ class RollShortOptionsWidget(Static):
         self._prev_rows = None
         self._roll_data = []  # Store the actual roll data for each row
         self._previous_market_status = None  # Track previous market status
+        self._override_credit = None  # User-edited initial credit
 
     def compose(self):
         """Create child widgets."""
@@ -118,9 +119,15 @@ class RollShortOptionsWidget(Static):
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)
 
-    def handle_order_confirmation(self, confirmed: bool) -> None:
-        """Handle the user's response to the order confirmation."""
+    def handle_order_confirmation(self, result) -> None:
+        """Handle the user's response to the order confirmation and capture edited credit."""
+        confirmed = result.get("confirmed") if isinstance(result, dict) else bool(result)
         if confirmed:
+            if isinstance(result, dict) and result.get("credit") is not None:
+                try:
+                    self._override_credit = float(result.get("credit"))
+                except Exception:
+                    self._override_credit = None
             self.app.query_one(StatusLog).add_message("Order confirmed. Placing order...")
             # Place the order using the existing functions
             self.place_order()
@@ -149,7 +156,7 @@ class RollShortOptionsWidget(Static):
                     return
 
                 credit = float(credit)
-                initial_price = credit
+                initial_price = self._override_credit if self._override_credit is not None else credit
                 filled = False
 
                 # Try prices in sequence, starting with original price (up to 76 improvements)
@@ -201,6 +208,7 @@ class RollShortOptionsWidget(Static):
 
                 if not filled:
                     self.app.query_one(StatusLog).add_message("Roll order not filled after all attempts.")
+                self._override_credit = None
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for roll order placement.")
         except Exception as e:

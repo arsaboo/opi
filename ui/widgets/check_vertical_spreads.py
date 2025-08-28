@@ -19,6 +19,7 @@ class CheckVerticalSpreadsWidget(Static):
         self._prev_rows = None
         self._vertical_spreads_data = []  # Store actual vertical spreads data for order placement
         self._previous_market_status = None  # Track previous market status
+        self._override_price = None  # User-edited initial price
 
     def compose(self):
         """Create child widgets."""
@@ -324,9 +325,16 @@ class CheckVerticalSpreadsWidget(Static):
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)
 
-    def handle_order_confirmation(self, confirmed: bool) -> None:
-        """Handle the user's response to the order confirmation."""
+    def handle_order_confirmation(self, result) -> None:
+        """Handle the user's response to the order confirmation, capturing edited price if provided."""
+        confirmed = result.get("confirmed") if isinstance(result, dict) else bool(result)
         if confirmed:
+            # Capture price override if present
+            if isinstance(result, dict) and result.get("price") is not None:
+                try:
+                    self._override_price = float(result.get("price"))
+                except Exception:
+                    self._override_price = None
             self.app.query_one(StatusLog).add_message("Order confirmed. Placing vertical spread order...")
             self.place_vertical_spread_order()
         else:
@@ -362,7 +370,8 @@ class CheckVerticalSpreadsWidget(Static):
                     keyboard.on_press(handle_cancel)
 
                     # Try prices in sequence, starting with original price
-                    initial_price = net_debit
+                    # Use user override if provided; otherwise default to computed net debit
+                    initial_price = self._override_price if self._override_price is not None else net_debit
                     order_id = None
                     filled = False
 
@@ -424,6 +433,7 @@ class CheckVerticalSpreadsWidget(Static):
 
                     if filled:
                         self.app.query_one(StatusLog).add_message("Vertical spread order filled successfully!")
+                        self._override_price = None  # reset after use
                     elif cancel_order:
                         self.app.query_one(StatusLog).add_message("Vertical spread order cancelled by user.")
                         if order_id:
@@ -437,6 +447,7 @@ class CheckVerticalSpreadsWidget(Static):
                 except Exception as e:
                     self.app.query_one(StatusLog).add_message(f"Error placing vertical spread order: {e}")
                 finally:
+                    self._override_price = None  # ensure cleanup
                     keyboard.unhook_all()
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for vertical spread order placement.")
