@@ -152,6 +152,13 @@ class OrderConfirmationScreen(ModalScreen):
                 Text(":", style="white"),
                 Text(f"$ {parse_float(self.order_details.get('Investment', 0)):.2f}", style="white", justify="right")
             )
+            # Optional: show per-contract Price when provided
+            if self.order_details.get('Price') is not None:
+                investment_table.add_row(
+                    Text("Price", style="cyan"),
+                    Text(":", style="white"),
+                    Text(f"$ {parse_float(self.order_details.get('Price', 0)):.2f}", style="white", justify="right")
+                )
             investment_table.add_row(
                 Text("Max Profit", style="cyan"),
                 Text(":", style="white"),

@@ -41,6 +41,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
             "Strike High",
             "Call High B|A",
             "Investment",
+            "Price",
             "Max Profit",
             "CAGR",
             "Protection",
@@ -182,13 +183,24 @@ class CheckSyntheticCoveredCallsWidget(Static):
                 # Store the actual synthetic covered call data for this row
                 self._synthetic_covered_calls_data.append(row)
 
+                # Derive per-contract price from total investment when possible
+                try:
+                    row["price"] = round(float(row.get("investment", 0)) / 100, 2)
+                except Exception:
+                    row["price"] = ""
+                try:
+                    if prev_row:
+                        prev_row["price"] = round(float(prev_row.get("investment", 0)) / 100, 2)
+                except Exception:
+                    pass
+
                 # Function to style a cell value
                 def style_cell(col_name):
                     val = str(row[col_name])
                     prev_val = prev_row.get(col_name)
                     style = get_cell_style(col_name, val, prev_val)
                     # Justify numerical columns to the right
-                    right_justify_cols = {"strike_low", "call_low_ba", "put_low_ba", "strike_high", "call_high_ba", "investment", "max_profit", "cagr", "protection", "margin_req", "ann_rom"}
+                    right_justify_cols = {"strike_low", "call_low_ba", "put_low_ba", "strike_high", "call_high_ba", "investment", "price", "max_profit", "cagr", "protection", "margin_req", "ann_rom"}
                     justify = "right" if col_name in right_justify_cols else "left"
 
                     # Format percentage values
@@ -267,6 +279,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
                     style_cell("strike_high"),
                     call_high_ba,  # Styled B|A
                     style_cell("investment"),
+                    style_cell("price"),
                     style_cell("max_profit"),
                     style_cell("cagr"),
                     style_cell("protection"),
@@ -278,7 +291,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
                 table.add_row(*cells)
             self._prev_rows = data
         else:
-            table.add_row("No synthetic covered calls found.", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
+            table.add_row("No synthetic covered calls found.", "", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
@@ -305,6 +318,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
             "Strike High": synthetic_covered_call_data.get("strike_high", ""),
             "Spread Width": spread_width,
             "Investment": f"${synthetic_covered_call_data.get('investment', 0):.2f}",
+            "Price": f"${(float(synthetic_covered_call_data.get('investment', 0)) / 100):.2f}",
             "Max Profit": f"${synthetic_covered_call_data.get('max_profit', 0):.2f}",
             "CAGR": f"{synthetic_covered_call_data.get('cagr', 0)*100:.2f}%",
             "Protection": f"{synthetic_covered_call_data.get('protection', 0)*100:.2f}%",

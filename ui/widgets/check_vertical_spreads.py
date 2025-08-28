@@ -40,6 +40,7 @@ class CheckVerticalSpreadsWidget(Static):
             "Strike High",
             "Call High B|A",
             "Investment",
+            "Price",
             "Max Profit",
             "CAGR",
             "Protection",
@@ -152,7 +153,7 @@ class CheckVerticalSpreadsWidget(Static):
                     return style
                 except:
                     pass
-            if col in ["investment", "max_profit"]:
+            if col in ["investment", "price", "max_profit"]:
                 try:
                     v = float(val)
                     pv = float(prev_val) if prev_val is not None else None
@@ -180,13 +181,24 @@ class CheckVerticalSpreadsWidget(Static):
                 # Store the actual vertical spread data for this row
                 self._vertical_spreads_data.append(row)
 
+                # Derive per-contract price from total investment when possible
+                try:
+                    row["price"] = round(float(row.get("investment", 0)) / 100, 2)
+                except Exception:
+                    row["price"] = ""
+                try:
+                    if prev_row:
+                        prev_row["price"] = round(float(prev_row.get("investment", 0)) / 100, 2)
+                except Exception:
+                    pass
+
                 # Function to style a cell value
                 def style_cell(col_name):
                     val = str(row[col_name])
                     prev_val = prev_row.get(col_name)
                     style = get_cell_style(col_name, val, prev_val)
                     # Justify numerical columns to the right
-                    right_justify_cols = {"strike_low", "call_low_ba", "strike_high", "call_high_ba", "investment", "max_profit", "cagr", "protection", "margin_req", "ann_rom"}
+                    right_justify_cols = {"strike_low", "call_low_ba", "strike_high", "call_high_ba", "investment", "price", "max_profit", "cagr", "protection", "margin_req", "ann_rom"}
                     justify = "right" if col_name in right_justify_cols else "left"
 
                     # Format percentage values
@@ -263,6 +275,7 @@ class CheckVerticalSpreadsWidget(Static):
                     style_cell("strike_high"),
                     call_high_ba,  # Styled B|A
                     style_cell("investment"),
+                    style_cell("price"),
                     style_cell("max_profit"),
                     style_cell("cagr"),
                     style_cell("protection"),
@@ -274,7 +287,7 @@ class CheckVerticalSpreadsWidget(Static):
                 table.add_row(*cells)
             self._prev_rows = data
         else:
-            table.add_row("No vertical spreads found.", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
+            table.add_row("No vertical spreads found.", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
@@ -301,6 +314,7 @@ class CheckVerticalSpreadsWidget(Static):
             "Strike High": vertical_spread_data.get("strike_high", ""),
             "Spread Width": spread_width,
             "Investment": f"${vertical_spread_data.get('investment', 0):.2f}",
+            "Price": f"${(float(vertical_spread_data.get('investment', 0)) / 100):.2f}",
             "Max Profit": f"${vertical_spread_data.get('max_profit', 0):.2f}",
             "CAGR": f"{vertical_spread_data.get('cagr', 0)*100:.2f}%",
             "Protection": f"{vertical_spread_data.get('protection', 0)*100:.2f}%",
