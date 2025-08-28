@@ -14,7 +14,8 @@ from rich.table import Table
 from rich.align import Align
 import schwab
 from schwab.utils import Utils
-from configuration import debugCanSendOrders
+from configuration import debugCanSendOrders, stream_quotes
+from ..quote_provider import StreamingQuoteProvider
 
 
 class OrderCancellationScreen(ModalScreen):
@@ -217,11 +218,14 @@ class OrderManagementWidget(Static):
                                "filled_header": None, "filled_rows": [], "filled_sep": None,
                                "other_header": None, "other_rows": []}
         self._col_keys = []
+        self._quote_provider: StreamingQuoteProvider | None = None
+        self._prev_midnat = {}  # orderId -> (mid, nat)
 
     def compose(self):
         """Create child widgets."""
         with Vertical():
-            yield Static(Text("Hints: U = Update Price, C = Cancel", style="bold yellow"))
+            streaming_hint = "Streaming: ON" if stream_quotes else "Streaming: OFF"
+            yield Static(Text(f"Hints: U = Update Price, C = Cancel  |  {streaming_hint}", style="bold yellow"))
             yield DataTable(id="order_management_table")
 
     def on_mount(self) -> None:
@@ -252,6 +256,14 @@ class OrderManagementWidget(Static):
         table.focus()
         self.run_get_orders_data()
         self.set_interval(15, self.run_get_orders_data)
+        # Initialize streaming quotes if enabled
+        if stream_quotes:
+            try:
+                self._quote_provider = StreamingQuoteProvider(self.app.api.connectClient)
+                asyncio.create_task(self._quote_provider.start())
+                self.set_interval(1, self.refresh_working_quotes)
+            except Exception as e:
+                self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
 
     def on_key(self, event) -> None:
         """Handle key events for manual order actions."""
@@ -435,7 +447,7 @@ class OrderManagementWidget(Static):
                 order_type = order.get("orderType", "NET_DEBIT")
                 legs = order.get("orderLegCollection", [])
                 if not legs:
-                    return ("", "")
+                    return (None, None)
                 client = self.app.api.connectClient
                 cost_mid = proceeds_mid = cost_nat = proceeds_nat = 0.0
                 for leg in legs:
@@ -444,29 +456,46 @@ class OrderManagementWidget(Static):
                     instruction = leg.get("instruction", "BUY_TO_OPEN").upper()
                     if not symbol:
                         continue
-                    r = await asyncio.to_thread(client.get_quotes, symbol)
-                    if r.status_code != 200 and r.status_code != 201:
-                        continue
-                    q = r.json()
-                    qd = q.get(symbol, {}).get("quote", {})
-                    bid = qd.get("bidPrice") or 0.0
-                    ask = qd.get("askPrice") or 0.0
-                    mid = (float(bid) + float(ask)) / 2 if (bid and ask) else 0.0
+                    bid = ask = None
+                    # Prefer streaming cache if available
+                    if self._quote_provider:
+                        bid, ask = self._quote_provider.get_bid_ask(symbol)
+                    if bid is None or ask is None:
+                        # Fallback to REST quote
+                        r = await asyncio.to_thread(client.get_quotes, symbol)
+                        if r.status_code != 200 and r.status_code != 201:
+                            continue
+                        q = r.json()
+                        qd = q.get(symbol, {}).get("quote", {})
+                        bid = bid if bid is not None else qd.get("bidPrice")
+                        ask = ask if ask is not None else qd.get("askPrice")
+                    bid = float(bid) if bid is not None else None
+                    ask = float(ask) if ask is not None else None
+                    if bid is not None and ask is not None:
+                        mid = (bid + ask) / 2
+                    elif bid is not None:
+                        mid = bid
+                    elif ask is not None:
+                        mid = ask
+                    else:
+                        mid = 0.0
                     if instruction.startswith("BUY"):
                         cost_mid += mid
-                        cost_nat += float(ask) if ask else mid
+                        # Natural for BUY is ask if available else use mid (or bid)
+                        cost_nat += (ask if ask is not None else (mid if mid else 0.0))
                     else:
                         proceeds_mid += mid
-                        proceeds_nat += float(bid) if bid else mid
+                        # Natural for SELL is bid if available else use mid (or ask)
+                        proceeds_nat += (bid if bid is not None else (mid if mid else 0.0))
                 if order_type == "NET_DEBIT":
                     net_mid = cost_mid - proceeds_mid
                     net_nat = cost_nat - proceeds_nat
                 else:
                     net_mid = proceeds_mid - cost_mid
                     net_nat = proceeds_nat - cost_nat
-                return (f"{net_mid:.2f}", f"{net_nat:.2f}")
+                return (net_mid, net_nat)
             except Exception:
-                return ("", "")
+                return (None, None)
 
         if not self._initialized:
             # Build full table once
@@ -475,6 +504,7 @@ class OrderManagementWidget(Static):
             self._row_positions["working_header"] = 0
             self._row_positions["working_rows"] = []
             # Add working rows
+            all_symbols = []
             for order, formatted in working:
                 order_type = formatted["order_type"]
                 price = formatted["price"]
@@ -483,7 +513,22 @@ class OrderManagementWidget(Static):
                 except (ValueError, TypeError):
                     price = str(price)
                 status_color = "cyan" if formatted["status"] == "WORKING" else ""
-                mid_str, nat_str = await compute_mid_nat(order)
+                mid_val, nat_val = await compute_mid_nat(order)
+                mid_str = f"{mid_val:.2f}" if mid_val is not None else ""
+                nat_str = f"{nat_val:.2f}" if nat_val is not None else ""
+                # Style mid/nat vs previous
+                oid = order.get("orderId")
+                prev = self._prev_midnat.get(oid, (None, None))
+                is_debit = order.get("orderType") == "NET_DEBIT"
+                def style_change(curr, prev_val):
+                    if curr is None or prev_val is None:
+                        return ""
+                    if is_debit:
+                        return ("bold green" if curr < prev_val else "bold red" if curr > prev_val else "")
+                    else:
+                        return ("bold green" if curr > prev_val else "bold red" if curr < prev_val else "")
+                mid_style = style_change(mid_val, prev[0])
+                nat_style = style_change(nat_val, prev[1])
                 row_key = table.add_row(
                     Text(str(formatted["order_id"])),
                     Text(str(formatted["status"]), style=status_color),
@@ -492,10 +537,23 @@ class OrderManagementWidget(Static):
                     Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
                     Text(str(formatted["quantity"]), justify="right"),
                     Text(price, justify="right"),
-                    Text(mid_str, justify="right"),
-                    Text(nat_str, justify="right"),
+                    Text(mid_str, style=mid_style, justify="right"),
+                    Text(nat_str, style=nat_style, justify="right"),
                 )
                 self._row_positions["working_rows"].append(row_key)
+                if mid_val is not None and nat_val is not None and oid is not None:
+                    self._prev_midnat[oid] = (mid_val, nat_val)
+                # Collect symbols for streaming subs
+                for leg in order.get("orderLegCollection", [])[:]:
+                    sym = leg.get("instrument", {}).get("symbol")
+                    if sym:
+                        all_symbols.append(sym)
+            # Subscribe to option symbols via streaming
+            if stream_quotes and self._quote_provider:
+                try:
+                    await self._quote_provider.subscribe_options(all_symbols)
+                except Exception as e:
+                    self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
             # Separator
             table.add_row(*[Text("") for _ in range(9)])
             self._row_positions["working_sep"] = len(self._row_positions["working_rows"]) + 1
@@ -568,6 +626,7 @@ class OrderManagementWidget(Static):
         new_ids = [str(o.get("orderId")) for o, _ in working]
         if prev_ids == new_ids and len(self._row_positions["working_rows"]) == len(new_ids):
             # Update cells in place
+            all_symbols = []
             for idx, (order, formatted) in enumerate(working):
                 row_key = self._row_positions["working_rows"][idx]
                 order_type = formatted["order_type"]
@@ -578,7 +637,21 @@ class OrderManagementWidget(Static):
                     price = str(price)
                 status = formatted["status"]
                 status_color = "cyan" if status == "WORKING" else ""
-                mid_str, nat_str = await compute_mid_nat(order)
+                mid_val, nat_val = await compute_mid_nat(order)
+                mid_str = f"{mid_val:.2f}" if mid_val is not None else ""
+                nat_str = f"{nat_val:.2f}" if nat_val is not None else ""
+                oid = order.get("orderId")
+                prev = self._prev_midnat.get(oid, (None, None))
+                is_debit = order.get("orderType") == "NET_DEBIT"
+                def style_change(curr, prev_val):
+                    if curr is None or prev_val is None:
+                        return ""
+                    if is_debit:
+                        return ("bold green" if curr < prev_val else "bold red" if curr > prev_val else "")
+                    else:
+                        return ("bold green" if curr > prev_val else "bold red" if curr < prev_val else "")
+                mid_style = style_change(mid_val, prev[0])
+                nat_style = style_change(nat_val, prev[1])
                 # Update columns 0..8
                 ck = self._col_keys
                 table.update_cell(row_key, ck[0], Text(str(formatted["order_id"])))
@@ -588,13 +661,97 @@ class OrderManagementWidget(Static):
                 table.update_cell(row_key, ck[4], Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")))
                 table.update_cell(row_key, ck[5], Text(str(formatted["quantity"]), justify="right"))
                 table.update_cell(row_key, ck[6], Text(price, justify="right"))
-                table.update_cell(row_key, ck[7], Text(mid_str, justify="right"))
-                table.update_cell(row_key, ck[8], Text(nat_str, justify="right"))
+                table.update_cell(row_key, ck[7], Text(mid_str, style=mid_style, justify="right"))
+                table.update_cell(row_key, ck[8], Text(nat_str, style=nat_style, justify="right"))
+                if mid_val is not None and nat_val is not None and oid is not None:
+                    self._prev_midnat[oid] = (mid_val, nat_val)
+                for leg in order.get("orderLegCollection", [])[:]:
+                    sym = leg.get("instrument", {}).get("symbol")
+                    if sym:
+                        all_symbols.append(sym)
+            if stream_quotes and self._quote_provider:
+                try:
+                    await self._quote_provider.subscribe_options(all_symbols)
+                except Exception as e:
+                    self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
             return
 
-        # Fallback: layout changed (orders added/removed) — rebuild once (might flicker briefly)
+        # Fallback: layout changed (orders added/removed) - rebuild once (might flicker briefly)
         self._initialized = False
         self.run_get_orders_data()
+
+    def refresh_working_quotes(self) -> None:
+        """Update Mid/Nat for working rows from streaming cache without rebuilding the table."""
+        if not stream_quotes or not self._quote_provider:
+            return
+        try:
+            table = self.query_one(DataTable)
+            if not self._initialized:
+                return
+            if not self._working_orders or not self._row_positions["working_rows"]:
+                return
+            if len(self._working_orders) != len(self._row_positions["working_rows"]):
+                return  # layout changed; next run_get_orders_data will rebuild
+
+            def mid_nat_from_cache(order) -> tuple[float | None, float | None]:
+                legs = order.get("orderLegCollection", [])
+                cost_mid = proceeds_mid = cost_nat = proceeds_nat = 0.0
+                for leg in legs:
+                    instr = leg.get("instrument", {})
+                    symbol = instr.get("symbol")
+                    if not symbol:
+                        continue
+                    bid, ask = self._quote_provider.get_bid_ask(symbol)
+                    # Build mid even if one side missing
+                    if bid is not None and ask is not None:
+                        mid = (bid + ask) / 2
+                    elif bid is not None:
+                        mid = bid
+                    elif ask is not None:
+                        mid = ask
+                    else:
+                        mid = 0.0
+                    if leg.get("instruction", "").upper().startswith("BUY"):
+                        cost_mid += mid
+                        cost_nat += (ask if ask is not None else (mid if mid else 0.0))
+                    else:
+                        proceeds_mid += mid
+                        proceeds_nat += (bid if bid is not None else (mid if mid else 0.0))
+                if order.get("orderType") == "NET_DEBIT":
+                    net_mid = cost_mid - proceeds_mid
+                    net_nat = cost_nat - proceeds_nat
+                else:
+                    net_mid = proceeds_mid - cost_mid
+                    net_nat = proceeds_nat - cost_nat
+                return (net_mid, net_nat)
+
+            ck = self._col_keys
+            for idx, order in enumerate(self._working_orders):
+                row_key = self._row_positions["working_rows"][idx]
+                mid_val, nat_val = mid_nat_from_cache(order)
+                if mid_val is None or nat_val is None:
+                    continue
+                mid_str = f"{mid_val:.2f}"
+                nat_str = f"{nat_val:.2f}"
+                oid = order.get("orderId")
+                prev = self._prev_midnat.get(oid, (None, None))
+                is_debit = order.get("orderType") == "NET_DEBIT"
+                def style_change(curr, prev_val):
+                    if curr is None or prev_val is None:
+                        return ""
+                    if is_debit:
+                        return ("bold green" if curr < prev_val else "bold red" if curr > prev_val else "")
+                    else:
+                        return ("bold green" if curr > prev_val else "bold red" if curr < prev_val else "")
+                mid_style = style_change(mid_val, prev[0])
+                nat_style = style_change(nat_val, prev[1])
+                table.update_cell(row_key, ck[7], Text(mid_str, style=mid_style, justify="right"))
+                table.update_cell(row_key, ck[8], Text(nat_str, style=nat_style, justify="right"))
+                if oid is not None:
+                    self._prev_midnat[oid] = (mid_val, nat_val)
+        except Exception:
+            # Non-fatal; next tick will try again
+            pass
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection by updating selection only; use U/C for actions."""
@@ -659,6 +816,5 @@ class OrderManagementWidget(Static):
         main_container = self.app.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
-
 
 

@@ -10,6 +10,8 @@ from rich.text import Text
 import asyncio
 import keyboard
 from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
+from configuration import stream_quotes
+from ..quote_provider import get_provider
 
 class CheckSyntheticCoveredCallsWidget(Static):
     """A widget to display synthetic covered calls."""
@@ -57,6 +59,18 @@ class CheckSyntheticCoveredCallsWidget(Static):
         table.cursor_type = "row"
         # Make sure the table can receive focus
         table.focus()
+        try:
+            self._col_keys = list(table.columns.keys())
+        except Exception:
+            self._col_keys = []
+        # Initialize streaming provider if enabled
+        self._ba_maps = []
+        if stream_quotes:
+            try:
+                self._quote_provider = get_provider(self.app.api.connectClient)
+                self.set_interval(1, self.refresh_streaming_quotes)
+            except Exception as e:
+                self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
 
         self.run_get_synthetic_covered_calls_data()
         # Add periodic refresh every 15 seconds
@@ -89,6 +103,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
         data = await logic.get_vertical_spreads_data(self.app.api, synthetic=True)
         table = self.query_one(DataTable)
         table.clear()
+        self._ba_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
 
         def get_cell_style(col, val, prev_val=None):
@@ -289,10 +304,32 @@ class CheckSyntheticCoveredCallsWidget(Static):
                     Text(refreshed_time, style="", justify="left")
                 ]
                 # Add row with styled cells
-                table.add_row(*cells)
+                row_key = table.add_row(*cells)
+                # Use symbols from data when present
+                try:
+                    col_call_low = self._col_keys[3] if len(self._col_keys) > 3 else 3
+                    col_put_low = self._col_keys[4] if len(self._col_keys) > 4 else 4
+                    col_call_high = self._col_keys[6] if len(self._col_keys) > 6 else 6
+                    sym1 = row.get("symbol1")
+                    sym2 = row.get("symbol2")
+                    psym = row.get("put_symbol")
+                    if sym1:
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_call_low, "symbol": sym1, "last_bid": None, "last_ask": None})
+                    if psym:
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_put_low, "symbol": psym, "last_bid": None, "last_ask": None})
+                    if sym2:
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_call_high, "symbol": sym2, "last_bid": None, "last_ask": None})
+                except Exception:
+                    pass
             self._prev_rows = data
         else:
             table.add_row("No synthetic covered calls found.", "", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
+        # Subscribe symbols
+        if stream_quotes and getattr(self, "_quote_provider", None) and self._ba_maps:
+            try:
+                asyncio.create_task(self._quote_provider.subscribe_options([m["symbol"] for m in self._ba_maps if m.get("symbol")]))
+            except Exception as e:
+                self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
@@ -517,14 +554,53 @@ class CheckSyntheticCoveredCallsWidget(Static):
         # If we reach here, order timed out
         if manual:
             self.app.query_one(StatusLog).add_message("Order timed out. Use Order Management (U to update, C to cancel).")
-            return "timeout"
-        else:
-            self.app.query_one(StatusLog).add_message("Order timed out, moving to price improvement...")
-            try:
-                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
-            except:
-                pass
-            return "timeout"
+        return "timeout"
+
+    def refresh_streaming_quotes(self) -> None:
+        if not stream_quotes or not getattr(self, "_quote_provider", None) or not getattr(self, "_ba_maps", None):
+            return
+        try:
+            table = self.query_one(DataTable)
+            for m in self._ba_maps:
+                sym = m.get("symbol")
+                if not sym:
+                    continue
+                bid, ask = self._quote_provider.get_bid_ask(sym)
+                if bid is None and ask is None:
+                    continue
+                if bid is None:
+                    bid = m.get("last_bid")
+                if ask is None:
+                    ask = m.get("last_ask")
+                if bid is None and ask is None:
+                    continue
+                prev_bid, prev_ask = m.get("last_bid"), m.get("last_ask")
+                m["last_bid"], m["last_ask"] = bid, ask
+                bid_style = ""
+                ask_style = ""
+                try:
+                    if prev_bid is not None and bid is not None:
+                        if float(bid) > float(prev_bid):
+                            bid_style = "green"
+                        elif float(bid) < float(prev_bid):
+                            bid_style = "red"
+                except Exception:
+                    pass
+                try:
+                    if prev_ask is not None and ask is not None:
+                        if float(ask) < float(prev_ask):
+                            ask_style = "green"
+                        elif float(ask) > float(prev_ask):
+                            ask_style = "red"
+                except Exception:
+                    pass
+                ba_text = Text()
+                ba_text.append(f"{float(bid):.2f}" if bid is not None else "", style=bid_style)
+                ba_text.append("|")
+                ba_text.append(f"{float(ask):.2f}" if ask is not None else "", style=ask_style)
+                table.update_cell(m["row_key"], m["col_key"], ba_text)
+        except Exception:
+            pass
 
 def round_to_nearest_five_cents(price):
     """Round price to nearest $0.05."""

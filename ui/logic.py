@@ -250,6 +250,10 @@ async def get_box_spreads_data(api, asset="$SPX"):
                     "high_call_ba": f"{spread['high_call_bid']}/{spread['high_call_ask']}",
                     "low_put_ba": f"{spread['low_put_bid']}/{spread['low_put_ask']}",
                     "high_put_ba": f"{spread['high_put_bid']}/{spread['high_put_ask']}",
+                    "low_call_symbol": spread.get("low_call_symbol"),
+                    "high_call_symbol": spread.get("high_call_symbol"),
+                    "low_put_symbol": spread.get("low_put_symbol"),
+                    "high_put_symbol": spread.get("high_put_symbol"),
                     # Mid-based prices and metrics
                     "mid_net_price": spread.get("mid_net_price", ""),
                     "mid_upfront_amount": spread.get("mid_upfront_amount", ""),
@@ -349,6 +353,8 @@ async def get_vertical_spreads_data(api, synthetic=False):
                     "ask1": best_spread["ask1"],
                     "bid2": best_spread["bid2"],
                     "ask2": best_spread["ask2"],
+                    "symbol1": best_spread.get("symbol1"),
+                    "symbol2": best_spread.get("symbol2"),
                     # Ensure these are floats for UI logic
                     "investment": float(best_spread['total_investment']),
                     "max_profit": float(best_spread['total_return']),
@@ -360,6 +366,7 @@ async def get_vertical_spreads_data(api, synthetic=False):
                 if synthetic:
                     row["put_bid"] = best_spread["put_bid"]
                     row["put_ask"] = best_spread["put_ask"]
+                    row["put_symbol"] = best_spread.get("put_symbol")
 
                 spread_results.append(row)
 

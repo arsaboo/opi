@@ -1,6 +1,7 @@
 import time
 import alert
 from textual.app import App, ComposeResult
+import asyncio
 from textual.containers import Container
 from textual.widgets import Header, Footer, Static
 from .widgets.status_log import StatusLog
@@ -11,6 +12,7 @@ from .widgets.check_synthetic_covered_calls import CheckSyntheticCoveredCallsWid
 from .widgets.view_margin_requirements import ViewMarginRequirementsWidget
 from api import Api
 from configuration import apiKey, apiRedirectUri, appSecret
+from .quote_provider import ensure_provider
 
 class OpiApp(App):
     """A Textual app to manage the options trading bot."""
@@ -166,6 +168,11 @@ class OpiApp(App):
         self.query_one(StatusLog).add_message("Welcome to the Options Trading Bot! Press a key to select an option.")
         main_container = self.query_one("#main_container")
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
+        # Warm up streaming provider early to reduce initial delay
+        try:
+            asyncio.create_task(ensure_provider(self.api.connectClient))
+        except Exception:
+            pass
 
     def action_roll_short_options(self) -> None:
         """Action to roll short options."""

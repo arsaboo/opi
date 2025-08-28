@@ -11,6 +11,8 @@ import asyncio
 import keyboard
 from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
 from cc import round_to_nearest_five_cents
+from configuration import stream_quotes
+from ..quote_provider import get_provider
 
 # Read manual ordering flag from configuration with safe default
 try:
@@ -71,6 +73,18 @@ class RollShortOptionsWidget(Static):
         self.set_interval(15, self.run_get_expiring_shorts_data)
         # Add periodic market status check every 30 seconds
         self.set_interval(30, self.check_market_status)
+        # Streaming
+        self._credit_maps = []
+        try:
+            self._col_keys = list(self.query_one(DataTable).columns.keys())
+        except Exception:
+            self._col_keys = []
+        if stream_quotes:
+            try:
+                self._quote_provider = get_provider(self.app.api.connectClient)
+                self.set_interval(1, self.refresh_streaming_credit)
+            except Exception as e:
+                self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
@@ -299,6 +313,7 @@ class RollShortOptionsWidget(Static):
         data = await logic.get_expiring_shorts_data(self.app.api)
         table = self.query_one(DataTable)
         table.clear()
+        self._credit_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
 
         def get_cell_class(col, val, prev_val=None):
@@ -388,7 +403,107 @@ class RollShortOptionsWidget(Static):
                     Text(refreshed_time, style="", justify="left")
                 ]
                 # Add row with styled cells
-                table.add_row(*cells)
+                row_key = table.add_row(*cells)
+                # Map symbols for streaming roll credit
+                try:
+                    old_sym = row.get("optionSymbol")
+                    new_sym = row.get("New Option Symbol")
+                    ticker = row.get("Ticker")
+                    strike = float(row.get("Current Strike", 0)) if row.get("Current Strike") else 0.0
+                    col_credit = self._col_keys[10] if len(self._col_keys) > 10 else 10
+                    col_under = self._col_keys[4] if len(self._col_keys) > 4 else 4
+                    col_extr = self._col_keys[13] if len(self._col_keys) > 13 else 13
+                    self._credit_maps.append({
+                        "row_key": row_key,
+                        "col_credit": col_credit,
+                        "col_under": col_under,
+                        "col_extr": col_extr,
+                        "old_symbol": old_sym,
+                        "new_symbol": new_sym,
+                        "ticker": ticker,
+                        "strike": strike,
+                    })
+                except Exception:
+                    pass
             self._prev_rows = data
+            # Subscribe to streaming symbols for options and equities
+            if stream_quotes and getattr(self, "_quote_provider", None):
+                try:
+                    opt_syms = []
+                    equities = []
+                    for m in self._credit_maps:
+                        if m.get("old_symbol"):
+                            opt_syms.append(m["old_symbol"])
+                        if m.get("new_symbol"):
+                            opt_syms.append(m["new_symbol"])
+                        if m.get("ticker"):
+                            equities.append(m["ticker"])
+                    asyncio.create_task(self._quote_provider.subscribe_options(opt_syms))
+                    asyncio.create_task(self._quote_provider.subscribe_equities(equities))
+                except Exception:
+                    pass
         else:
             table.add_row("No expiring options found.", *[""] * 16, refreshed_time)
+
+    def refresh_streaming_credit(self) -> None:
+        if not stream_quotes or not getattr(self, "_quote_provider", None) or not getattr(self, "_credit_maps", None):
+            return
+        try:
+            table = self.query_one(DataTable)
+            for m in self._credit_maps:
+                old_sym = m.get("old_symbol")
+                new_sym = m.get("new_symbol")
+                ticker = m.get("ticker")
+                strike = m.get("strike", 0.0)
+                # Update credit if both side quotes present
+                if old_sym and new_sym:
+                    nbid, _ = self._quote_provider.get_bid_ask(new_sym)
+                    _, oask = self._quote_provider.get_bid_ask(old_sym)
+                    if nbid is not None and oask is not None:
+                        credit = nbid - oask
+                        prev = m.get("last_credit")
+                        style = ""
+                        try:
+                            if prev is not None:
+                                if float(credit) > float(prev):
+                                    style = "bold green"
+                                elif float(credit) < float(prev):
+                                    style = "bold red"
+                        except Exception:
+                            pass
+                        m["last_credit"] = credit
+                        table.update_cell(m["row_key"], m["col_credit"], Text(f"{credit:.2f}", style=style, justify="right"))
+                # Update underlying price from equity stream
+                if ticker:
+                    last = self._quote_provider.get_last(ticker)
+                    if last is not None:
+                        prev_under = m.get("last_under")
+                        style = ""
+                        try:
+                            if prev_under is not None:
+                                if float(last) > float(prev_under):
+                                    style = "bold green"
+                                elif float(last) < float(prev_under):
+                                    style = "bold red"
+                        except Exception:
+                            pass
+                        m["last_under"] = last
+                        table.update_cell(m["row_key"], m["col_under"], Text(f"{last:.2f}", style=style, justify="right"))
+                # Update extrinsic = option_price - intrinsic (calls)
+                if old_sym and ticker:
+                    # option price: prefer last; else mid of bid/ask
+                    last_opt = self._quote_provider.get_last(old_sym)
+                    bid, ask = self._quote_provider.get_bid_ask(old_sym)
+                    opt_price = None
+                    if last_opt is not None:
+                        opt_price = last_opt
+                    elif bid is not None and ask is not None:
+                        opt_price = (bid + ask) / 2
+                    # intrinsic for short call
+                    last_under = self._quote_provider.get_last(ticker)
+                    if opt_price is not None and last_under is not None:
+                        intrinsic = max(0.0, float(last_under) - float(strike))
+                        extrinsic = opt_price - intrinsic
+                        table.update_cell(m["row_key"], m["col_extr"], Text(f"{extrinsic:.2f}", justify="right"))
+        except Exception:
+            pass

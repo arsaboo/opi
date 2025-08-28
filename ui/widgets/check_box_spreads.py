@@ -8,6 +8,8 @@ from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 import asyncio
+from configuration import stream_quotes
+from ..quote_provider import get_provider
 
 class CheckBoxSpreadsWidget(Static):
     """A widget to display box spreads."""
@@ -54,11 +56,23 @@ class CheckBoxSpreadsWidget(Static):
         table.header_style = "bold on blue"
         table.cursor_type = "row"
         table.focus()
+        try:
+            self._col_keys = list(table.columns.keys())
+        except Exception:
+            self._col_keys = []
         self.run_get_box_spreads_data()
         # Add periodic refresh every 30 seconds
         self.set_interval(15, self.run_get_box_spreads_data)
         # Add periodic market status check every 30 seconds
         self.set_interval(30, self.check_market_status)
+        # Streaming maps
+        self._ba_maps = []
+        if stream_quotes:
+            try:
+                self._quote_provider = get_provider(self.app.api.connectClient)
+                self.set_interval(1, self.refresh_streaming_quotes)
+            except Exception as e:
+                self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
@@ -171,6 +185,7 @@ class CheckBoxSpreadsWidget(Static):
         data = await logic.get_box_spreads_data(self.app.api)
         table = self.query_one(DataTable)
         table.clear()
+        self._ba_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
 
         def get_cell_style(col, val, prev_val=None):
@@ -448,7 +463,83 @@ class CheckBoxSpreadsWidget(Static):
                     Text(refreshed_time, style="", justify="left")
                 ]
                 # Add row with styled cells
-                table.add_row(*cells)
+                row_key = table.add_row(*cells)
+                # Map symbols for streaming updates if present
+                try:
+                    lcs = row.get("low_call_symbol")
+                    hcs = row.get("high_call_symbol")
+                    lps = row.get("low_put_symbol")
+                    hps = row.get("high_put_symbol")
+                    col_lc = self._col_keys[5] if len(self._col_keys) > 5 else 5
+                    col_hc = self._col_keys[6] if len(self._col_keys) > 6 else 6
+                    col_lp = self._col_keys[7] if len(self._col_keys) > 7 else 7
+                    col_hp = self._col_keys[8] if len(self._col_keys) > 8 else 8
+                    if lcs:
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_lc, "symbol": lcs, "last_bid": None, "last_ask": None})
+                    if hcs:
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_hc, "symbol": hcs, "last_bid": None, "last_ask": None})
+                    if lps:
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_lp, "symbol": lps, "last_bid": None, "last_ask": None})
+                    if hps:
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_hp, "symbol": hps, "last_bid": None, "last_ask": None})
+                except Exception:
+                    pass
             self._prev_rows = data
+            # Subscribe to leg symbols for streaming
+            if stream_quotes and getattr(self, "_quote_provider", None):
+                try:
+                    syms = []
+                    for m in self._ba_maps:
+                        if m.get("symbol"):
+                            syms.append(m["symbol"])
+                    asyncio.create_task(self._quote_provider.subscribe_options(syms))
+                except Exception:
+                    pass
         else:
             table.add_row("No box spreads found.", *[""] * 16, refreshed_time)
+
+    def refresh_streaming_quotes(self) -> None:
+        if not stream_quotes or not getattr(self, "_quote_provider", None) or not getattr(self, "_ba_maps", None):
+            return
+        try:
+            table = self.query_one(DataTable)
+            for m in self._ba_maps:
+                sym = m.get("symbol")
+                if not sym:
+                    continue
+                bid, ask = self._quote_provider.get_bid_ask(sym)
+                if bid is None and ask is None:
+                    continue
+                if bid is None:
+                    bid = m.get("last_bid")
+                if ask is None:
+                    ask = m.get("last_ask")
+                if bid is None and ask is None:
+                    continue
+                prev_bid, prev_ask = m.get("last_bid"), m.get("last_ask")
+                m["last_bid"], m["last_ask"] = bid, ask
+                bid_style = ""
+                ask_style = ""
+                try:
+                    if prev_bid is not None and bid is not None:
+                        if float(bid) > float(prev_bid):
+                            bid_style = "green"
+                        elif float(bid) < float(prev_bid):
+                            bid_style = "red"
+                except Exception:
+                    pass
+                try:
+                    if prev_ask is not None and ask is not None:
+                        if float(ask) < float(prev_ask):
+                            ask_style = "green"
+                        elif float(ask) > float(prev_ask):
+                            ask_style = "red"
+                except Exception:
+                    pass
+                ba_text = Text()
+                ba_text.append(f"{float(bid):.2f}" if bid is not None else "", style=bid_style)
+                ba_text.append("|")
+                ba_text.append(f"{float(ask):.2f}" if ask is not None else "", style=ask_style)
+                table.update_cell(m["row_key"], m["col_key"], ba_text)
+        except Exception:
+            pass
