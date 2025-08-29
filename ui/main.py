@@ -3,7 +3,7 @@ import alert
 from textual.app import App, ComposeResult
 import asyncio
 from textual.containers import Container
-from textual.widgets import Header, Footer, Static
+from textual.widgets import Footer, Static
 from .widgets.status_log import StatusLog
 from .widgets.roll_short_options import RollShortOptionsWidget
 from .widgets.check_box_spreads import CheckBoxSpreadsWidget
@@ -15,6 +15,7 @@ from configuration import apiKey, apiRedirectUri, appSecret
 from .quote_provider import ensure_provider, get_provider
 from state_manager import load_symbols, save_symbols
 from configuration import SchwabAccountID
+from .widgets.app_header import AppHeader
 
 class OpiApp(App):
     """A Textual app to manage the options trading bot."""
@@ -159,7 +160,7 @@ class OpiApp(App):
 
     def compose(self) -> ComposeResult:
         """Create child widgets for the app."""
-        yield Header()
+        yield AppHeader()
         yield Container(id="main_container")
         yield StatusLog(id="status_log")
         yield Footer()
@@ -285,10 +286,12 @@ class OpiApp(App):
 
     def update_header(self, title: str) -> None:
         """Update the app title."""
-        self.title = title
-        # Force a refresh of the header
-        header = self.query_one(Header)
-        header.refresh()
+        # Route to custom header widget
+        try:
+            header = self.query_one(AppHeader)
+            header.set_title(title)
+        except Exception:
+            pass
 
     def action_toggle_dark(self) -> None:
         """An action to toggle dark mode."""
