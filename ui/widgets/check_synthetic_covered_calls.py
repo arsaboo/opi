@@ -11,7 +11,7 @@ import asyncio
 import keyboard
 from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
 from configuration import stream_quotes
-from ..quote_provider import get_provider
+from ..subscription_manager import get_subscription_manager
 
 class CheckSyntheticCoveredCallsWidget(Static):
     """A widget to display synthetic covered calls."""
@@ -63,11 +63,10 @@ class CheckSyntheticCoveredCallsWidget(Static):
             self._col_keys = list(table.columns.keys())
         except Exception:
             self._col_keys = []
-        # Initialize streaming provider if enabled
+        # Initialize streaming tick if enabled
         self._ba_maps = []
         if stream_quotes:
             try:
-                self._quote_provider = get_provider(self.app.api.connectClient)
                 self.set_interval(1, self.refresh_streaming_quotes)
             except Exception as e:
                 self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
@@ -324,12 +323,17 @@ class CheckSyntheticCoveredCallsWidget(Static):
             self._prev_rows = data
         else:
             table.add_row("No synthetic covered calls found.", "", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
-        # Subscribe symbols
-        if stream_quotes and getattr(self, "_quote_provider", None) and self._ba_maps:
+        # Subscribe symbols via manager
+        if stream_quotes and self._ba_maps:
             try:
-                asyncio.create_task(self._quote_provider.subscribe_options([m["symbol"] for m in self._ba_maps if m.get("symbol")]))
-            except Exception as e:
-                self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
+                mgr = get_subscription_manager(self.app.api.connectClient)
+                mgr.register(
+                    "synthetic_covered_calls",
+                    options=[m["symbol"] for m in self._ba_maps if m.get("symbol")],
+                    equities=[],
+                )
+            except Exception:
+                pass
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""

@@ -323,12 +323,14 @@ class CheckVerticalSpreadsWidget(Static):
             self._prev_rows = data
         else:
             table.add_row("No vertical spreads found.", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
-        # Subscribe for streaming quotes
-        if stream_quotes and self._quote_provider and self._ba_maps:
+        # Subscribe for streaming quotes via manager
+        if stream_quotes and self._ba_maps:
             try:
-                asyncio.create_task(self._quote_provider.subscribe_options([m["symbol"] for m in self._ba_maps if m.get("symbol")]))
-            except Exception as e:
-                self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
+                from ..subscription_manager import get_subscription_manager
+                mgr = get_subscription_manager(self.app.api.connectClient)
+                mgr.register("vertical_spreads", options=[m["symbol"] for m in self._ba_maps if m.get("symbol")], equities=[])
+            except Exception:
+                pass
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""

@@ -9,7 +9,7 @@ from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 import asyncio
 from configuration import stream_quotes
-from ..quote_provider import get_provider
+from ..subscription_manager import get_subscription_manager
 
 class CheckBoxSpreadsWidget(Static):
     """A widget to display box spreads."""
@@ -69,7 +69,6 @@ class CheckBoxSpreadsWidget(Static):
         self._ba_maps = []
         if stream_quotes:
             try:
-                self._quote_provider = get_provider(self.app.api.connectClient)
                 self.set_interval(1, self.refresh_streaming_quotes)
             except Exception as e:
                 self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
@@ -485,14 +484,12 @@ class CheckBoxSpreadsWidget(Static):
                 except Exception:
                     pass
             self._prev_rows = data
-            # Subscribe to leg symbols for streaming
-            if stream_quotes and getattr(self, "_quote_provider", None):
+            # Subscribe to leg symbols for streaming via manager
+            if stream_quotes and self._ba_maps:
                 try:
-                    syms = []
-                    for m in self._ba_maps:
-                        if m.get("symbol"):
-                            syms.append(m["symbol"])
-                    asyncio.create_task(self._quote_provider.subscribe_options(syms))
+                    mgr = get_subscription_manager(self.app.api.connectClient)
+                    syms = [m["symbol"] for m in self._ba_maps if m.get("symbol")]
+                    mgr.register("box_spreads", options=syms, equities=[])
                 except Exception:
                     pass
         else:

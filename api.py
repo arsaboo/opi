@@ -946,3 +946,97 @@ class Api:
 
         print("\nFailed to fill order after all price improvement attempts")
         return False
+
+    def editOrderPrice(self, order_id, new_price):
+        """Edit an existing order's limit price using Schwab's edit/replace endpoint when available.
+
+        Falls back to cancel-and-place if edit is not supported by the client.
+
+        Returns the new order ID (for replace flows) or the same order ID if edited in place.
+        Returns None on failure.
+        """
+        try:
+            account_hash = self.getAccountHash()
+            # Fetch current order JSON
+            r = self.connectClient.get_order(order_id, account_hash)
+            r.raise_for_status()
+            order = r.json()
+
+            # Update price fields in payload; Schwab expects string price
+            try:
+                order["price"] = str(abs(new_price))
+            except Exception:
+                pass
+
+            # Try explicit replace/edit methods if exposed by client
+            replace_fn = getattr(self.connectClient, "replace_order", None)
+            edit_fn = getattr(self.connectClient, "edit_order", None)
+
+            if replace_fn is not None:
+                if not debugCanSendOrders:
+                    print("Replace (debug):", order)
+                    return None
+                r2 = replace_fn(account_hash, order_id, order)
+                # Some implementations return 200/201 with body
+                try:
+                    new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r2)
+                except Exception:
+                    new_order_id = order_id
+                return new_order_id
+            if edit_fn is not None:
+                if not debugCanSendOrders:
+                    print("Edit (debug):", order)
+                    return None
+                r2 = edit_fn(account_hash, order_id, order)
+                try:
+                    new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r2)
+                except Exception:
+                    new_order_id = order_id
+                return new_order_id
+
+            # Fallback: cancel-and-place using existing helper
+            try:
+                # Attempt cancel
+                self.cancelOrder(order_id)
+            except Exception as e:
+                logger.warning(f"editOrderPrice cancel fallback failed: {e}")
+
+            # Rebuild a replacement order from legs
+            import schwab
+            ob = schwab.orders.generic.OrderBuilder()
+            order_type_str = order.get("orderType", "NET_DEBIT")
+            order_type_enum = getattr(schwab.orders.common.OrderType, order_type_str, schwab.orders.common.OrderType.NET_DEBIT)
+            legs = order.get("orderLegCollection", [])
+            for leg in legs:
+                instr = leg.get("instrument", {})
+                symbol = instr.get("symbol")
+                qty = leg.get("quantity", 1)
+                instruction_str = leg.get("instruction", "BUY_TO_OPEN")
+                try:
+                    instruction_enum = getattr(schwab.orders.common.OptionInstruction, instruction_str)
+                except Exception:
+                    instruction_enum = schwab.orders.common.OptionInstruction.BUY_TO_OPEN if instruction_str.upper().startswith("BUY") else schwab.orders.common.OptionInstruction.SELL_TO_OPEN
+                ob.add_option_leg(instruction_enum, symbol, qty)
+
+            ob.set_duration(schwab.orders.common.Duration.DAY)
+            ob.set_session(schwab.orders.common.Session.NORMAL)
+            ob.set_price(str(abs(new_price)))
+            ob.set_order_type(order_type_enum)
+            ob.set_order_strategy_type(schwab.orders.common.OrderStrategyType.SINGLE)
+            co = order.get("complexOrderStrategyType")
+            if co:
+                try:
+                    co_enum = getattr(schwab.orders.common.ComplexOrderStrategyType, co)
+                    ob.set_complex_order_strategy_type(co_enum)
+                except Exception:
+                    pass
+
+            if not debugCanSendOrders:
+                print("Replacement order (debug):", ob.build())
+                return None
+            r3 = self.connectClient.place_order(account_hash, ob)
+            new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r3)
+            return new_order_id
+        except Exception as e:
+            logger.error(f"Error editing order {order_id}: {e}")
+            return None

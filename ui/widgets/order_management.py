@@ -358,54 +358,8 @@ class OrderManagementWidget(Static):
             order_id = formatted.get('order_id')
             new_price = payload.get('price') if payload.get('price') is not None else suggested_price
 
-            # Build replacement order from existing order legs
-            client = self.app.api.connectClient
-            account_hash = self.app.api.getAccountHash()
-            # Fetch full order details
-            r = await asyncio.to_thread(client.get_order, order_id, account_hash)
-            r.raise_for_status()
-            full_order = r.json()
-
-            # Attempt to cancel existing order first
-            try:
-                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
-            except Exception as e:
-                self.app.query_one(StatusLog).add_message(f"Warning: could not cancel order {order_id}: {e}")
-
-            ob = schwab.orders.generic.OrderBuilder()
-            order_type_str = full_order.get("orderType", "NET_DEBIT")
-            order_type_enum = getattr(schwab.orders.common.OrderType, order_type_str, schwab.orders.common.OrderType.NET_DEBIT)
-            legs = full_order.get("orderLegCollection", [])
-            for leg in legs:
-                instr = leg.get("instrument", {})
-                symbol = instr.get("symbol")
-                qty = leg.get("quantity", 1)
-                instruction_str = leg.get("instruction", "BUY_TO_OPEN")
-                try:
-                    instruction_enum = getattr(schwab.orders.common.OptionInstruction, instruction_str)
-                except Exception:
-                    instruction_enum = schwab.orders.common.OptionInstruction.BUY_TO_OPEN if instruction_str.upper().startswith("BUY") else schwab.orders.common.OptionInstruction.SELL_TO_OPEN
-                ob.add_option_leg(instruction_enum, symbol, qty)
-
-            ob.set_duration(schwab.orders.common.Duration.DAY)
-            ob.set_session(schwab.orders.common.Session.NORMAL)
-            ob.set_price(str(abs(new_price)))
-            ob.set_order_type(order_type_enum)
-            ob.set_order_strategy_type(schwab.orders.common.OrderStrategyType.SINGLE)
-            co = full_order.get("complexOrderStrategyType")
-            if co:
-                try:
-                    co_enum = getattr(schwab.orders.common.ComplexOrderStrategyType, co)
-                    ob.set_complex_order_strategy_type(co_enum)
-                except Exception:
-                    pass
-
-            if not debugCanSendOrders:
-                print("Replacement order (debug): ", ob.build())
-                new_order_id = None
-            else:
-                r2 = await asyncio.to_thread(client.place_order, account_hash, ob)
-                new_order_id = Utils(client, account_hash).extract_order_id(r2)
+            # Use Schwab edit/replace when available
+            new_order_id = await asyncio.to_thread(self.app.api.editOrderPrice, order_id, new_price)
 
             if new_order_id:
                 # Carry over base and step to new order id
@@ -414,10 +368,10 @@ class OrderManagementWidget(Static):
                 # Cleanup old mapping
                 self._base_price.pop(order_id, None)
                 self._manual_steps.pop(order_id, None)
-                self.app.query_one(StatusLog).add_message(f"Placed replacement order {new_order_id} at ${new_price:.2f}.")
+                self.app.query_one(StatusLog).add_message(f"Replaced order {order_id} at ${new_price:.2f} → {new_order_id}.")
                 self.run_get_orders_data()
             else:
-                self.app.query_one(StatusLog).add_message("Failed to replace order.")
+                self.app.query_one(StatusLog).add_message("Failed to replace/edit order.")
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error replacing order: {e}")
 
