@@ -589,8 +589,11 @@ class CheckSyntheticCoveredCallsWidget(Static):
                     continue
                 prev_bid, prev_ask = m.get("last_bid"), m.get("last_ask")
                 m["last_bid"], m["last_ask"] = bid, ask
-                bid_style = ""
-                ask_style = ""
+                # Keep last style so color remains until next change
+                prev_bid_style = m.get("last_bid_style", "")
+                prev_ask_style = m.get("last_ask_style", "")
+                bid_style = prev_bid_style
+                ask_style = prev_ask_style
                 try:
                     if prev_bid is not None and bid is not None:
                         if float(bid) > float(prev_bid):
@@ -607,6 +610,8 @@ class CheckSyntheticCoveredCallsWidget(Static):
                             ask_style = "red"
                 except Exception:
                     pass
+                m["last_bid_style"] = bid_style
+                m["last_ask_style"] = ask_style
                 ba_text = Text()
                 ba_text.append(f"{float(bid):.2f}" if bid is not None else "", style=bid_style)
                 ba_text.append("|")

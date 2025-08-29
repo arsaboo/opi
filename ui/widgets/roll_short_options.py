@@ -462,7 +462,13 @@ class RollShortOptionsWidget(Static):
                 except Exception:
                     pass
         else:
-            table.add_row("No expiring options found.", *[""] * 16, refreshed_time)
+            try:
+                # message in first col, refreshed in last col
+                total_cols = len(self.query_one(DataTable).columns)
+                empties = max(0, total_cols - 2)
+            except Exception:
+                empties = 15
+            table.add_row("No expiring options found.", *[""] * empties, refreshed_time)
 
     def refresh_streaming_credit(self) -> None:
         if not stream_quotes or not getattr(self, "_quote_provider", None) or not getattr(self, "_credit_maps", None):
@@ -481,7 +487,8 @@ class RollShortOptionsWidget(Static):
                     if nbid is not None and oask is not None:
                         credit = nbid - oask
                         prev = m.get("last_credit")
-                        style = ""
+                        # Persist last style so highlight remains until the next change
+                        style = m.get("last_credit_style", "")
                         try:
                             if prev is not None:
                                 if float(credit) > float(prev):
@@ -491,13 +498,15 @@ class RollShortOptionsWidget(Static):
                         except Exception:
                             pass
                         m["last_credit"] = credit
+                        m["last_credit_style"] = style
                         table.update_cell(m["row_key"], m["col_credit"], Text(f"{credit:.2f}", style=style, justify="right"))
                 # Update underlying price from equity stream
                 if ticker:
                     last = self._quote_provider.get_last(ticker)
                     if last is not None:
                         prev_under = m.get("last_under")
-                        style = ""
+                        # Keep last style until value changes
+                        style = m.get("last_under_style", "")
                         try:
                             if prev_under is not None:
                                 if float(last) > float(prev_under):
@@ -507,6 +516,7 @@ class RollShortOptionsWidget(Static):
                         except Exception:
                             pass
                         m["last_under"] = last
+                        m["last_under_style"] = style
                         table.update_cell(m["row_key"], m["col_under"], Text(f"{last:.2f}", style=style, justify="right"))
                 # Update extrinsic = option_price - intrinsic (calls)
                 if old_sym and ticker:
@@ -523,6 +533,11 @@ class RollShortOptionsWidget(Static):
                     if opt_price is not None and last_under is not None:
                         intrinsic = max(0.0, float(last_under) - float(strike))
                         extrinsic = opt_price - intrinsic
-                        table.update_cell(m["row_key"], m["col_extr"], Text(f"{extrinsic:.2f}", justify="right"))
+                        # Color extrinsic consistently with initial render: green if low (<1), red otherwise
+                        try:
+                            extr_style = "green" if float(extrinsic) < 1 else "red"
+                        except Exception:
+                            extr_style = ""
+                        table.update_cell(m["row_key"], m["col_extr"], Text(f"{extrinsic:.2f}", style=extr_style, justify="right"))
         except Exception:
             pass
