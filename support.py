@@ -93,3 +93,19 @@ def calculate_cagr(total_investment: float, returns: float, days: int) -> tuple:
 
     except (OverflowError, ValueError, ZeroDivisionError):
         return 0, 0
+
+
+def threshold_points(limit_value: float, underlying_price: float) -> float:
+    """
+    Interpret a threshold as percent of underlying if < 1, otherwise as points.
+
+    Examples:
+        - limit_value = 0.018, underlying=5200 -> 93.6 points
+        - limit_value = 100, underlying=5200 -> 100 points (legacy points mode)
+    """
+    try:
+        if limit_value is None:
+            return 0.0
+        return underlying_price * float(limit_value) if float(limit_value) < 1 else float(limit_value)
+    except Exception:
+        return 0.0

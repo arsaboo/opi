@@ -20,7 +20,7 @@ from margin_utils import (
     calculate_short_option_rom,
 )
 from optionChain import OptionChain
-from support import calculate_cagr
+from support import calculate_cagr, threshold_points
 from order_utils import monitor_order, handle_cancel, cancel_order
 
 logger = get_logger()
@@ -63,14 +63,16 @@ def RollCalls(api, short):
     days_to_expiry = (short_expiration - datetime.now().date()).days
     short_delta = api.getOptionDetails(short["optionSymbol"])["delta"]
 
-    # Determine position status
+    # Determine position status (percent-aware thresholds)
     value = round(short_strike - underlying_price, 2)
     if value > 0:
         position_status = f"{Fore.GREEN}OTM{Style.RESET_ALL}"
     elif value < 0:
-        if abs(value) > configuration[short["stockSymbol"]].get("deepITMLimit", 50):
+        deep_itm_pts = threshold_points(configuration[short["stockSymbol"]].get("deepITMLimit", 50), underlying_price)
+        itm_pts = threshold_points(configuration[short["stockSymbol"]].get("ITMLimit", 25), underlying_price)
+        if abs(value) > deep_itm_pts:
             position_status = f"{Fore.RED}Deep ITM{Style.RESET_ALL}"
-        elif abs(value) > configuration[short["stockSymbol"]].get("ITMLimit", 25):
+        elif abs(value) > itm_pts:
             position_status = f"{Fore.YELLOW}ITM{Style.RESET_ALL}"
         else:
             position_status = f"{Fore.GREEN}Just ITM{Style.RESET_ALL}"
@@ -187,14 +189,16 @@ def RollSPX(api, short):
     days_to_expiry = (short_expiration - datetime.now().date()).days
     short_delta = get_option_delta(short["optionSymbol"], chain)
 
-    # Determine position status
+    # Determine position status (percent-aware thresholds)
     value = round(short_strike - underlying_price, 2)
     if value > 0:
         position_status = f"{Fore.GREEN}OTM{Style.RESET_ALL}"
     elif value < 0:
-        if abs(value) > configuration[short["stockSymbol"]].get("deepITMLimit", 50):
+        deep_itm_pts = threshold_points(configuration[short["stockSymbol"]].get("deepITMLimit", 50), underlying_price)
+        itm_pts = threshold_points(configuration[short["stockSymbol"]].get("ITMLimit", 25), underlying_price)
+        if abs(value) > deep_itm_pts:
             position_status = f"{Fore.RED}Deep ITM{Style.RESET_ALL}"
-        elif abs(value) > configuration[short["stockSymbol"]].get("ITMLimit", 25):
+        elif abs(value) > itm_pts:
             position_status = f"{Fore.YELLOW}ITM{Style.RESET_ALL}"
         else:
             position_status = f"{Fore.GREEN}Just ITM{Style.RESET_ALL}"
@@ -391,15 +395,18 @@ def find_best_rollover(api, data, short_option):
 
     logger.debug(f"Initial Ideal Premium: {idealPremium}")
 
-    # Determine the short status
+    # Determine the short status (percent-aware thresholds)
+    deep_otm_pts = threshold_points(deepOTMLimit, underlying_price)
+    itm_pts = threshold_points(ITMLimit, underlying_price)
+    deep_itm_pts = threshold_points(deepITMLimit, underlying_price)
     short_status = None
-    if short_strike > underlying_price + deepOTMLimit:
+    if short_strike > underlying_price + deep_otm_pts:
         short_status = "deep_OTM"
     elif short_strike > underlying_price:
         short_status = "OTM"
-    elif short_strike + ITMLimit > underlying_price:
+    elif short_strike + itm_pts > underlying_price:
         short_status = "just_ITM"
-    elif short_strike + deepITMLimit > underlying_price:
+    elif short_strike + deep_itm_pts > underlying_price:
         short_status = "ITM"
     else:
         short_status = "deep_ITM"

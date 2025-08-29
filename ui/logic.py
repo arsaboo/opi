@@ -51,7 +51,8 @@ async def process_short_position(api, short):
 
         # Get underlying price
         underlying_price = await asyncio.to_thread(api.getATMPrice, stock_symbol)
-        # Determine status
+        # Determine status (percent-aware thresholds)
+        from support import threshold_points
         value = round(current_strike - underlying_price, 2)
         ITMLimit = configuration.get(stock_symbol, {}).get("ITMLimit", 25)
         deepITMLimit = configuration.get(stock_symbol, {}).get("deepITMLimit", 50)
@@ -59,9 +60,11 @@ async def process_short_position(api, short):
         if value > 0:
             status = "OTM"
         elif value < 0:
-            if abs(value) > deepITMLimit:
+            deep_itm_pts = threshold_points(deepITMLimit, underlying_price)
+            itm_pts = threshold_points(ITMLimit, underlying_price)
+            if abs(value) > deep_itm_pts:
                 status = "Deep ITM"
-            elif abs(value) > ITMLimit:
+            elif abs(value) > itm_pts:
                 status = "ITM"
             else:
                 status = "Just ITM"
