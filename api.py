@@ -962,11 +962,39 @@ class Api:
             r.raise_for_status()
             order = r.json()
 
-            # Update price fields in payload; Schwab expects string price
-            try:
-                order["price"] = str(abs(new_price))
-            except Exception:
-                pass
+            # Build a minimal editable spec from existing order
+            # Keep only fields Schwab accepts for edit/replace
+            import schwab
+            legs = []
+            for leg in order.get("orderLegCollection", []) or []:
+                instr = leg.get("instrument", {})
+                symbol = instr.get("symbol")
+                qty = leg.get("quantity", 1)
+                instruction_str = leg.get("instruction", "BUY_TO_OPEN")
+                legs.append({
+                    "instruction": instruction_str,
+                    "instrument": {
+                        "symbol": symbol,
+                        "assetType": instr.get("assetType", "OPTION")
+                    },
+                    "quantity": qty,
+                })
+
+            order_type_str = order.get("orderType", "NET_DEBIT")
+            duration = order.get("duration", "DAY")
+            session = order.get("session", "NORMAL")
+            complex_type = order.get("complexOrderStrategyType")
+
+            order_spec = {
+                "orderType": order_type_str,
+                "session": session,
+                "price": str(abs(new_price)),
+                "duration": duration,
+                "orderStrategyType": order.get("orderStrategyType", "SINGLE"),
+                "orderLegCollection": legs,
+            }
+            if complex_type:
+                order_spec["complexOrderStrategyType"] = complex_type
 
             # Try explicit replace/edit methods if exposed by client
             replace_fn = getattr(self.connectClient, "replace_order", None)
@@ -974,9 +1002,9 @@ class Api:
 
             if replace_fn is not None:
                 if not debugCanSendOrders:
-                    print("Replace (debug):", order)
+                    print("Replace (debug):", order_spec)
                     return None
-                r2 = replace_fn(account_hash, order_id, order)
+                r2 = replace_fn(account_hash, order_id, order_spec)
                 # Some implementations return 200/201 with body
                 try:
                     new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r2)
@@ -985,9 +1013,9 @@ class Api:
                 return new_order_id
             if edit_fn is not None:
                 if not debugCanSendOrders:
-                    print("Edit (debug):", order)
+                    print("Edit (debug):", order_spec)
                     return None
-                r2 = edit_fn(account_hash, order_id, order)
+                r2 = edit_fn(account_hash, order_id, order_spec)
                 try:
                     new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r2)
                 except Exception:

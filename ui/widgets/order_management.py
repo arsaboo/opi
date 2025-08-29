@@ -388,7 +388,7 @@ class OrderManagementWidget(Static):
         for order in orders or []:
             formatted = self.app.api.formatOrderForDisplay(order)
             status = formatted["status"]
-            if status in ("ACCEPTED", "WORKING"):
+            if status in ("ACCEPTED", "WORKING", "PENDING_ACTIVATION"):
                 working.append((order, formatted))
             elif status == "FILLED":
                 filled.append((order, formatted))
@@ -590,7 +590,7 @@ class OrderManagementWidget(Static):
                 except (ValueError, TypeError):
                     price = str(price)
                 status = formatted["status"]
-                status_color = "cyan" if status == "WORKING" else ""
+                status_color = "cyan" if status == "WORKING" else ("yellow" if status == "PENDING_ACTIVATION" else "")
                 mid_val, nat_val = await compute_mid_nat(order)
                 mid_str = f"{mid_val:.2f}" if mid_val is not None else ""
                 nat_str = f"{nat_val:.2f}" if nat_val is not None else ""
@@ -770,5 +770,6 @@ class OrderManagementWidget(Static):
         main_container = self.app.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
+
 
 
