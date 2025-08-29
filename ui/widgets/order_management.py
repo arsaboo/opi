@@ -220,6 +220,7 @@ class OrderManagementWidget(Static):
         self._col_keys = []
         self._quote_provider: StreamingQuoteProvider | None = None
         self._prev_midnat = {}  # orderId -> (mid, nat)
+        self._last_stream_opts: set[str] = set()
 
     def compose(self):
         """Create child widgets."""
@@ -264,6 +265,17 @@ class OrderManagementWidget(Static):
                 self.set_interval(1, self.refresh_working_quotes)
             except Exception as e:
                 self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
+
+    def on_unmount(self) -> None:
+        """Cleanup: unsubscribe any working-order symbols when leaving the screen."""
+        try:
+            if self._quote_provider and getattr(self, "_last_stream_opts", None):
+                syms = list(self._last_stream_opts)
+                if syms:
+                    asyncio.create_task(self._quote_provider.unsubscribe_options(syms))
+                self._last_stream_opts = set()
+        except Exception:
+            pass
 
     def on_key(self, event) -> None:
         """Handle key events for manual order actions."""
@@ -505,7 +517,14 @@ class OrderManagementWidget(Static):
             # Subscribe to option symbols via streaming
             if stream_quotes and self._quote_provider:
                 try:
-                    await self._quote_provider.subscribe_options(all_symbols)
+                    desired = {s for s in all_symbols if s}
+                    removed = self._last_stream_opts - desired
+                    added = desired - self._last_stream_opts
+                    if removed:
+                        await self._quote_provider.unsubscribe_options(list(removed))
+                    if added:
+                        await self._quote_provider.subscribe_options(list(added))
+                    self._last_stream_opts = desired
                 except Exception as e:
                     self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
             # Separator
@@ -625,7 +644,14 @@ class OrderManagementWidget(Static):
                         all_symbols.append(sym)
             if stream_quotes and self._quote_provider:
                 try:
-                    await self._quote_provider.subscribe_options(all_symbols)
+                    desired = {s for s in all_symbols if s}
+                    removed = self._last_stream_opts - desired
+                    added = desired - self._last_stream_opts
+                    if removed:
+                        await self._quote_provider.unsubscribe_options(list(removed))
+                    if added:
+                        await self._quote_provider.subscribe_options(list(added))
+                    self._last_stream_opts = desired
                 except Exception as e:
                     self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
             return

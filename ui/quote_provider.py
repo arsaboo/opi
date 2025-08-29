@@ -63,6 +63,23 @@ class StreamingQuoteProvider:
         await self.stream.level_one_option_subs(new_syms)
         self._opt_subs.update(new_syms)
 
+    async def unsubscribe_options(self, symbols: Iterable[str]) -> None:
+        """Attempt to unsubscribe options; if API lacks method, just drop locally."""
+        if not symbols:
+            return
+        to_drop = {s for s in symbols if s in self._opt_subs}
+        if not to_drop:
+            return
+        try:
+            # Some clients expose level_one_option_unsubs; guard in case missing
+            unsubs = getattr(self.stream, "level_one_option_unsubs", None) if self.stream else None
+            if callable(unsubs):
+                await unsubs(list(to_drop))
+        except Exception:
+            # Non-fatal; proceed to drop locally
+            pass
+        self._opt_subs.difference_update(to_drop)
+
     async def _pump(self) -> None:
         assert self.stream is not None
         while self._running:
@@ -154,6 +171,22 @@ class StreamingQuoteProvider:
         await self.stream.level_one_equity_subs(new_syms)
         self._eq_subs.update(new_syms)
 
+    async def unsubscribe_equities(self, symbols: Iterable[str]) -> None:
+        """Attempt to unsubscribe equities; if API lacks method, just drop locally."""
+        if not symbols:
+            return
+        norm = [s.upper() for s in symbols if s]
+        to_drop = {s for s in norm if s in self._eq_subs}
+        if not to_drop:
+            return
+        try:
+            unsubs = getattr(self.stream, "level_one_equity_unsubs", None) if self.stream else None
+            if callable(unsubs):
+                await unsubs(list(to_drop))
+        except Exception:
+            pass
+        self._eq_subs.difference_update(to_drop)
+
     def is_subscribed(self, symbol: str) -> bool:
         return symbol in self._opt_subs or symbol.upper() in self._eq_subs
 
@@ -193,6 +226,10 @@ class StreamingQuoteProvider:
             return float(last) if last is not None else None
         except Exception:
             return None
+
+    def get_all_subscribed(self) -> set[str]:
+        """Return a snapshot of all subscribed symbols (options + equities)."""
+        return set(self._opt_subs) | set(self._eq_subs)
 
 
 _global_provider: Optional[StreamingQuoteProvider] = None

@@ -33,8 +33,17 @@ class SubscriptionManager:
         for entry in self._screens.values():
             desired_opts |= entry.get("options", set())
             desired_eqs |= entry.get("equities", set())
+        # Determine changes
         new_opts = desired_opts - self._last_opts
         new_eqs = desired_eqs - self._last_eqs
+        removed_opts = self._last_opts - desired_opts
+        removed_eqs = self._last_eqs - desired_eqs
+        # Unsubscribe removed first
+        if removed_opts:
+            asyncio.create_task(self._provider.unsubscribe_options(list(removed_opts)))
+        if removed_eqs:
+            asyncio.create_task(self._provider.unsubscribe_equities(list(removed_eqs)))
+        # Subscribe new
         if new_opts:
             asyncio.create_task(self._provider.subscribe_options(new_opts))
         if new_eqs:
@@ -51,4 +60,3 @@ def get_subscription_manager(connect_client) -> SubscriptionManager:
     if _manager is None:
         _manager = SubscriptionManager(connect_client)
     return _manager
-

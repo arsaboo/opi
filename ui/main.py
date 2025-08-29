@@ -12,7 +12,9 @@ from .widgets.check_synthetic_covered_calls import CheckSyntheticCoveredCallsWid
 from .widgets.view_margin_requirements import ViewMarginRequirementsWidget
 from api import Api
 from configuration import apiKey, apiRedirectUri, appSecret
-from .quote_provider import ensure_provider
+from .quote_provider import ensure_provider, get_provider
+from state_manager import load_symbols, save_symbols
+from configuration import SchwabAccountID
 
 class OpiApp(App):
     """A Textual app to manage the options trading bot."""
@@ -170,7 +172,25 @@ class OpiApp(App):
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
         # Warm up streaming provider early to reduce initial delay
         try:
-            asyncio.create_task(ensure_provider(self.api.connectClient))
+            async def _warm_and_load():
+                prov = await ensure_provider(self.api.connectClient)
+                # Load and pre-subscribe saved symbols once provider is ready
+                try:
+                    acc = SchwabAccountID
+                    saved = load_symbols(acc)
+                    if saved:
+                        # Heuristic: treat strings with spaces as options, others as equities
+                        opts = [s for s in saved if ' ' in s]
+                        eqs = [s for s in saved if ' ' not in s]
+                        if opts:
+                            await prov.subscribe_options(opts)
+                        if eqs:
+                            await prov.subscribe_equities(eqs)
+                        self.query_one(StatusLog).add_message(f"Pre-subscribed {len(saved)} saved symbols.")
+                except Exception as e:
+                    # Non-fatal
+                    self.query_one(StatusLog).add_message(f"State load error: {e}")
+            asyncio.create_task(_warm_and_load())
         except Exception:
             pass
 
@@ -203,6 +223,17 @@ class OpiApp(App):
         widget._previous_market_status = self._previous_market_status  # Pass status
         main_container.mount(widget)
         self.query_one(StatusLog).add_message("Check Vertical Spreads selected.")
+
+    def on_exit(self) -> None:
+        """Persist current subscriptions to state-<accountId>.json upon exit."""
+        try:
+            acc = SchwabAccountID
+            prov = get_provider(self.api.connectClient)
+            symbols = list(prov.get_all_subscribed()) if prov else []
+            save_symbols(acc, symbols)
+        except Exception:
+            # Best-effort persistence; ignore errors on shutdown
+            pass
 
     def action_check_synthetic_covered_calls(self) -> None:
         """Action to check synthetic covered calls."""

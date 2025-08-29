@@ -75,6 +75,8 @@ class RollShortOptionsWidget(Static):
         self.set_interval(30, self.check_market_status)
         # Streaming
         self._credit_maps = []
+        self._last_stream_opts: set[str] = set()
+        self._last_stream_eqs: set[str] = set()
         try:
             self._col_keys = list(self.query_one(DataTable).columns.keys())
         except Exception:
@@ -426,7 +428,7 @@ class RollShortOptionsWidget(Static):
                 except Exception:
                     pass
             self._prev_rows = data
-            # Subscribe to streaming symbols for options and equities
+            # Reconcile streaming symbols for options and equities (subscribe/unsubscribe)
             if stream_quotes and getattr(self, "_quote_provider", None):
                 try:
                     opt_syms = []
@@ -438,8 +440,25 @@ class RollShortOptionsWidget(Static):
                             opt_syms.append(m["new_symbol"])
                         if m.get("ticker"):
                             equities.append(m["ticker"])
-                    asyncio.create_task(self._quote_provider.subscribe_options(opt_syms))
-                    asyncio.create_task(self._quote_provider.subscribe_equities(equities))
+                    desired_opts = {s for s in opt_syms if s}
+                    desired_eqs = {s for s in equities if s}
+                    # Unsubscribe removed
+                    removed_opts = self._last_stream_opts - desired_opts
+                    removed_eqs = {s for s in (self._last_stream_eqs - desired_eqs)}
+                    if removed_opts:
+                        asyncio.create_task(self._quote_provider.unsubscribe_options(list(removed_opts)))
+                    if removed_eqs:
+                        asyncio.create_task(self._quote_provider.unsubscribe_equities(list(removed_eqs)))
+                    # Subscribe added
+                    added_opts = desired_opts - self._last_stream_opts
+                    added_eqs = desired_eqs - self._last_stream_eqs
+                    if added_opts:
+                        asyncio.create_task(self._quote_provider.subscribe_options(list(added_opts)))
+                    if added_eqs:
+                        asyncio.create_task(self._quote_provider.subscribe_equities(list(added_eqs)))
+                    # Update snapshots
+                    self._last_stream_opts = desired_opts
+                    self._last_stream_eqs = desired_eqs
                 except Exception:
                     pass
         else:

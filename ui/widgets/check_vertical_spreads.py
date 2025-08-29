@@ -12,6 +12,7 @@ import keyboard
 from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
 from configuration import stream_quotes
 from ..quote_provider import get_provider
+from ..subscription_manager import get_subscription_manager
 
 # Read manual ordering flag from configuration with safe default
 try:
@@ -82,6 +83,13 @@ class CheckVerticalSpreadsWidget(Static):
         self.set_interval(15, self.run_get_vertical_spreads_data)
         # Add periodic market status check every 30 seconds
         self.set_interval(30, self.check_market_status)
+
+    def on_unmount(self) -> None:
+        try:
+            mgr = get_subscription_manager(self.app.api.connectClient)
+            mgr.unregister("vertical_spreads")
+        except Exception:
+            pass
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
@@ -326,7 +334,6 @@ class CheckVerticalSpreadsWidget(Static):
         # Subscribe for streaming quotes via manager
         if stream_quotes and self._ba_maps:
             try:
-                from ..subscription_manager import get_subscription_manager
                 mgr = get_subscription_manager(self.app.api.connectClient)
                 mgr.register("vertical_spreads", options=[m["symbol"] for m in self._ba_maps if m.get("symbol")], equities=[])
             except Exception:

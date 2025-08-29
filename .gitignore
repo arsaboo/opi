@@ -1,6 +1,8 @@
 __pycache__
 .idea
 configuration.py
+## Persisted streaming state per account
+state-*.json
 *.json
 *.csv
 .aider*

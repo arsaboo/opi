@@ -584,64 +584,6 @@ class Api:
                 "quantity": "",
                 "price": ""
             }
-        r = self.connectClient.get_account(
-            self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
-        )
-
-        assert r.status_code == 200, r.raise_for_status()
-
-        data = r.json()
-
-        if existingSymbol and not self.checkPreviousSoldCcsStillHere(
-            existingSymbol, amountWillBuyBack, data
-        ):
-            # something bad happened, let the user know he needs to look into it
-            return alert.botFailed(
-                asset,
-                "The cc's the bot wants to buy back aren't in the account anymore, manual review required.",
-            )
-
-        # set to this instead of 0 because we ignore the amount of options the bot has sold itself, as we are buying them back
-        coverage = amountWillBuyBack
-
-        try:
-            for position in data["securitiesAccount"]["positions"]:
-                if (
-                    position["instrument"]["assetType"] == "EQUITY"
-                    and position["instrument"]["symbol"] == asset
-                ):
-                    amountOpen = int(position["longQuantity"]) - int(
-                        position["shortQuantity"]
-                    )
-
-                    # can be less than 0, removes coverage then
-                    coverage += math.floor(amountOpen / 100)
-
-                if (
-                    position["instrument"]["assetType"] == "OPTION"
-                    and position["instrument"]["underlyingSymbol"] == asset
-                    and position["instrument"]["putCall"] == "CALL"
-                ):
-                    optionData = self.getOptionDetails(position["instrument"]["symbol"])
-                    strike = optionData["strike"]
-                    optionDate = optionData["expiration"]
-                    amountOpen = int(position["longQuantity"]) - int(
-                        position["shortQuantity"]
-                    )
-
-                    if amountOpen > 0 and (
-                        strike >= optionStrikeToCover or optionDate < optionDateToCover
-                    ):
-                        # we cant cover with this, so we dont add it to coverage if its positive,
-                        # but we substract when negative
-                        continue
-
-                    coverage += amountOpen
-
-            return coverage >= amountToCover
-
-        except KeyError:
-            return alert.botFailed(asset, "Error while checking the account coverage")
 
     def checkPreviousSoldCcsStillHere(self, asset, amount, data):
         """

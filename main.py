@@ -11,6 +11,10 @@ import argparse
 from api import Api
 from configuration import apiKey, apiRedirectUri, appSecret
 from ui.main import OpiApp
+from ui.quote_provider import get_provider
+from state_manager import save_symbols
+from configuration import SchwabAccountID
+import atexit
 import alert
 
 
@@ -79,6 +83,15 @@ def main():
 
     # Launch the Textual UI
     try:
+        # Best-effort save on interpreter exit as a safety net
+        def _save_state_on_exit():
+            try:
+                prov = get_provider(api.connectClient)
+                syms = list(prov.get_all_subscribed()) if prov else []
+                save_symbols(SchwabAccountID, syms)
+            except Exception:
+                pass
+        atexit.register(_save_state_on_exit)
         app = OpiApp(api)
         app.run()
     except KeyboardInterrupt:

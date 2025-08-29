@@ -12,6 +12,7 @@ import keyboard
 from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
 from configuration import stream_quotes
 from ..subscription_manager import get_subscription_manager
+from ..quote_provider import get_provider
 
 class CheckSyntheticCoveredCallsWidget(Static):
     """A widget to display synthetic covered calls."""
@@ -67,6 +68,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
         self._ba_maps = []
         if stream_quotes:
             try:
+                self._quote_provider = get_provider(self.app.api.connectClient)
                 self.set_interval(1, self.refresh_streaming_quotes)
             except Exception as e:
                 self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
@@ -76,6 +78,13 @@ class CheckSyntheticCoveredCallsWidget(Static):
         self.set_interval(15, self.run_get_synthetic_covered_calls_data)
         # Add periodic market status check every 30 seconds
         self.set_interval(30, self.check_market_status)
+
+    def on_unmount(self) -> None:
+        try:
+            mgr = get_subscription_manager(self.app.api.connectClient)
+            mgr.unregister("synthetic_covered_calls")
+        except Exception:
+            pass
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
