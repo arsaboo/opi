@@ -16,11 +16,11 @@ from schwab.utils import Utils
 from tzlocal import get_localzone
 
 import alert
-from cc import round_to_nearest_five_cents
+from core.common import round_to_nearest_five_cents
 from configuration import SchwabAccountID, debugCanSendOrders
 from logger_config import get_logger
-from strategies import monitor_order  # Import monitor_order from strategies
-from support import extract_date, extract_strike_price, validDateFormat
+from api.orders import monitor_order
+from core.common import extract_date, extract_strike_price, validDateFormat
 
 logger = get_logger()
 
@@ -33,8 +33,9 @@ class Api:
 
     def __init__(self, apiKey, apiRedirectUri, appSecret):
         self.tokenPath = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "token.json"
+            os.path.dirname(os.path.realpath(__file__)), "..", "token.json"
         )
+        self.tokenPath = os.path.normpath(self.tokenPath)
         self.apiKey = apiKey
         self.apiRedirectUri = apiRedirectUri
         self.appSecret = appSecret

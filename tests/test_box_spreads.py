@@ -32,7 +32,7 @@ if "tzlocal" not in sys.modules:
     m.get_localzone = get_localzone
     sys.modules["tzlocal"] = m
 
-from strategies import calculate_box_spread
+from core.box_spreads import calculate_box_spread
 
 
 def make_chain(date_str: str, strikes, bids_asks, prefix: str):

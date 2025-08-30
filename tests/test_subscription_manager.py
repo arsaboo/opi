@@ -1,18 +1,6 @@
 import asyncio
 import unittest
-import sys
-import types
-
-
-def import_manager_with_mocks():
-    # Provide a fake quote_provider module to avoid starting real streaming
-    fake_mod = types.ModuleType("ui.quote_provider")
-    def get_provider(_):
-        return FakeProvider()
-    fake_mod.get_provider = get_provider  # type: ignore[attr-defined]
-    sys.modules["ui.quote_provider"] = fake_mod
-    from ui.subscription_manager import SubscriptionManager  # type: ignore
-    return SubscriptionManager
+from api.streaming.subscription_manager import SubscriptionManager
 
 
 class FakeProvider:
@@ -58,11 +46,8 @@ async def wait_until(cond, timeout=1.0):
 class TestSubscriptionManager(unittest.TestCase):
     def test_reconcile(self):
         async def run():
-            SubscriptionManager = import_manager_with_mocks()
-            mgr = SubscriptionManager(connect_client=None)
             fake = FakeProvider()
-            # Inject fake provider to avoid real streaming
-            mgr._provider = fake  # type: ignore[attr-defined]
+            mgr = SubscriptionManager(connect_client=None, provider=fake)
 
             # Register first screen
             mgr.register("A", options=["OPT1", "OPT2"], equities=["SPY"]) 

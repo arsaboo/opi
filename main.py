@@ -11,7 +11,7 @@ import argparse
 from api import Api
 from configuration import apiKey, apiRedirectUri, appSecret
 from ui.main import OpiApp
-from ui.quote_provider import get_provider
+from api.streaming.provider import get_provider
 from state_manager import save_symbols
 from configuration import SchwabAccountID
 import atexit
@@ -104,3 +104,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

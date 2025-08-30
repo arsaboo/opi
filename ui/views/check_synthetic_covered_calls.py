@@ -1,20 +1,20 @@
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable
+from .base_spread_view import BaseSpreadView
 from textual import work
-from textual.screen import Screen
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 from .. import logic
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
+from ..utils import style_cell as cell, style_ba
 import asyncio
 import keyboard
-from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
+from api.orders import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
 from configuration import stream_quotes
-from ..subscription_manager import get_subscription_manager
-from ..quote_provider import get_provider
+from api.streaming.subscription_manager import get_subscription_manager
+from api.streaming.provider import get_provider
 
-class CheckSyntheticCoveredCallsWidget(Static):
+class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
     """A widget to display synthetic covered calls."""
 
     def __init__(self):
@@ -86,24 +86,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
         except Exception:
             pass
 
-    def check_market_status(self) -> None:
-        """Check and display market status information."""
-        try:
-            exec_window = self.app.api.getOptionExecutionWindow()
-            current_status = "open" if exec_window["open"] else "closed"
-            # Only log if status changed
-            if self._previous_market_status != current_status:
-                if current_status == "open":
-                    self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
-                else:
-                    from configuration import debugMarketOpen
-                    if not debugMarketOpen:
-                        self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
-                    else:
-                        self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
-                self._previous_market_status = current_status
-        except Exception as e:
-            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+    # check_market_status inherited from BaseSpreadView
 
     @work
     async def run_get_synthetic_covered_calls_data(self) -> None:
@@ -251,44 +234,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
 
                 # Handle B|A prices with separate coloring for bid and ask
                 def style_ba_price(bid_col, ask_col):
-                    bid_val = row[bid_col]
-                    ask_val = row[ask_col]
-                    prev_bid_val = prev_row.get(bid_col)
-                    prev_ask_val = prev_row.get(ask_col)
-
-                    # Style for bid (green for increase, red for decrease)
-                    bid_style = ""
-                    if prev_bid_val is not None:
-                        try:
-                            prev_bid_float = float(prev_bid_val)
-                            bid_float = float(bid_val)
-                            if bid_float > prev_bid_float:
-                                bid_style = "green"
-                            elif bid_float < prev_bid_float:
-                                bid_style = "red"
-                        except ValueError:
-                            pass
-
-                    # Style for ask (green for decrease, red for increase - since lower ask is better)
-                    ask_style = ""
-                    if prev_ask_val is not None:
-                        try:
-                            prev_ask_float = float(prev_ask_val)
-                            ask_float = float(ask_val)
-                            if ask_float < prev_ask_float:
-                                ask_style = "green"
-                            elif ask_float > prev_ask_float:
-                                ask_style = "red"
-                        except ValueError:
-                            pass
-
-                    # Create a Text object with separately styled bid and ask
-                    ba_text = Text()
-                    ba_text.append(f"{bid_val:.2f}", style=bid_style)
-                    ba_text.append("|", style="")  # No style for the separator
-                    ba_text.append(f"{ask_val:.2f}", style=ask_style)
-
-                    return ba_text
+                    return style_ba(row[bid_col], row[ask_col], prev_row.get(bid_col), prev_row.get(ask_col))
 
                 call_low_ba = style_ba_price('bid1', 'ask1')
                 call_high_ba = style_ba_price('bid2', 'ask2')
@@ -297,18 +243,18 @@ class CheckSyntheticCoveredCallsWidget(Static):
                 cells = [
                     Text(str(row["asset"]), style="", justify="left"),
                     Text(str(row["expiration"]), style="", justify="left"),
-                    style_cell("strike_low"),
+                    cell("strike_low", row.get("strike_low"), prev_row.get("strike_low")),
                     call_low_ba,  # Styled B|A
                     put_low_ba,   # Styled B|A
-                    style_cell("strike_high"),
+                    cell("strike_high", row.get("strike_high"), prev_row.get("strike_high")),
                     call_high_ba,  # Styled B|A
-                    style_cell("investment"),
-                    style_cell("price"),
-                    style_cell("max_profit"),
-                    style_cell("cagr"),
-                    style_cell("protection"),
-                    style_cell("margin_req"),
-                    style_cell("ann_rom"),
+                    cell("investment", row.get("investment"), prev_row.get("investment")),
+                    cell("price", row.get("price"), prev_row.get("price")),
+                    cell("max_profit", row.get("max_profit"), prev_row.get("max_profit")),
+                    cell("cagr", row.get("cagr"), prev_row.get("cagr")),
+                    cell("protection", row.get("protection"), prev_row.get("protection")),
+                    cell("margin_req", row.get("margin_req"), prev_row.get("margin_req")),
+                    cell("ann_rom", row.get("ann_rom"), prev_row.get("ann_rom")),
                     Text(refreshed_time, style="", justify="left")
                 ]
                 # Add row with styled cells
@@ -331,7 +277,16 @@ class CheckSyntheticCoveredCallsWidget(Static):
                     pass
             self._prev_rows = data
         else:
+            from configuration import spreads as CFG_SPREADS
+            try:
+                assets = ", ".join(CFG_SPREADS.keys())
+            except Exception:
+                assets = "configured assets"
             table.add_row("No synthetic covered calls found.", "", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
+            try:
+                self.app.query_one(StatusLog).add_message(f"No synthetic covered calls found for {assets}. Consider lowering downsideProtection or spread width in configuration.")
+            except Exception:
+                pass
         # Subscribe symbols via manager
         if stream_quotes and self._ba_maps:
             try:
@@ -413,7 +368,7 @@ class CheckSyntheticCoveredCallsWidget(Static):
 
                 # Place the order using the api method
                 from strategies import monitor_order
-                from order_utils import handle_cancel, reset_cancel_flag
+                from api.orders import handle_cancel, reset_cancel_flag
                 import keyboard
 
                 try:
@@ -439,14 +394,15 @@ class CheckSyntheticCoveredCallsWidget(Static):
                                 self.app.query_one(StatusLog).add_message(f"Trying new price: ${current_price} (improvement #{i})")
 
                             # Place order
-                            order_id = await asyncio.to_thread(
-                                self.app.api.synthetic_covered_call_order,
+                            from .. import logic as ui_logic
+                            order_id = await ui_logic.vertical_call_order(
+                                self.app.api,
                                 asset,
                                 expiration,
                                 strike_low,
                                 strike_high,
-                                1,  # quantity
-                                price=current_price
+                                1,
+                                price=current_price,
                             )
 
                             # Check if order was placed (None when debugCanSendOrders is False)
@@ -496,7 +452,8 @@ class CheckSyntheticCoveredCallsWidget(Static):
                         self.app.query_one(StatusLog).add_message("Synthetic covered call order cancelled by user.")
                         if order_id:
                             try:
-                                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+                                from .. import logic as ui_logic
+                                await ui_logic.cancel_order(self.app.api, order_id)
                                 self.app.query_one(StatusLog).add_message("Order cancelled successfully.")
                             except Exception as e:
                                 self.app.query_one(StatusLog).add_message(f"Error cancelling order: {e}")
@@ -526,7 +483,8 @@ class CheckSyntheticCoveredCallsWidget(Static):
 
             if cancel_order:
                 try:
-                    await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+                    from .. import logic as ui_logic
+                    await ui_logic.cancel_order(self.app.api, order_id)
                     self.app.query_one(StatusLog).add_message("Order cancelled by user.")
                     return "cancelled"
                 except Exception as e:
@@ -535,7 +493,8 @@ class CheckSyntheticCoveredCallsWidget(Static):
 
             try:
                 if current_time - last_status_check >= 1:  # Check every second
-                    order_status = await asyncio.to_thread(self.app.api.checkOrder, order_id)
+                    from .. import logic as ui_logic
+                    order_status = await ui_logic.check_order(self.app.api, order_id)
                     last_status_check = current_time
 
                     if current_time - last_print_time >= print_interval:

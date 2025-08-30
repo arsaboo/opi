@@ -4,7 +4,7 @@ from textual.timer import Timer
 from rich.text import Text
 from typing import Dict, Optional
 
-from ..quote_provider import get_provider, ensure_provider
+from api.streaming.provider import get_provider, ensure_provider
 from configuration import stream_quotes
 
 
@@ -168,3 +168,5 @@ class AppHeader(Static):
         out.append(pad_str)
         out.append(title)
         self.update(out)
+
+

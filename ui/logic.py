@@ -1,16 +1,51 @@
 import asyncio
 import json
-import math
 from datetime import datetime, timedelta
 from configuration import configuration, spreads
-from cc import find_best_rollover, get_median_price
-from optionChain import OptionChain
-from strategies import calculate_box_spread_wrapper, calculate_spread
-from margin_utils import calculate_margin_requirement, calculate_annualized_return_on_margin
+from core.covered_calls import find_best_rollover
+from core.common import get_median_price, classify_status
+from api.option_chain import OptionChain
+from core.box_spreads import calculate_box_spread as core_calc_box
+from core.vertical_spreads import bull_call_spread as core_bull_call
+from core.synthetic_covered_calls import synthetic_covered_call_spread as core_synth_cc
+from core.margin import calculate_margin_requirement, calculate_annualized_return_on_margin
 
 
-# Note: We're using the existing functions from cc.py and strategies.py for order placement
-# rather than implementing new ones here.
+# Helpers for using core calculators from UI
+def calculate_box_spread_wrapper(spread, calls, puts):
+    buy_result = core_calc_box(spread, json.dumps(calls), json.dumps(puts), trade="buy")
+    sell_result = core_calc_box(spread, json.dumps(calls), json.dumps(puts), trade="sell")
+    return [
+        (buy_result, spread, "Buy"),
+        (sell_result, spread, "Sell"),
+    ]
+
+# Async wrappers for long-running API calls used by widgets
+async def roll_over(api, old_symbol: str, new_symbol: str, amount: int, price: float):
+    return await asyncio.to_thread(api.rollOver, old_symbol, new_symbol, amount, price)
+
+async def cancel_order(api, order_id):
+    return await asyncio.to_thread(api.cancelOrder, order_id)
+
+async def check_order(api, order_id):
+    return await asyncio.to_thread(api.checkOrder, order_id)
+
+async def vertical_call_order(api, asset, expiration, strike_low, strike_high, quantity, price: float):
+    return await asyncio.to_thread(
+        api.vertical_call_order,
+        asset,
+        expiration,
+        strike_low,
+        strike_high,
+        quantity,
+        price=price,
+    )
+
+def _compute_spread(api, asset, spread, days, downsideProtection, price_method, synthetic):
+    if synthetic:
+        return asset, core_synth_cc(api, asset, spread, days, downsideProtection, price_method)
+    else:
+        return asset, core_bull_call(api, asset, spread, days, downsideProtection, price_method)
 
 async def get_expiring_shorts_data(api):
     """
@@ -51,25 +86,22 @@ async def process_short_position(api, short):
 
         # Get underlying price
         underlying_price = await asyncio.to_thread(api.getATMPrice, stock_symbol)
-        # Determine status (percent-aware thresholds)
-        from support import threshold_points
-        value = round(current_strike - underlying_price, 2)
+        # Determine status (centralized)
         ITMLimit = configuration.get(stock_symbol, {}).get("ITMLimit", 25)
         deepITMLimit = configuration.get(stock_symbol, {}).get("deepITMLimit", 50)
         deepOTMLimit = configuration.get(stock_symbol, {}).get("deepOTMLimit", 10)
-        if value > 0:
-            status = "OTM"
-        elif value < 0:
-            deep_itm_pts = threshold_points(deepITMLimit, underlying_price)
-            itm_pts = threshold_points(ITMLimit, underlying_price)
-            if abs(value) > deep_itm_pts:
-                status = "Deep ITM"
-            elif abs(value) > itm_pts:
-                status = "ITM"
-            else:
-                status = "Just ITM"
-        else:
-            status = "ATM"
+        status_map = {
+            "deep_OTM": "OTM",
+            "OTM": "OTM",
+            "just_ITM": "Just ITM",
+            "ITM": "ITM",
+            "deep_ITM": "Deep ITM",
+        }
+        status_key = classify_status(current_strike, underlying_price,
+                                     itm_limit=ITMLimit,
+                                     deep_itm_limit=deepITMLimit,
+                                     deep_otm_limit=deepOTMLimit)
+        status = status_map.get(status_key, "ATM")
 
         new_strike = "N/A"
         new_expiration = "N/A"
@@ -323,16 +355,16 @@ async def get_vertical_spreads_data(api, synthetic=False):
         spread_results = []
         tasks = []
         for asset in spreads:
-            spread = spreads[asset]["spread"]
+            spread_w = spreads[asset]["spread"]
             days = spreads[asset]["days"]
             downsideProtection = spreads[asset]["downsideProtection"]
             price_method = spreads[asset].get("price", "mid")
             tasks.append(
                 asyncio.to_thread(
-                    calculate_spread,
+                    _compute_spread,
                     api,
                     asset,
-                    spread,
+                    spread_w,
                     days,
                     downsideProtection,
                     price_method,
@@ -342,11 +374,8 @@ async def get_vertical_spreads_data(api, synthetic=False):
 
         results = await asyncio.gather(*tasks)
 
-        print(f"Vertical spreads results: {results}")  # Debug print
-
         for asset, best_spread in results:
             if best_spread:
-                print(f"Best spread for {asset}: {best_spread}")  # Debug print
                 row = {
                     "asset": asset,
                     "expiration": best_spread["date"],
@@ -374,7 +403,6 @@ async def get_vertical_spreads_data(api, synthetic=False):
                 spread_results.append(row)
 
         spread_results.sort(key=lambda x: x["ann_rom"], reverse=True)
-        print(f"Final spread results: {spread_results}")  # Debug print
         return spread_results
 
     except Exception as e:

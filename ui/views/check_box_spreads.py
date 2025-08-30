@@ -1,18 +1,18 @@
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable
+from .base_spread_view import BaseSpreadView
 from textual import work
-from textual.screen import Screen
+ 
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 from .. import logic
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
-import asyncio
+from ..utils import style_cell as cell, style_ba, style_flags
 from configuration import stream_quotes
-from ..subscription_manager import get_subscription_manager
-from ..quote_provider import get_provider
+from api.streaming.subscription_manager import get_subscription_manager
+from api.streaming.provider import get_provider
 
-class CheckBoxSpreadsWidget(Static):
+class CheckBoxSpreadsWidget(BaseSpreadView):
     """A widget to display box spreads."""
 
     def __init__(self):
@@ -82,24 +82,7 @@ class CheckBoxSpreadsWidget(Static):
         except Exception:
             pass
 
-    def check_market_status(self) -> None:
-        """Check and display market status information."""
-        try:
-            exec_window = self.app.api.getOptionExecutionWindow()
-            current_status = "open" if exec_window["open"] else "closed"
-            # Only log if status changed
-            if self._previous_market_status != current_status:
-                if current_status == "open":
-                    self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
-                else:
-                    from configuration import debugMarketOpen
-                    if not debugMarketOpen:
-                        self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
-                    else:
-                        self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
-                self._previous_market_status = current_status
-        except Exception as e:
-            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+    # check_market_status inherited from BaseSpreadView
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
@@ -344,39 +327,7 @@ class CheckBoxSpreadsWidget(Static):
 
                 # Handle B|A prices with separate coloring for bid and ask
                 def style_ba_price(bid_val, ask_val, prev_bid_val=None, prev_ask_val=None):
-                    # Style for bid (green for increase, red for decrease)
-                    bid_style = ""
-                    if prev_bid_val is not None:
-                        try:
-                            prev_bid_float = float(prev_bid_val)
-                            bid_float = float(bid_val)
-                            if bid_float > prev_bid_float:
-                                bid_style = "green"
-                            elif bid_float < prev_bid_float:
-                                bid_style = "red"
-                        except ValueError:
-                            pass
-
-                    # Style for ask (green for decrease, red for increase - since lower ask is better)
-                    ask_style = ""
-                    if prev_ask_val is not None:
-                        try:
-                            prev_ask_float = float(prev_ask_val)
-                            ask_float = float(ask_val)
-                            if ask_float < prev_ask_float:
-                                ask_style = "green"
-                            elif ask_float > prev_ask_float:
-                                ask_style = "red"
-                        except ValueError:
-                            pass
-
-                    # Create a Text object with separately styled bid and ask
-                    ba_text = Text()
-                    ba_text.append(f"{bid_val:.2f}", style=bid_style)
-                    ba_text.append("|", style="")  # No style for the separator
-                    ba_text.append(f"{ask_val:.2f}", style=ask_style)
-
-                    return ba_text
+                    return style_ba(bid_val, ask_val, prev_bid_val, prev_ask_val)
 
                 # Extract bid/ask values for styling
                 low_call_ba = row["low_call_ba"]
@@ -439,34 +390,28 @@ class CheckBoxSpreadsWidget(Static):
                     )
 
                 # Style the flags column
-                flags = row.get("flags", "")
-                flags_style = "bold red" if flags else ""
-                flags_text = Text(flags, style=flags_style, justify="left")
+                flags_text = style_flags(row.get("flags", ""))
 
-                # Format face value
-                try:
-                    face_value = float(row.get("face_value", 0))
-                    face_value_text = Text(f"${face_value:,.2f}", style="", justify="right")
-                except:
-                    face_value_text = Text("", style="", justify="right")
+                # Format face value via shared helper
+                face_value_text = cell("face_value", row.get("face_value"), prev_row.get("face_value"))
 
                 cells = [
                     Text(str(row["direction"]), style="", justify="left"),
                     Text(str(row["date"]), style="", justify="left"),
-                    style_cell("days_to_expiry"),
-                    style_cell("low_strike"),
-                    style_cell("high_strike"),
+                    cell("days_to_expiry", row.get("days_to_expiry"), prev_row.get("days_to_expiry")),
+                    cell("low_strike", row.get("low_strike"), prev_row.get("low_strike")),
+                    cell("high_strike", row.get("high_strike"), prev_row.get("high_strike")),
                     low_call_ba_text,  # Styled B|A
                     high_call_ba_text,  # Styled B|A
                     low_put_ba_text,  # Styled B|A
                     high_put_ba_text,  # Styled B|A
-                    style_cell("mid_net_price"),
-                    style_cell("nat_net_price"),
-                    style_cell("mid_upfront_amount") if row["direction"] == "Buy" else Text("", justify="right"),
-                    style_cell("mid_upfront_amount") if row["direction"] == "Sell" else Text("", justify="right"),
+                    cell("mid_net_price", row.get("mid_net_price"), prev_row.get("mid_net_price")),
+                    cell("nat_net_price", row.get("nat_net_price"), prev_row.get("nat_net_price")),
+                    cell("mid_upfront_amount", row.get("mid_upfront_amount"), prev_row.get("mid_upfront_amount")) if row["direction"] == "Buy" else Text("", justify="right"),
+                    cell("mid_upfront_amount", row.get("mid_upfront_amount"), prev_row.get("mid_upfront_amount")) if row["direction"] == "Sell" else Text("", justify="right"),
                     face_value_text,
-                    style_cell("mid_annualized_return"),
-                    style_cell("nat_annualized_return"),
+                    cell("mid_annualized_return", row.get("mid_annualized_return"), prev_row.get("mid_annualized_return")),
+                    cell("nat_annualized_return", row.get("nat_annualized_return"), prev_row.get("nat_annualized_return")),
                     flags_text,
                     Text(refreshed_time, style="", justify="left")
                 ]
@@ -483,13 +428,13 @@ class CheckBoxSpreadsWidget(Static):
                     col_lp = self._col_keys[7] if len(self._col_keys) > 7 else 7
                     col_hp = self._col_keys[8] if len(self._col_keys) > 8 else 8
                     if lcs:
-                        self._ba_maps.append({"row_key": row_key, "col_key": col_lc, "symbol": lcs, "last_bid": None, "last_ask": None})
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_lc, "symbol": lcs, "last_bid": locals().get("low_call_bid"), "last_ask": locals().get("low_call_ask")})
                     if hcs:
-                        self._ba_maps.append({"row_key": row_key, "col_key": col_hc, "symbol": hcs, "last_bid": None, "last_ask": None})
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_hc, "symbol": hcs, "last_bid": locals().get("high_call_bid"), "last_ask": locals().get("high_call_ask")})
                     if lps:
-                        self._ba_maps.append({"row_key": row_key, "col_key": col_lp, "symbol": lps, "last_bid": None, "last_ask": None})
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_lp, "symbol": lps, "last_bid": locals().get("low_put_bid"), "last_ask": locals().get("low_put_ask")})
                     if hps:
-                        self._ba_maps.append({"row_key": row_key, "col_key": col_hp, "symbol": hps, "last_bid": None, "last_ask": None})
+                        self._ba_maps.append({"row_key": row_key, "col_key": col_hp, "symbol": hps, "last_bid": locals().get("high_put_bid"), "last_ask": locals().get("high_put_ask")})
                 except Exception:
                     pass
             self._prev_rows = data
@@ -555,3 +500,7 @@ class CheckBoxSpreadsWidget(Static):
                 table.update_cell(m["row_key"], m["col_key"], ba_text)
         except Exception:
             pass
+
+
+
+

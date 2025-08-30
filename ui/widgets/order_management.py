@@ -5,17 +5,19 @@ from datetime import datetime
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
+from ..utils import style_cell as cell
 import asyncio
 from textual.screen import ModalScreen
 from textual.widgets import Static, Input
 from rich.panel import Panel
 from rich.text import Text
+from ..utils import style_cell as cell
 from rich.table import Table
 from rich.align import Align
 import schwab
 from schwab.utils import Utils
 from configuration import debugCanSendOrders, stream_quotes
-from ..quote_provider import StreamingQuoteProvider
+from api.streaming.provider import StreamingQuoteProvider
 
 
 class OrderCancellationScreen(ModalScreen):
@@ -501,8 +503,8 @@ class OrderManagementWidget(Static):
                     Text(str(formatted["entered_time"])),
                     Text(str(formatted["asset"])),
                     Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
-                    Text(str(formatted["quantity"]), justify="right"),
-                    Text(price, justify="right"),
+                    cell("quantity", formatted.get("quantity"), None),
+                    cell("price", price, None),
                     Text(mid_str, style=mid_style, justify="right"),
                     Text(nat_str, style=nat_style, justify="right"),
                 )
@@ -545,8 +547,8 @@ class OrderManagementWidget(Static):
                     Text(str(formatted["entered_time"])),
                     Text(str(formatted["asset"])),
                     Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
-                    Text(str(formatted["quantity"]), justify="right"),
-                    Text(price, justify="right"),
+                    cell("quantity", formatted.get("quantity"), None),
+                    cell("price", price, None),
                     Text("", justify="right"),
                     Text("", justify="right"),
                 )
@@ -568,8 +570,8 @@ class OrderManagementWidget(Static):
                     Text(str(formatted["entered_time"])),
                     Text(str(formatted["asset"])),
                     Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
-                    Text(str(formatted["quantity"]), justify="right"),
-                    Text(price, justify="right"),
+                    cell("quantity", formatted.get("quantity"), None),
+                    cell("price", price, None),
                     Text("", justify="right"),
                     Text("", justify="right"),
                 )
@@ -632,8 +634,8 @@ class OrderManagementWidget(Static):
                 table.update_cell(row_key, ck[2], Text(str(formatted["entered_time"])))
                 table.update_cell(row_key, ck[3], Text(str(formatted["asset"])))
                 table.update_cell(row_key, ck[4], Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")))
-                table.update_cell(row_key, ck[5], Text(str(formatted["quantity"]), justify="right"))
-                table.update_cell(row_key, ck[6], Text(price, justify="right"))
+                table.update_cell(row_key, ck[5], cell("quantity", formatted.get("quantity"), None))
+                table.update_cell(row_key, ck[6], cell("price", price, None))
                 table.update_cell(row_key, ck[7], Text(mid_str, style=mid_style, justify="right"))
                 table.update_cell(row_key, ck[8], Text(nat_str, style=nat_style, justify="right"))
                 if mid_val is not None and nat_val is not None and oid is not None:
@@ -796,6 +798,8 @@ class OrderManagementWidget(Static):
         main_container = self.app.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
+
+
 
 
 
