@@ -134,11 +134,19 @@ def getNewCcExpirationDate() -> _dt.date:
 
 
 def calculate_cagr(total_investment: float, returns: float, days: int) -> tuple:
+    """Compute annualized return (CAGR-style) from a single-period payoff.
+
+    We treat `returns` as the profit earned on `total_investment` over `days`.
+    The correct annualization uses (1 + profit/investment) ** (365 / days) - 1.
+    Previously we raised (profit/investment) to the power, which yields
+    negative values whenever profit/investment < 1.
+    """
     try:
         if total_investment <= 0 or returns <= 0 or days <= 0:
             return 0, 0
-        ratio = min(returns / total_investment, 1e6)
-        cagr = (ratio ** (365 / max(days, 1))) - 1
+        roi = max(returns / total_investment, 0.0)
+        growth = 1.0 + min(roi, 1e6)
+        cagr = (growth ** (365 / max(days, 1))) - 1.0
         if isinstance(cagr, complex) or cagr > 1e6:
             return 0, 0
         cagr_percentage = round(cagr * 100, 2)

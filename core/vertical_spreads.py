@@ -50,9 +50,14 @@ def bull_call_spread(api, asset, spread=100, days=90, downsideProtection=0.25, p
                 downside_protection = 1 - (break_even / underlying_price)
                 days_to_exp = days_to_expiry(entry["date"])
                 if days_to_exp > 1 and net_debit > 0 and net_debit < spread and downside_protection > downsideProtection:
-                    total_investment = net_debit
-                    returns = abs(contracts[j]["strike"] - contracts[i]["strike"])
-                    cagr, cagr_percentage = calculate_cagr(total_investment, returns, days_to_exp)
+                    # Use per-contract dollars for both investment and max profit to be consistent
+                    width = abs(contracts[j]["strike"] - contracts[i]["strike"])  # points
+                    invest_total = float(net_debit) * 100.0
+                    profit_total = (width - float(net_debit)) * 100.0
+                    if profit_total > 0 and invest_total > 0:
+                        cagr, cagr_percentage = calculate_cagr(invest_total, profit_total, days_to_exp)
+                    else:
+                        cagr, cagr_percentage = 0, 0
 
                     margin_req = calculate_margin_requirement(
                         asset,
@@ -85,8 +90,8 @@ def bull_call_spread(api, asset, spread=100, days=90, downsideProtection=0.25, p
                         "cagr": round(cagr, 2),
                         "cagr_percentage": round(cagr_percentage, 2),
                         "downside_protection": round(downside_protection * 100, 2),
-                        "total_investment": round(net_debit * 100, 2),
-                        "total_return": round((spread - net_debit) * 100, 2),
+                        "total_investment": round(invest_total, 2),
+                        "total_return": round(profit_total, 2),
                         "margin_requirement": round(margin_req, 2),
                         "return_on_margin": round(rom, 2),
                     }

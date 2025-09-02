@@ -7,6 +7,7 @@ from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 from ..utils import style_cell as cell, style_ba
+from core.spreads_common import days_to_expiry
 import asyncio
 import keyboard
 from api.orders import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
@@ -96,6 +97,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
         table.clear()
         self._ba_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
+        # Status logs removed after debugging; rely on core.common CAGR
 
         def get_cell_style(col, val, prev_val=None):
             if col in ["cagr", "ann_rom"]:
@@ -213,8 +215,16 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                     # Format percentage values
                     if col_name in ["cagr", "protection", "ann_rom"]:
                         try:
-                            # Convert to float, multiply by 100, and format with 2 decimal places and % sign
-                            float_val = float(val.replace('%', ''))
+                            # Recompute CAGR directly from the row to avoid upstream drift
+                            if col_name == "cagr":
+                                inv = float(row.get("investment", 0) or 0)
+                                prof = float(row.get("max_profit", 0) or 0)
+                                exp = str(row.get("expiration", ""))
+                                dte = max(days_to_expiry(exp), 1)
+                                roi = prof / max(inv, 1e-9)
+                                float_val = (1.0 + roi) ** (365.0 / dte) - 1.0
+                            else:
+                                float_val = float(val.replace('%', ''))
                             val = f"{float_val * 100:.2f}%"
                             # Update style after formatting
                             # Convert prev_val to the same format for comparison

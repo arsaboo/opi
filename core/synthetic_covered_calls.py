@@ -71,10 +71,16 @@ def synthetic_covered_call_spread(api, asset, spread=100, days=90, downsideProte
                 break_even = contracts[i]["strike"] + net_debit
                 downside_protection = 1 - (break_even / underlying_price)
                 days_to_exp = days_to_expiry(entry["date"])
-                if days_to_exp > 1 and 0 < net_debit < spread and downside_protection > downsideProtection:
-                    total_investment = net_debit
-                    returns = abs(contracts[j]["strike"] - contracts[i]["strike"])
-                    cagr, cagr_percentage = calculate_cagr(total_investment, returns, days_to_exp)
+                if days_to_exp > 1 and 0 < net_debit < abs(contracts[j]["strike"] - contracts[i]["strike"]) and downside_protection > downsideProtection:
+                    # Use per-contract figures for clarity and consistency with display columns
+                    width = abs(contracts[j]["strike"] - contracts[i]["strike"])  # points
+                    invest_total = float(net_debit) * 100.0                     # $ per contract
+                    profit_total = (width - float(net_debit)) * 100.0            # $ per contract
+                    if profit_total <= 0 or invest_total <= 0:
+                        cagr, cagr_percentage = 0, 0
+                    else:
+                        # Use core.common.calculate_cagr for annualization
+                        cagr, cagr_percentage = calculate_cagr(invest_total, profit_total, days_to_exp)
 
                     margin_req = calculate_margin_requirement(
                         asset,
@@ -112,8 +118,8 @@ def synthetic_covered_call_spread(api, asset, spread=100, days=90, downsideProte
                         "cagr": round(cagr, 2),
                         "cagr_percentage": round(cagr_percentage, 2),
                         "downside_protection": round(downside_protection * 100, 2),
-                        "total_investment": round(net_debit * 100, 2),
-                        "total_return": round((spread - net_debit) * 100, 2),
+                        "total_investment": round(invest_total, 2),
+                        "total_return": round(profit_total, 2),
                         "margin_requirement": round(margin_req, 2),
                         "return_on_margin": round(rom, 2),
                     }
