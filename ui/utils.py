@@ -174,14 +174,17 @@ def style_cell(field: str, value: Any, prev: Any | None = None) -> Text:
     if field in PERCENT_FIELDS:
         v = _to_float(value)
         pv = _to_float(prev)
-        # Heuristic: if looks like a fraction (< 1) but not obviously a percent string, convert to percent
+        # Heuristic: convert fractions to percent. Special-case CAGR which can legitimately exceed 1.0
+        # (e.g., 1.66 => 166%) when ROI is very large.
         display = text
         if v is not None:
             if "%" in str(value):
                 display = str(value)
             else:
-                # If value likely a fraction, scale by 100 for display
-                display = _fmt_percent(v * 100 if 0 <= v <= 1 else v)
+                if field == "cagr":
+                    display = _fmt_percent(v * 100)
+                else:
+                    display = _fmt_percent(v * 100 if 0 <= v <= 1 else v)
         if v is not None and pv is not None:
             if v > pv:
                 style = "bold green"
