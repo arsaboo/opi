@@ -10,11 +10,12 @@ class StreamingQuoteProvider:
         self.account_id: Optional[int] = None
         self.stream: Optional[StreamClient] = None
         self._quotes: Dict[str, Dict] = {}
-        self._last: Dict[str, Dict[str, float]] = {}
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._opt_subs: set[str] = set()
         self._eq_subs: set[str] = set()
+        # Persist last-good values per symbol so UI doesn't flap when a field is missing
+        self._last: Dict[str, Dict[str, float]] = {}
 
     async def start(self) -> None:
         if self._running:
@@ -102,22 +103,70 @@ class StreamingQuoteProvider:
             if not key:
                 continue
             last = self._last.setdefault(key, {})
-            raw_bid = c.get("BID_PRICE") or c.get("bidPrice") or c.get("BID") or c.get("bid")
-            raw_ask = c.get("ASK_PRICE") or c.get("askPrice") or c.get("ASK") or c.get("ask")
-            raw_last = c.get("LAST_PRICE") or c.get("lastPrice") or c.get("LAST") or c.get("last")
+            # Normalize and update last-good only if present and valid
+            rb = c.get("BID_PRICE") or c.get("bidPrice") or c.get("BID") or c.get("bid")
+            ra = c.get("ASK_PRICE") or c.get("askPrice") or c.get("ASK") or c.get("ask")
+            rl = c.get("LAST_PRICE") or c.get("lastPrice") or c.get("LAST") or c.get("last")
             try:
-                if raw_bid is not None:
-                    last["bid"] = float(raw_bid)
+                if rb is not None:
+                    fb = float(rb)
+                    if fb > 0:
+                        last["bid"] = fb
             except Exception:
                 pass
             try:
-                if raw_ask is not None:
-                    last["ask"] = float(raw_ask)
+                if ra is not None:
+                    fa = float(ra)
+                    if fa > 0:
+                        last["ask"] = fa
             except Exception:
                 pass
             try:
-                if raw_last is not None:
-                    last["last"] = float(raw_last)
+                if rl is not None:
+                    fl = float(rl)
+                    if fl > 0:
+                        last["last"] = fl
+            except Exception:
+                pass
+            # Publish a normalized snapshot using last-good values
+            snap = {"key": key}
+            if "bid" in last:
+                snap["BID_PRICE"] = last["bid"]
+            if "ask" in last:
+                snap["ASK_PRICE"] = last["ask"]
+            if "last" in last:
+                snap["LAST_PRICE"] = last["last"]
+            self._quotes[key] = snap
+
+    async def _on_level_one_equity(self, msg: Dict) -> None:
+        contents = msg.get("content") or []
+        for c in contents:
+            key = c.get("key") or c.get("symbol")
+            if not key:
+                continue
+            last = self._last.setdefault(key, {})
+            rb = c.get("BID_PRICE") or c.get("bidPrice") or c.get("BID") or c.get("bid")
+            ra = c.get("ASK_PRICE") or c.get("askPrice") or c.get("ASK") or c.get("ask")
+            rl = c.get("LAST_PRICE") or c.get("lastPrice") or c.get("LAST") or c.get("last")
+            try:
+                if rb is not None:
+                    fb = float(rb)
+                    if fb > 0:
+                        last["bid"] = fb
+            except Exception:
+                pass
+            try:
+                if ra is not None:
+                    fa = float(ra)
+                    if fa > 0:
+                        last["ask"] = fa
+            except Exception:
+                pass
+            try:
+                if rl is not None:
+                    fl = float(rl)
+                    if fl > 0:
+                        last["last"] = fl
             except Exception:
                 pass
             snap = {"key": key}
@@ -128,6 +177,38 @@ class StreamingQuoteProvider:
             if "last" in last:
                 snap["LAST_PRICE"] = last["last"]
             self._quotes[key] = snap
+
+    def is_subscribed(self, symbol: str) -> bool:
+        return symbol in self._opt_subs or symbol.upper() in self._eq_subs
+
+    def get_full_quote(self, symbol: str) -> Optional[Dict]:
+        return self._quotes.get(symbol)
+
+    def get_bid_ask(self, symbol: str) -> Tuple[Optional[float], Optional[float]]:
+        q = self.get_full_quote(symbol)
+        if not q:
+            return (None, None)
+        bid = q.get("BID_PRICE") or q.get("bidPrice") or q.get("BID") or q.get("bid")
+        ask = q.get("ASK_PRICE") or q.get("askPrice") or q.get("ASK") or q.get("ask")
+        try:
+            bid_f = float(bid) if bid is not None else None
+        except Exception:
+            bid_f = None
+        try:
+            ask_f = float(ask) if ask is not None else None
+        except Exception:
+            ask_f = None
+        return (bid_f, ask_f)
+
+    def get_last(self, symbol: str) -> Optional[float]:
+        q = self.get_full_quote(symbol)
+        if not q:
+            return None
+        last = q.get("LAST_PRICE") or q.get("lastPrice") or q.get("LAST") or q.get("last")
+        try:
+            return float(last) if last is not None else None
+        except Exception:
+            return None
 
     async def _on_level_one_equity(self, msg: Dict) -> None:
         contents = msg.get("content") or []
@@ -213,4 +294,3 @@ def get_provider(connect_client) -> StreamingQuoteProvider:
         asyncio.create_task(prov.start())
         _global_provider = prov
     return _global_provider
-

@@ -418,6 +418,7 @@ class OrderManagementWidget(Static):
                     return (None, None)
                 client = self.app.api.connectClient
                 cost_mid = proceeds_mid = cost_nat = proceeds_nat = 0.0
+                valid = True
                 for leg in legs:
                     instr = leg.get("instrument", {})
                     symbol = instr.get("symbol")
@@ -437,30 +438,45 @@ class OrderManagementWidget(Static):
                         qd = q.get(symbol, {}).get("quote", {})
                         bid = bid if bid is not None else qd.get("bidPrice")
                         ask = ask if ask is not None else qd.get("askPrice")
-                    bid = float(bid) if bid is not None else None
-                    ask = float(ask) if ask is not None else None
-                    if bid is not None and ask is not None:
-                        mid = (bid + ask) / 2
-                    elif bid is not None:
+                    try:
+                        bid = float(bid) if bid is not None else None
+                    except Exception:
+                        bid = None
+                    try:
+                        ask = float(ask) if ask is not None else None
+                    except Exception:
+                        ask = None
+                    mid = None
+                    if bid is not None and ask is not None and ask > 0 and bid > 0:
+                        mid = (bid + ask) / 2.0
+                    elif bid is not None and bid > 0:
                         mid = bid
-                    elif ask is not None:
+                    elif ask is not None and ask > 0:
                         mid = ask
-                    else:
-                        mid = 0.0
                     if instruction.startswith("BUY"):
-                        cost_mid += mid
-                        # Natural for BUY is ask if available else use mid (or bid)
-                        cost_nat += (ask if ask is not None else (mid if mid else 0.0))
+                        if mid is None:
+                            valid = False
+                        else:
+                            cost_mid += mid
+                        if ask is not None and ask > 0:
+                            cost_nat += ask
+                        else:
+                            valid = False
                     else:
-                        proceeds_mid += mid
-                        # Natural for SELL is bid if available else use mid (or ask)
-                        proceeds_nat += (bid if bid is not None else (mid if mid else 0.0))
+                        if mid is None:
+                            valid = False
+                        else:
+                            proceeds_mid += mid
+                        if bid is not None and bid > 0:
+                            proceeds_nat += bid
+                        else:
+                            valid = False
                 if order_type == "NET_DEBIT":
-                    net_mid = cost_mid - proceeds_mid
-                    net_nat = cost_nat - proceeds_nat
+                    net_mid = None if not valid else (cost_mid - proceeds_mid)
+                    net_nat = None if not valid else (cost_nat - proceeds_nat)
                 else:
-                    net_mid = proceeds_mid - cost_mid
-                    net_nat = proceeds_nat - cost_nat
+                    net_mid = None if not valid else (proceeds_mid - cost_mid)
+                    net_nat = None if not valid else (proceeds_nat - cost_nat)
                 return (net_mid, net_nat)
             except Exception:
                 return (None, None)
@@ -678,27 +694,43 @@ class OrderManagementWidget(Static):
             def mid_nat_from_cache(order) -> tuple[float | None, float | None]:
                 legs = order.get("orderLegCollection", [])
                 cost_mid = proceeds_mid = cost_nat = proceeds_nat = 0.0
+                valid = True
                 for leg in legs:
                     instr = leg.get("instrument", {})
                     symbol = instr.get("symbol")
                     if not symbol:
                         continue
                     bid, ask = self._quote_provider.get_bid_ask(symbol)
-                    # Build mid even if one side missing
-                    if bid is not None and ask is not None:
-                        mid = (bid + ask) / 2
-                    elif bid is not None:
-                        mid = bid
-                    elif ask is not None:
-                        mid = ask
-                    else:
-                        mid = 0.0
+                    # Compute mid only if we have at least one side; never use 0.0 as a placeholder
+                    mid = None
+                    if bid is not None and ask is not None and ask > 0 and bid > 0:
+                        mid = (bid + ask) / 2.0
+                    elif bid is not None and bid > 0:
+                        mid = float(bid)
+                    elif ask is not None and ask > 0:
+                        mid = float(ask)
+
                     if leg.get("instruction", "").upper().startswith("BUY"):
-                        cost_mid += mid
-                        cost_nat += (ask if ask is not None else (mid if mid else 0.0))
+                        if mid is None:
+                            valid = False
+                        else:
+                            cost_mid += mid
+                        if ask is not None and ask > 0:
+                            cost_nat += float(ask)
+                        else:
+                            valid = False
                     else:
-                        proceeds_mid += mid
-                        proceeds_nat += (bid if bid is not None else (mid if mid else 0.0))
+                        if mid is None:
+                            valid = False
+                        else:
+                            proceeds_mid += mid
+                        if bid is not None and bid > 0:
+                            proceeds_nat += float(bid)
+                        else:
+                            valid = False
+
+                if not valid:
+                    return (None, None)
                 if order.get("orderType") == "NET_DEBIT":
                     net_mid = cost_mid - proceeds_mid
                     net_nat = cost_nat - proceeds_nat
