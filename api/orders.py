@@ -1,6 +1,7 @@
 import time
 from datetime import datetime, time as time_module
 from tzlocal import get_localzone
+from status import notify, notify_exception
 
 # Global flag for order cancellation
 cancel_order = False
@@ -9,7 +10,7 @@ def handle_cancel(e):
     global cancel_order
     if e.name == 'c':
         cancel_order = True
-        print("\nCancelling order...")
+        notify("Cancelling order...")
 
 def reset_cancel_flag():
     """Reset the global cancel flag"""
@@ -22,8 +23,7 @@ def monitor_order(api, order_id, timeout=60):
 
     start_time = time.time()
     last_status_check = 0
-    last_print_time = 0
-    print_interval = 1
+    next_log_time = 0  # throttle UI log updates
 
     while time.time() - start_time < timeout:
         current_time = time.time()
@@ -32,10 +32,10 @@ def monitor_order(api, order_id, timeout=60):
         if cancel_order:
             try:
                 api.cancelOrder(order_id)
-                print("\nOrder cancelled by user.")
+                notify("Order cancelled by user.")
                 return "cancelled"
             except Exception as e:
-                print(f"\nError cancelling order: {e}")
+                notify_exception(e, prefix="Error cancelling order")
                 return False
 
         try:
@@ -43,35 +43,34 @@ def monitor_order(api, order_id, timeout=60):
                 order_status = api.checkOrder(order_id)
                 last_status_check = current_time
 
-                if current_time - last_print_time >= print_interval:
+                if current_time >= next_log_time:
                     remaining = int(timeout - elapsed_time)
-                    status_str = order_status['status']
+                    status_str = order_status.get('status', 'N/A')
                     rejection_reason = order_status.get('rejection_reason', '')
-
-                    print(f"\rStatus: {status_str} {rejection_reason} | "
-                          f"Time remaining: {remaining}s | "
-                          f"Price: {order_status.get('price', 'N/A')} | "
-                          f"Filled: {order_status.get('filledQuantity', '0')}  ", end="", flush=True)
-                    last_print_time = current_time
+                    price = order_status.get('price', 'N/A')
+                    filled = order_status.get('filledQuantity', '0')
+                    msg = f"Status: {status_str} {rejection_reason} | Remaining: {remaining}s | Price: {price} | Filled: {filled}"
+                    notify(msg)
+                    next_log_time = current_time + 5  # log every 5s
 
                 if order_status["filled"]:
-                    print(f"\nOrder filled successfully!")
+                    notify("Order filled successfully!")
                     return True
                 elif order_status["status"] == "REJECTED":
-                    print(f"\nOrder rejected: {order_status.get('rejection_reason', 'No reason provided')}")
+                    notify("Order rejected: " + order_status.get('rejection_reason', 'No reason provided'))
                     return "rejected"
                 elif order_status["status"] == "CANCELED":
-                    print("\nOrder cancelled.")
+                    notify("Order cancelled.")
                     return False
 
             time.sleep(0.1)  # Small sleep to prevent CPU thrashing
 
         except Exception as e:
-            print(f"\nError checking order status: {e}")
+            notify_exception(e, prefix="Error checking order status")
             return False
 
     # If we reach here, order timed out
-    print("\nOrder timed out, moving to price improvement...")
+    notify("Order timed out, moving to price improvement...")
     try:
         api.cancelOrder(order_id)
     except:

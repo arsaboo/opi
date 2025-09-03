@@ -19,6 +19,7 @@ from api.streaming.provider import ensure_provider, get_provider
 from state_manager import load_symbols, save_symbols
 from configuration import SchwabAccountID
 from .widgets.app_header import AppHeader
+from status import status_queue, publish, set_ui_active
 
 
 class OpiApp(App):
@@ -265,6 +266,11 @@ class OpiApp(App):
 
     def on_mount(self) -> None:
         """Called when the app is mounted."""
+        # Mark UI as active so downstream code routes messages to Status Log
+        try:
+            set_ui_active(True)
+        except Exception:
+            pass
         self.check_market_status()
         self.query_one(StatusLog).add_message(
             "Welcome to the Options Trading Bot! Press a key to select an option."
@@ -301,6 +307,31 @@ class OpiApp(App):
             asyncio.create_task(_warm_and_load())
         except Exception:
             pass
+
+        # Drain global status queue into the Status Log so non-UI code can report messages
+        try:
+            async def _drain_status_log():
+                while True:
+                    try:
+                        # Drain burst
+                        drained = 0
+                        while not status_queue.empty() and drained < 50:
+                            item = status_queue.get_nowait()
+                            msg = item.get("message", "")
+                            if msg:
+                                # Keep it simple; we could style per level later
+                                self.query_one(StatusLog).add_message(msg)
+                            drained += 1
+                    except Exception:
+                        # Never let logging break the UI loop
+                        pass
+                    await asyncio.sleep(0.25)
+
+            asyncio.create_task(_drain_status_log())
+        except Exception:
+            pass
+
+        # ML features removed
 
     def action_roll_short_options(self) -> None:
         """Action to roll short options."""
@@ -341,6 +372,14 @@ class OpiApp(App):
             save_symbols(acc, symbols)
         except Exception:
             # Best-effort persistence; ignore errors on shutdown
+            pass
+        # Try to stop streaming provider gracefully
+        try:
+            prov = get_provider(self.api.connectClient)
+            if prov is not None:
+                import asyncio as _asyncio
+                _asyncio.create_task(prov.stop())
+        except Exception:
             pass
 
     def action_check_synthetic_covered_calls(self) -> None:

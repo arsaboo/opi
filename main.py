@@ -16,6 +16,10 @@ from state_manager import save_symbols
 from configuration import SchwabAccountID
 import atexit
 import alert
+import asyncio
+import os
+
+from api.streaming.provider import get_provider
 
 
 def setup_api_with_retry(api, max_attempts=3):
@@ -96,9 +100,23 @@ def main():
         app.run()
     except KeyboardInterrupt:
         print("\nExiting...")
-        sys.exit(0)
+        # Try to stop provider cleanly; don't let it hang exit
+        try:
+            prov = get_provider(api.connectClient)
+            if prov:
+                asyncio.run(prov.stop())
+        except Exception:
+            pass
+        # Force terminate to avoid occasional hang
+        os._exit(0)
     except Exception as e:
         print(f"Error running the application: {e}")
+        try:
+            prov = get_provider(api.connectClient)
+            if prov:
+                asyncio.run(prov.stop())
+        except Exception:
+            pass
         sys.exit(1)
 
 

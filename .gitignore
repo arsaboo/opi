@@ -8,3 +8,7 @@ state-*.json
 .aider*
 *.pickle
 *.env
+
+# ML data, labels, and analysis results
+ml_data/
+logs/

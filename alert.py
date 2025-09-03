@@ -21,7 +21,11 @@ class Mail:
 
         try:
             s.send_message(msg)
-            print('Sent alert "' + message + '" via email')
+            try:
+                from status import notify
+                notify('Sent alert "' + message + '" via email')
+            except Exception:
+                print('Sent alert "' + message + '" via email')
         finally:
             s.quit()
 
@@ -46,9 +50,17 @@ def alert(asset, message, isError=False):
             raise BotFailedError(message)
     else:
         if asset:
-            print("Asset: " + asset)
+            try:
+                from status import notify
+                notify("Asset: " + asset)
+            except Exception:
+                print("Asset: " + asset)
 
-        print(message)
+        try:
+            from status import notify
+            notify(message)
+        except Exception:
+            print(message)
 
         if isError:
             raise BotFailedError(message)

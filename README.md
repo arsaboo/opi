@@ -69,6 +69,8 @@ All logs and status messages are displayed within the Textual UI status log pane
 - Keyboard shortcuts for quick navigation
 - Color-coded data for better visualization
 - Automatic data refresh for live updates
+- Machine learning enhanced roll timing with technical indicators
+- Advanced counterfactual analysis for optimal roll strategies
 
 ## Configuration
 

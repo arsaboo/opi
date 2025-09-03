@@ -16,6 +16,7 @@ from schwab.utils import Utils
 from tzlocal import get_localzone
 
 import alert
+from status import notify, notify_exception, publish_exception
 from core.common import round_to_nearest_five_cents
 from configuration import SchwabAccountID, debugCanSendOrders
 from logger_config import get_logger
@@ -88,8 +89,8 @@ class Api:
         except requests.exceptions.HTTPError as http_err:
             if "AuthorizationCode has expired" in str(http_err):
                 logger.error("Authorization code has expired. Please re-authenticate.")
-                # Prompt user to re-authenticate
-                print("Authorization code has expired. Please re-authenticate.")
+                # User-facing: before UI prints; after UI routes to Status Log
+                notify("Authorization code has expired. Please re-authenticate.")
                 # Retry authentication
                 self.connectClient = auth.client_from_manual_flow(
                     api_key=self.apiKey,
@@ -115,10 +116,10 @@ class Api:
             if os.path.exists(self.tokenPath):
                 os.remove(self.tokenPath)
                 logger.info(f"Successfully deleted token file at {self.tokenPath}")
-                print("Token file deleted successfully.")
+                notify("Token file deleted successfully.")
             else:
                 logger.info("No token file found to delete.")
-                print("No existing token file found.")
+                notify("No existing token file found.")
 
             # Also check for any other potential token-related files in the root directory
             root_directory = os.path.dirname(self.tokenPath)
@@ -127,12 +128,12 @@ class Api:
                     file_path = os.path.join(root_directory, filename)
                     os.remove(file_path)
                     logger.info(f"Deleted additional token file: {file_path}")
-                    print(f"Deleted additional token file: {filename}")
+                    notify(f"Deleted additional token file: {filename}")
 
             return True
         except Exception as e:
             logger.error(f"Error while deleting token: {str(e)}")
-            print(f"Error while deleting token: {str(e)}")
+            notify(f"Error while deleting token: {str(e)}", level="error")
             return False
 
     def get_hash_value(self, account_number, data):
@@ -144,7 +145,12 @@ class Api:
     def getAccountHash(self):
         r = self.connectClient.get_account_numbers()
 
-        assert r.status_code == 200, r.raise_for_status()
+        if r.status_code != 200:
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="get_account_numbers")
+            raise
 
         data = r.json()
         try:
@@ -155,7 +161,12 @@ class Api:
     def getATMPrice(self, asset):
         # client can be None
         r = self.connectClient.get_quote(asset)
-        assert r.status_code == 200, r.raise_for_status()
+        if r.status_code != 200:
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="get_quote")
+            raise
 
         data = r.json()
         lastPrice = 0
@@ -194,7 +205,12 @@ class Api:
             option_type=None,
         )
 
-        assert r.status_code == 200, r.raise_for_status()
+        if r.status_code != 200:
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="get_option_chain CALL")
+            raise
 
         return r.json()
 
@@ -220,7 +236,12 @@ class Api:
             option_type=None,
         )
 
-        assert r.status_code == 200, r.raise_for_status()
+        if r.status_code != 200:
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="get_option_chain PUT")
+            raise
 
         return r.json()
 
@@ -267,7 +288,7 @@ class Api:
 
     def display_margin_requirements(api, shorts):
         if not shorts:
-            print("No short options positions found.")
+            notify("No short options positions found.")
             return
 
         # Get account data for margin information
@@ -306,27 +327,21 @@ class Api:
         margin_data.sort(key=lambda x: x["margin"], reverse=True)
 
         if not margin_data:
-            print("No positions with margin requirements found.")
+            notify("No positions with margin requirements found.")
             return
 
         # Print total margin requirement
-        print(f"\nTotal Margin Requirement: ${total_margin:,.2f}")
+        notify(f"Total Margin Requirement: ${total_margin:,.2f}")
 
-        print("\nDetailed Margin Requirements (Sorted by Margin):")
-        print("-" * 95)
-        print(f"{'Symbol':<15} {'Type':<12} {'Strike':<10} {'Expiration':<12} {'Count':<8} {'Margin':<15}")
-        print("-" * 95)
+        # Keep the detailed table on stdout only if UI is not active
+        header = "Detailed Margin Requirements (Sorted by Margin)"
+        notify(header)
 
         for position in margin_data:
-            print(
-                f"{position['symbol']:<15} "
-                f"{position['type']:<12} "
-                f"{position['strike']:<10} "
-                f"{position['expiration']:<12} "
-                f"{position['count']:<8} "
-                f"${position['margin']:<14,.2f}"
+            # Avoid flooding the Status Log with table rows; log concisely
+            notify(
+                f"{position['symbol']} {position['type']} x{position['count']} @ {position['strike']} exp {position['expiration']}: ${position['margin']:,}"
             )
-        print("-" * 95)
 
     def writeNewContracts(
         self,
@@ -413,7 +428,7 @@ class Api:
             )
 
         if not debugCanSendOrders:
-            print(order.build())
+            notify(str(order.build()))
             exit()
 
         r = self.connectClient.place_order(SchwabAccountID, order)
@@ -426,11 +441,16 @@ class Api:
     def checkOrder(self, orderId):
         r = self.connectClient.get_order(orderId, self.getAccountHash())
 
-        assert r.status_code == 200, r.raise_for_status()
+        if r.status_code != 200:
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="get_order")
+            raise
 
         data = r.json()
         if data["status"] == "FILLED":
-            print(f"Check Order details: {data}")
+            notify(f"Check Order details: {data}")
         complexOrderStrategyType = None
 
         try:
@@ -465,7 +485,12 @@ class Api:
         r = self.connectClient.cancel_order(orderId, self.getAccountHash())
 
         # throws error if cant cancel (code 400 - 404)
-        assert r.status_code == 200, r.raise_for_status()
+        if r.status_code != 200:
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="cancel_order")
+            raise
 
     def getRecentOrders(self, max_results=50):
         """Get recent orders for the account."""
@@ -603,13 +628,23 @@ class Api:
 
     def get_quote(self, asset):
         r = self.connectClient.get_quotes([asset])
-        assert r.status_code == 200 or r.status_code == 201, r.raise_for_status()
+        if r.status_code not in (200, 201):
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="get_quotes list")
+            raise
         return r.json()
 
     def getOptionDetails(self, asset):
         r = self.connectClient.get_quotes(asset)
 
-        assert r.status_code == 200, r.raise_for_status()
+        if r.status_code != 200:
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="get_quotes single")
+            raise
 
         data = r.json()
 
@@ -699,12 +734,12 @@ class Api:
         )
 
         if not debugCanSendOrders:
-            print("Order not placed: ", order.build())
+            notify("Order not placed: " + str(order.build()), level="warning")
             exit()
         try:
             r = self.connectClient.place_order(self.getAccountHash(), order)
         except Exception as e:
-            print(e)
+            notify_exception(e, prefix="Roll order placement error")
             return alert.botFailed(None, "Error while placing the roll order")
 
         order_id = Utils(self.connectClient, self.getAccountHash()).extract_order_id(r)
@@ -749,13 +784,13 @@ class Api:
         )
 
         if not debugCanSendOrders:
-            print("Order not placed: ", order.build())
+            notify("Order not placed: " + str(order.build()), level="warning")
             return None  # Return None instead of exiting
         hash = self.getAccountHash()
         try:
             r = self.connectClient.place_order(hash, order)
         except Exception as e:
-            print(e)
+            notify_exception(e, prefix="Vertical order placement error")
             return alert.botFailed(None, "Error while placing the vertical call order")
 
         order_id = Utils(self.connectClient, hash).extract_order_id(r)
@@ -805,13 +840,13 @@ class Api:
         )
 
         if not debugCanSendOrders:
-            print("Order not placed: ", order.build())
+            notify("Order not placed: " + str(order.build()), level="warning")
             return None  # Return None instead of exiting
         hash = self.getAccountHash()
         try:
             r = self.connectClient.place_order(hash, order)
         except Exception as e:
-            print(e)
+            notify_exception(e, prefix="Synthetic covered call order error")
             return alert.botFailed(None, "Error while placing the vertical call order")
 
         order_id = Utils(self.connectClient, hash).extract_order_id(r)
@@ -848,18 +883,18 @@ class Api:
 
             if retry > 0:
                 if is_debit_order:
-                    print(f"\nAttempt {retry + 1}/{max_retries}")
-                    print(f"Improving price by +${retry * fixed_step:.2f} to {current_price}")
+                    notify(f"Attempt {retry + 1}/{max_retries}")
+                    notify(f"Improving price by +${retry * fixed_step:.2f} to {current_price}")
                 else:
-                    print(f"\nAttempt {retry + 1}/{max_retries}")
-                    print(f"Improving price by -${retry * fixed_step:.2f} to {current_price}")
+                    notify(f"Attempt {retry + 1}/{max_retries}")
+                    notify(f"Improving price by -${retry * fixed_step:.2f} to {current_price}")
 
             try:
                 # Call order function with params and explicit price kwarg
                 order_id = order_func(*order_params, price=current_price)
 
                 if not order_id:
-                    print("Failed to place order")
+                    notify("Failed to place order", level="error")
                     return False
 
                 # Monitor order with longer timeout
@@ -874,16 +909,16 @@ class Api:
                         self.cancelOrder(order_id)
                         continue
                     except Exception as e:
-                        print(f"Error cancelling order: {e}")
+                        notify_exception(e, prefix="Error cancelling order")
                         return False
                 else:  # Other failure
                     return False
 
             except Exception as e:
-                print(f"Error during order placement: {str(e)}")
+                notify_exception(e, prefix="Error during order placement")
                 return False
 
-        print("\nFailed to fill order after all price improvement attempts")
+        notify("Failed to fill order after all price improvement attempts", level="warning")
         return False
 
     def editOrderPrice(self, order_id, new_price):
@@ -941,7 +976,7 @@ class Api:
 
             if replace_fn is not None:
                 if not debugCanSendOrders:
-                    print("Replace (debug):", order_spec)
+                    notify("Replace (debug): " + str(order_spec))
                     return None
                 r2 = replace_fn(account_hash, order_id, order_spec)
                 # Some implementations return 200/201 with body
@@ -952,7 +987,7 @@ class Api:
                 return new_order_id
             if edit_fn is not None:
                 if not debugCanSendOrders:
-                    print("Edit (debug):", order_spec)
+                    notify("Edit (debug): " + str(order_spec))
                     return None
                 r2 = edit_fn(account_hash, order_id, order_spec)
                 try:
@@ -999,7 +1034,7 @@ class Api:
                     pass
 
             if not debugCanSendOrders:
-                print("Replacement order (debug):", ob.build())
+                notify("Replacement order (debug): " + str(ob.build()))
                 return None
             r3 = self.connectClient.place_order(account_hash, ob)
             new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r3)

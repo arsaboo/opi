@@ -2,6 +2,7 @@ import asyncio
 import json
 from datetime import datetime, timedelta
 from configuration import configuration, spreads
+from status import notify_exception
 from core.covered_calls import find_best_rollover
 from core.common import get_median_price, classify_status
 from api.option_chain import OptionChain
@@ -71,7 +72,7 @@ async def get_expiring_shorts_data(api):
         return [res for res in results if res]
 
     except Exception as e:
-        print(f"Error in get_expiring_shorts_data: {e}")
+        notify_exception(e, prefix="get_expiring_shorts_data")
         return []
 
 async def process_short_position(api, short):
@@ -185,7 +186,8 @@ async def process_short_position(api, short):
             "New Option Symbol": new_option_symbol,  # Add for rollOver
         }
     except Exception as e:
-        print(f"Error processing position {short.get('optionSymbol', 'N/A')}: {e}")
+        prefix = f"process_short_position {short.get('optionSymbol', 'N/A')}"
+        notify_exception(e, prefix=prefix)
         return None
 
 async def get_box_spreads_data(api, asset="$SPX"):
@@ -311,7 +313,7 @@ async def get_box_spreads_data(api, asset="$SPX"):
                     "flags": ", ".join(flags) if flags else ""
                 })
             except Exception as e:
-                print(f"Error processing spread data: {e}")
+                notify_exception(e, prefix="process box spread row")
                 # Add a basic entry even if there's an error
                 box_spreads.append({
                     "direction": spread.get("direction", ""),
@@ -344,7 +346,7 @@ async def get_box_spreads_data(api, asset="$SPX"):
         return box_spreads
 
     except Exception as e:
-        print(f"Error in get_box_spreads_data: {e}")
+        notify_exception(e, prefix="get_box_spreads_data")
         return []
 
 async def get_vertical_spreads_data(api, synthetic=False):
@@ -449,5 +451,5 @@ async def get_margin_requirements_data(api):
         return margin_data, total_margin
 
     except Exception as e:
-        print(f"Error in get_margin_requirements_data: {e}")
+        notify_exception(e, prefix="get_margin_requirements_data")
         return [], 0
