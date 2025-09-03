@@ -1,6 +1,4 @@
 import json
-import statistics
-from datetime import datetime
 from core.spreads_common import mid_price, days_to_expiry, face_value as face_val, valid_ba
 
 

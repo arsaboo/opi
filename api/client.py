@@ -1,6 +1,5 @@
 import datetime
 import json
-import math
 import os
 import time
 from datetime import datetime, timedelta, time as time_module
@@ -31,6 +30,7 @@ class Api:
     tokenPath = ""
     apiKey = ""
     apiRedirectUri = ""
+    _account_hash = None
 
     def __init__(self, apiKey, apiRedirectUri, appSecret):
         # Token file is in the root directory
@@ -143,18 +143,20 @@ class Api:
         return None
 
     def getAccountHash(self):
+        # Cache account hash for performance; fetch once per session
+        if self._account_hash:
+            return self._account_hash
         r = self.connectClient.get_account_numbers()
-
         if r.status_code != 200:
             try:
                 r.raise_for_status()
             except Exception as e:
                 publish_exception(e, prefix="get_account_numbers")
             raise
-
         data = r.json()
         try:
-            return self.get_hash_value(SchwabAccountID, data)
+            self._account_hash = self.get_hash_value(SchwabAccountID, data)
+            return self._account_hash
         except KeyError:
             return alert.botFailed(None, "Error while getting account hash value")
 
@@ -429,7 +431,7 @@ class Api:
 
         if not debugCanSendOrders:
             notify(str(order.build()))
-            exit()
+            return None
 
         r = self.connectClient.place_order(SchwabAccountID, order)
 
@@ -735,7 +737,7 @@ class Api:
 
         if not debugCanSendOrders:
             notify("Order not placed: " + str(order.build()), level="warning")
-            exit()
+            return None
         try:
             r = self.connectClient.place_order(self.getAccountHash(), order)
         except Exception as e:

@@ -1,4 +1,3 @@
-import statistics
 from datetime import datetime, timedelta
 from core.spreads_common import mid_price, days_to_expiry
 

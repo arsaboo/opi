@@ -1,4 +1,4 @@
-from textual.widgets import DataTable, Static, Label
+from textual.widgets import DataTable, Static
 from textual import work
 from textual.containers import Vertical
 from datetime import datetime
@@ -8,15 +8,11 @@ from rich.text import Text
 from ..utils import style_cell as cell
 import asyncio
 from textual.screen import ModalScreen
-from textual.widgets import Static, Input, Collapsible
+from textual.widgets import Input, Collapsible
 from rich.panel import Panel
-from rich.text import Text
-from ..utils import style_cell as cell
 from rich.table import Table
 from rich.align import Align
-import schwab
-from schwab.utils import Utils
-from configuration import debugCanSendOrders, stream_quotes
+from configuration import stream_quotes
 from api.streaming.provider import StreamingQuoteProvider
 from typing import Optional
 

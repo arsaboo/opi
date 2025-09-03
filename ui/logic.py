@@ -9,7 +9,7 @@ from api.option_chain import OptionChain
 from core.box_spreads import calculate_box_spread as core_calc_box
 from core.vertical_spreads import bull_call_spread as core_bull_call
 from core.synthetic_covered_calls import synthetic_covered_call_spread as core_synth_cc
-from core.margin import calculate_margin_requirement, calculate_annualized_return_on_margin
+# margin functions are calculated in core; UI doesn’t need them here
 
 
 # Helpers for using core calculators from UI
@@ -408,7 +408,8 @@ async def get_vertical_spreads_data(api, synthetic=False):
         return spread_results
 
     except Exception as e:
-        print(f"Error in get_vertical_spreads_data: {e}")
+        from status import notify_exception
+        notify_exception(e, prefix="get_vertical_spreads_data")
         return []
 
 async def get_margin_requirements_data(api):

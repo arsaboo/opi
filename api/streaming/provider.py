@@ -2,6 +2,7 @@ import asyncio
 from typing import Dict, Iterable, Optional, Tuple
 
 from schwab.streaming import StreamClient
+from status import publish, publish_exception
 
 
 class StreamingQuoteProvider:
@@ -16,6 +17,8 @@ class StreamingQuoteProvider:
         self._eq_subs: set[str] = set()
         # Persist last-good values per symbol so UI doesn't flap when a field is missing
         self._last: Dict[str, Dict[str, float]] = {}
+        # Reconnect control
+        self._error_streak: int = 0
 
     async def start(self) -> None:
         if self._running:
@@ -39,6 +42,15 @@ class StreamingQuoteProvider:
         if self._task:
             self._task.cancel()
             self._task = None
+        try:
+            if self.stream:
+                # Try to logout/close cleanly
+                try:
+                    await self.stream.logout()
+                except Exception:
+                    pass
+        finally:
+            self.stream = None
 
     async def subscribe_options(self, symbols: Iterable[str]) -> None:
         if not self._running or not self.stream:
@@ -93,8 +105,65 @@ class StreamingQuoteProvider:
         while self._running:
             try:
                 await self.stream.handle_message()
-            except Exception:
+                # If we had errors previously, reset streak on success
+                if self._error_streak:
+                    self._error_streak = 0
+            except (ConnectionResetError, OSError) as e:
+                # Socket dropped; attempt reconnect with backoff and resubscribe
+                self._error_streak += 1
+                backoff = min(30, 2 ** min(5, self._error_streak))
+                try:
+                    publish(f"Streaming connection lost; reconnecting in {backoff}s (attempt {self._error_streak}).")
+                except Exception:
+                    pass
+                await asyncio.sleep(backoff)
+                try:
+                    await self._restart_stream()
+                    try:
+                        publish("Streaming connection re-established.")
+                    except Exception:
+                        pass
+                except Exception as re:
+                    # Keep loop alive; next iteration will backoff more
+                    publish_exception(re, prefix="Streaming restart failed")
+                    await asyncio.sleep(1)
+            except Exception as e:
+                # Generic, transient issue; small pause
                 await asyncio.sleep(0.5)
+
+    async def _restart_stream(self) -> None:
+        """Recreate the StreamClient, login, and resubscribe symbols."""
+        if not self._running:
+            return
+        # Close previous stream if exists
+        try:
+            if self.stream:
+                try:
+                    await self.stream.logout()
+                except Exception:
+                    pass
+        finally:
+            self.stream = None
+
+        # Rebuild stream and handlers, then login
+        self.stream = StreamClient(self.client, account_id=self.account_id)
+        self.stream.add_level_one_option_handler(self._on_level_one_option)
+        try:
+            self.stream.add_level_one_equity_handler(self._on_level_one_equity)
+        except Exception:
+            pass
+        await self.stream.login()
+        # Resubscribe existing symbol sets
+        try:
+            if self._opt_subs:
+                await self.stream.level_one_option_subs(list(self._opt_subs))
+        except Exception:
+            pass
+        try:
+            if self._eq_subs:
+                await self.stream.level_one_equity_subs(list(self._eq_subs))
+        except Exception:
+            pass
 
     async def _on_level_one_option(self, msg: Dict) -> None:
         contents = msg.get("content") or []

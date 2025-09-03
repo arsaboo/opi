@@ -1,13 +1,11 @@
 from datetime import datetime
 import statistics
-from typing import Optional
 
 from configuration import configuration
 from logger_config import get_logger
 from core.common import (
     classify_status,
     parse_option_details,
-    threshold_points,
     is_same_underlying,
 )
 
@@ -128,4 +126,3 @@ def find_best_rollover(api, data, short_option):
             )
 
     return best_option
-

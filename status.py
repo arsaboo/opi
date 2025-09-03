@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from queue import Queue, Empty
+from queue import Queue
 from datetime import datetime
 import re
 
 # Thread-safe queue for status messages destined for the TUI Status Log.
 # Items are simple dicts with keys: time, level, message
-status_queue: "Queue[dict]" = Queue()
+# Bound the queue to avoid unbounded memory growth; drop oldest on overflow
+status_queue: "Queue[dict]" = Queue(maxsize=1000)
 
 # Indicates whether the Textual UI has been mounted.
 _ui_active: bool = False
@@ -23,15 +24,23 @@ def publish(message: str, level: str = "info") -> None:
     Safe to call from any thread or non-UI code. The Textual UI drains this
     queue periodically and renders messages in the Status Log widget.
     """
+    item = {
+        "time": datetime.now(),
+        "level": level,
+        "message": str(message),
+    }
     try:
-        status_queue.put_nowait({
-            "time": datetime.now(),
-            "level": level,
-            "message": str(message),
-        })
+        status_queue.put_nowait(item)
     except Exception:
-        # Never raise from a logging pathway
-        pass
+        # Queue full: drop oldest and enqueue latest to keep UI fresh
+        try:
+            status_queue.get_nowait()
+        except Exception:
+            pass
+        try:
+            status_queue.put_nowait(item)
+        except Exception:
+            pass
 
 
 def sanitize_exception_message(exc: Exception) -> str:

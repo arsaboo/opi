@@ -7,8 +7,8 @@ from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 from ..utils import style_cell as cell
 import asyncio
-import keyboard
-from api.orders import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
+# keyboard not used here; avoid global hooks
+from api.orders import cancel_order
 from core.common import round_to_nearest_five_cents
 from configuration import stream_quotes
 
@@ -246,7 +246,7 @@ class RollShortOptionsWidget(Static):
         start_time = time.time()
         last_status_check = 0
         last_print_time = 0
-        print_interval = 1
+        print_interval = 5
 
         while time.time() - start_time < timeout:
             current_time = time.time()

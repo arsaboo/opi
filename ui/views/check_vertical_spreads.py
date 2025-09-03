@@ -9,7 +9,7 @@ from rich.text import Text
 from ..utils import style_cell as cell, style_ba
 import asyncio
 import keyboard
-from api.orders import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
+from api.orders import handle_cancel, reset_cancel_flag, cancel_order
 from configuration import stream_quotes
 from api.streaming.provider import get_provider
 from api.streaming.subscription_manager import get_subscription_manager
@@ -354,10 +354,6 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
                 net_debit = float(vertical_spread_data.get("investment", 0)) / 100  # Convert from total to per contract
 
                 # Place the order using the api method
-                from strategies import monitor_order
-                from api.orders import handle_cancel, reset_cancel_flag
-                import keyboard
-
                 try:
                     # Reset cancel flag and clear keyboard hooks
                     reset_cancel_flag()

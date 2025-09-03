@@ -1,7 +1,3 @@
-import time
-
-import alert
-
 from textual.app import App, ComposeResult
 import asyncio
 from textual.containers import Container
@@ -13,13 +9,11 @@ from .views.check_box_spreads import CheckBoxSpreadsWidget
 from .views.check_vertical_spreads import CheckVerticalSpreadsWidget
 from .views.check_synthetic_covered_calls import CheckSyntheticCoveredCallsWidget
 from .widgets.view_margin_requirements import ViewMarginRequirementsWidget
-from api import Api
-from configuration import apiKey, apiRedirectUri, appSecret
 from api.streaming.provider import ensure_provider, get_provider
 from state_manager import load_symbols, save_symbols
 from configuration import SchwabAccountID
 from .widgets.app_header import AppHeader
-from status import status_queue, publish, set_ui_active
+from status import status_queue, set_ui_active
 
 
 class OpiApp(App):

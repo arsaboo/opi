@@ -7,13 +7,19 @@ from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 from ..utils import style_cell as cell, style_ba
-from core.spreads_common import days_to_expiry
 import asyncio
 import keyboard
-from api.orders import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
+from api.orders import handle_cancel, reset_cancel_flag, cancel_order
 from configuration import stream_quotes
 from api.streaming.subscription_manager import get_subscription_manager
 from api.streaming.provider import get_provider
+from core.spreads_common import days_to_expiry
+
+# Read manual ordering flag from configuration with safe default
+try:
+    from configuration import manual_order as MANUAL_ORDER
+except Exception:
+    MANUAL_ORDER = False
 
 class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
     """A widget to display synthetic covered calls."""
@@ -24,6 +30,9 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
         self._synthetic_covered_calls_data = []  # Store actual synthetic covered calls data for order placement
         self._previous_market_status = None  # Track previous market status
         self._override_price = None  # User-edited initial price
+        self._quote_provider = None
+        self._col_keys = []
+        self._ba_maps = []  # entries: {row_key, col_key, symbol, last_bid, last_ask}
 
     def compose(self):
         """Create child widgets."""
@@ -377,10 +386,6 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                 net_debit = float(synthetic_covered_call_data.get("investment", 0)) / 100  # Convert from total to per contract
 
                 # Place the order using the api method
-                from strategies import monitor_order
-                from api.orders import handle_cancel, reset_cancel_flag
-                import keyboard
-
                 try:
                     # Reset cancel flag and clear keyboard hooks
                     reset_cancel_flag()
@@ -392,7 +397,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                     order_id = None
                     filled = False
 
-                    attempts = [0] if self._MANUAL_ORDER else range(0, 76)
+                    attempts = [0] if MANUAL_ORDER else range(0, 76)
                     for i in attempts:  # 0 = original price, 1-75 = improvements
                         if not cancel_order:  # Check if cancelled
                             current_price = (
@@ -421,7 +426,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                                 self.app.query_one(StatusLog).add_message(f"Asset: {asset}, Expiration: {expiration}, Strike Low: {strike_low}, Strike High: {strike_high}, Price: {current_price}")
                                 break
 
-                            if self._MANUAL_ORDER:
+                            if MANUAL_ORDER:
                                 self.app.query_one(StatusLog).add_message("Manual order placed. Manage from Order Management (U=Update, C=Cancel).")
                                 break
                             # Monitor with 60s timeout
@@ -444,13 +449,13 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                             elif result == "cancelled":  # User cancelled
                                 break
                             elif result == "rejected":  # Order rejected
-                                if self._MANUAL_ORDER:
+                                if MANUAL_ORDER:
                                     break
                                 continue  # Try next price
                             # On timeout, continue to next price improvement
 
                             # Brief pause between attempts
-                            if i > 0 and not self._MANUAL_ORDER:
+                            if i > 0 and not MANUAL_ORDER:
                                 await asyncio.sleep(1)
                         else:
                             break

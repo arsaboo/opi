@@ -1,6 +1,6 @@
 from datetime import datetime
 import statistics
-from typing import Optional, Dict
+from typing import Optional
 
 import re
 import calendar

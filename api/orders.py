@@ -1,6 +1,4 @@
 import time
-from datetime import datetime, time as time_module
-from tzlocal import get_localzone
 from status import notify, notify_exception
 
 # Global flag for order cancellation
