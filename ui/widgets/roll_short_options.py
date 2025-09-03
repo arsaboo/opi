@@ -204,6 +204,7 @@ class RollShortOptionsWidget(Static):
                         return
                     # Non-manual: start monitoring feedback
                     self.app.query_one(StatusLog).add_message(f"Monitoring roll order {order_id}...")
+                    result = await self.monitor_order_ui(order_id)
 
                     if result is True:
                         self.app.query_one(StatusLog).add_message("Roll order filled successfully!")
