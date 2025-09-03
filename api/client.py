@@ -32,15 +32,14 @@ class Api:
     apiRedirectUri = ""
 
     def __init__(self, apiKey, apiRedirectUri, appSecret):
+        # Token file is in the root directory
         self.tokenPath = os.path.join(
-            os.path.dirname(os.path.realpath(__file__)), "..", "token.json"
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "token.json"
         )
         self.tokenPath = os.path.normpath(self.tokenPath)
         self.apiKey = apiKey
         self.apiRedirectUri = apiRedirectUri
         self.appSecret = appSecret
-        # Ensure the directory exists
-        os.makedirs(os.path.dirname(self.tokenPath), exist_ok=True)
 
     def setup(self, retries=3, delay=5):
         attempt = 0
@@ -112,23 +111,20 @@ class Api:
         logger = get_logger()
 
         try:
-            # Path to token file - assuming it's stored in the same directory in a 'token.json' file
-            token_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'token.json')
-
             # Check if token file exists before attempting to delete
-            if os.path.exists(token_path):
-                os.remove(token_path)
-                logger.info(f"Successfully deleted token file at {token_path}")
+            if os.path.exists(self.tokenPath):
+                os.remove(self.tokenPath)
+                logger.info(f"Successfully deleted token file at {self.tokenPath}")
                 print("Token file deleted successfully.")
             else:
                 logger.info("No token file found to delete.")
                 print("No existing token file found.")
 
-            # Also check for any other potential token-related files in the directory
-            directory = os.path.dirname(os.path.abspath(__file__))
-            for filename in os.listdir(directory):
+            # Also check for any other potential token-related files in the root directory
+            root_directory = os.path.dirname(self.tokenPath)
+            for filename in os.listdir(root_directory):
                 if filename.endswith('.token') or 'token' in filename.lower():
-                    file_path = os.path.join(directory, filename)
+                    file_path = os.path.join(root_directory, filename)
                     os.remove(file_path)
                     logger.info(f"Deleted additional token file: {file_path}")
                     print(f"Deleted additional token file: {filename}")
@@ -262,9 +258,9 @@ class Api:
             window_start = start + timedelta(minutes=10)
 
             if window_start <= now <= end:
-                return {"open": True, "openDate": window_start, "nowDate": now}
+                return {"open": True, "openDate": window_start, "closeDate": end, "nowDate": now}
             else:
-                return {"open": False, "openDate": window_start, "nowDate": now}
+                return {"open": False, "openDate": window_start, "closeDate": end, "nowDate": now}
         except (KeyError, TypeError, ValueError) as e:
             logger.error(f"Error processing market hours data: {e}")
             return {"open": False, "openDate": None, "nowDate": now, "error": str(e)}
