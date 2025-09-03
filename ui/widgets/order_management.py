@@ -8,7 +8,7 @@ from rich.text import Text
 from ..utils import style_cell as cell
 import asyncio
 from textual.screen import ModalScreen
-from textual.widgets import Static, Input
+from textual.widgets import Static, Input, Collapsible
 from rich.panel import Panel
 from rich.text import Text
 from ..utils import style_cell as cell
@@ -18,6 +18,7 @@ import schwab
 from schwab.utils import Utils
 from configuration import debugCanSendOrders, stream_quotes
 from api.streaming.provider import StreamingQuoteProvider
+from typing import Optional
 
 
 class OrderCancellationScreen(ModalScreen):
@@ -220,7 +221,7 @@ class OrderManagementWidget(Static):
                                "filled_header": None, "filled_rows": [], "filled_sep": None,
                                "other_header": None, "other_rows": []}
         self._col_keys = []
-        self._quote_provider: StreamingQuoteProvider | None = None
+        self._quote_provider: Optional[StreamingQuoteProvider] = None
         self._prev_midnat = {}  # orderId -> (mid, nat)
         self._last_stream_opts: set[str] = set()
 
@@ -228,8 +229,11 @@ class OrderManagementWidget(Static):
         """Create child widgets."""
         with Vertical():
             streaming_hint = "Streaming: ON" if stream_quotes else "Streaming: OFF"
-            yield Static(Text(f"Hints: U = Update Price, C = Cancel  |  {streaming_hint}", style="bold yellow"))
+            yield Static(Text(f"Hints: U = Update Price, C = Cancel, O = Toggle Other  |  {streaming_hint}", style="bold yellow"))
             yield DataTable(id="order_management_table")
+            # Collapsible section holding a separate table for OTHER orders
+            with Collapsible(title="OTHER ORDERS (Canceled / Expired / Replaced)", collapsed=True, id="other_collapsible"):
+                yield DataTable(id="other_orders_table")
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
@@ -257,7 +261,26 @@ class OrderManagementWidget(Static):
         table.header_style = "bold on blue"
         table.cursor_type = "row"
         table.focus()
+        # Ensure the main table doesn't consume all vertical space so the Collapsible appears directly after
+        try:
+            table.styles.height = "auto"
+        except Exception:
+            pass
         self.run_get_orders_data()
+        # Initialize columns for the OTHER ORDERS table inside the collapsible
+        try:
+            other_tbl = self.query_one("#other_orders_table", DataTable)
+            other_tbl.add_columns(
+                "Order ID", "Status", "Time", "Asset", "Type", "Qty", "Price", "Mid", "Nat"
+            )
+            other_tbl.zebra_stripes = True
+            other_tbl.header_style = "bold on blue"
+            try:
+                other_tbl.styles.height = "auto"
+            except Exception:
+                pass
+        except Exception:
+            pass
         self.set_interval(15, self.run_get_orders_data)
         # Initialize streaming quotes if enabled
         if stream_quotes:
@@ -289,6 +312,16 @@ class OrderManagementWidget(Static):
                 event.prevent_default()
         elif key == 'u':
             self.replace_selected_order_price()
+            event.prevent_default()
+        elif key == 'o':
+            # Toggle Collapsible widget for OTHER ORDERS
+            try:
+                col = self.query_one("#other_collapsible", Collapsible)
+                col.collapsed = not col.collapsed
+                hint = "collapsed" if col.collapsed else "expanded"
+                self.app.query_one(StatusLog).add_message(f"Other orders {hint}.")
+            except Exception:
+                pass
             event.prevent_default()
 
     def _get_selected_working_order(self):
@@ -568,29 +601,31 @@ class OrderManagementWidget(Static):
                     Text("", justify="right"),
                     Text("", justify="right"),
                 )
-            # Separator
-            table.add_row(*[Text("") for _ in range(9)])
-            # Other header + rows
-            table.add_row(Text("OTHER ORDERS (Canceled / Expired / Replaced)", style="bold white on dark_blue"), *[Text("") for _ in range(8)])
-            for order, formatted in other:
-                order_type = formatted["order_type"]
-                price = formatted["price"]
-                try:
-                    price = f"{float(price):.2f}"
-                except (ValueError, TypeError):
-                    price = str(price)
-                status_color = {"CANCELED": "gray", "EXPIRED": "yellow", "REPLACED": "magenta"}.get(formatted["status"], "")
-                table.add_row(
-                    Text(str(formatted["order_id"])),
-                    Text(str(formatted["status"]), style=status_color),
-                    Text(str(formatted["entered_time"])),
-                    Text(str(formatted["asset"])),
-                    Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
-                    cell("quantity", formatted.get("quantity"), None),
-                    cell("price", price, None),
-                    Text("", justify="right"),
-                    Text("", justify="right"),
-                )
+            # Populate OTHER ORDERS in a separate table inside the collapsible
+            try:
+                other_tbl = self.query_one("#other_orders_table", DataTable)
+                other_tbl.clear()
+                for order, formatted in other:
+                    order_type = formatted["order_type"]
+                    price = formatted["price"]
+                    try:
+                        price = f"{float(price):.2f}"
+                    except (ValueError, TypeError):
+                        price = str(price)
+                    status_color = {"CANCELED": "gray", "EXPIRED": "yellow", "REPLACED": "magenta"}.get(formatted["status"], "")
+                    other_tbl.add_row(
+                        Text(str(formatted["order_id"])),
+                        Text(str(formatted["status"]), style=status_color),
+                        Text(str(formatted["entered_time"])),
+                        Text(str(formatted["asset"])),
+                        Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
+                        cell("quantity", formatted.get("quantity"), None),
+                        cell("price", price, None),
+                        Text("", justify="right"),
+                        Text("", justify="right"),
+                    )
+            except Exception:
+                pass
 
             # Update internal lists
             self._working_orders = [o for o, _ in working]
