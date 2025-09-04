@@ -42,6 +42,17 @@ async def vertical_call_order(api, asset, expiration, strike_low, strike_high, q
         price=price,
     )
 
+async def synthetic_covered_call_order(api, asset, expiration, strike_low, strike_high, quantity, price: float):
+    return await asyncio.to_thread(
+        api.synthetic_covered_call_order,
+        asset,
+        expiration,
+        strike_low,
+        strike_high,
+        quantity,
+        price=price,
+    )
+
 def _compute_spread(api, asset, spread, days, downsideProtection, price_method, synthetic):
     if synthetic:
         return asset, core_synth_cc(api, asset, spread, days, downsideProtection, price_method)

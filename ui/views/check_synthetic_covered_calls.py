@@ -28,6 +28,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
         super().__init__()
         self._prev_rows = None
         self._synthetic_covered_calls_data = []  # Store actual synthetic covered calls data for order placement
+        self._selected_synthetic_covered_call_data = None  # Store selected data for order placement
         self._previous_market_status = None  # Track previous market status
         self._override_price = None  # User-edited initial price
         self._quote_provider = None
@@ -324,6 +325,8 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
         row_index = event.cursor_row
         if hasattr(self, '_synthetic_covered_calls_data') and self._synthetic_covered_calls_data and row_index < len(self._synthetic_covered_calls_data):
             selected_data = self._synthetic_covered_calls_data[row_index]
+            # Store the selected data for later use
+            self._selected_synthetic_covered_call_data = selected_data
             # Show order confirmation dialog
             self.show_order_confirmation(selected_data)
 
@@ -371,12 +374,9 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
     async def place_synthetic_covered_call_order(self) -> None:
         """Place the synthetic covered call order."""
         try:
-            # Get the selected row data
-            table = self.query_one(DataTable)
-            cursor_row = table.cursor_row
-
-            if cursor_row < len(self._synthetic_covered_calls_data):
-                synthetic_covered_call_data = self._synthetic_covered_calls_data[cursor_row]
+            # Use the stored selected data instead of getting cursor position from table
+            if self._selected_synthetic_covered_call_data:
+                synthetic_covered_call_data = self._selected_synthetic_covered_call_data
 
                 # Extract required data
                 asset = synthetic_covered_call_data.get("asset", "")
@@ -410,7 +410,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
 
                             # Place order
                             from .. import logic as ui_logic
-                            order_id = await ui_logic.vertical_call_order(
+                            order_id = await ui_logic.synthetic_covered_call_order(
                                 self.app.api,
                                 asset,
                                 expiration,
