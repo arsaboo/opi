@@ -1,8 +1,8 @@
-# Schwab API settings
-apiKey = ''  # create an app on https://developer.schwab.com/ to get one
-apiRedirectUri = 'https://localhost'
-SchwabAccountID = ''
-appSecret = ''
+# Schwab API settings (now loaded from .env file)
+# apiKey = ''  # create an app on https://developer.schwab.com/ to get one
+# apiRedirectUri = 'https://localhost'
+# SchwabAccountID = ''
+# appSecret = ''
 
 # Google Sheets settings
 SPREADSHEET_ID = ''  # ID from your Google Sheets URL

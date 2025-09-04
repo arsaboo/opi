@@ -17,9 +17,13 @@ from tzlocal import get_localzone
 import alert
 from status import notify, notify_exception, publish_exception
 from core.common import round_to_nearest_five_cents, extract_date, extract_strike_price, validDateFormat
-from configuration import SchwabAccountID, debugCanSendOrders
+from configuration import debugCanSendOrders
 from logger_config import get_logger
 from api.order_manager import OrderManager
+import os
+
+# Get SchwabAccountID from environment variables
+SchwabAccountID = os.getenv("SCHWAB_ACCOUNT_ID")
 
 logger = get_logger()
 

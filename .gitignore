@@ -7,8 +7,11 @@ state-*.json
 *.csv
 .aider*
 *.pickle
-*.env
+.env
 
 # ML data, labels, and analysis results
 ml_data/
 logs/
+
+# Keep the example file
+!.env.example

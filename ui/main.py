@@ -11,7 +11,10 @@ from .views.check_synthetic_covered_calls import CheckSyntheticCoveredCallsWidge
 from .widgets.view_margin_requirements import ViewMarginRequirementsWidget
 from api.streaming.provider import ensure_provider, get_provider
 from state_manager import load_symbols, save_symbols
-from configuration import SchwabAccountID
+import os
+
+# Get SchwabAccountID from environment variables
+SchwabAccountID = os.getenv("SCHWAB_ACCOUNT_ID")
 from .widgets.app_header import AppHeader
 from status import status_queue, set_ui_active
 

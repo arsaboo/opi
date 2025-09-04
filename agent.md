@@ -54,7 +54,7 @@ The codebase is organized with clear separation of concerns:
     - Configure your local callback/redirect URI (e.g., `https://localhost`).
 3.  **Configure the Bot**:
     - Copy `configuration.example.py` to `configuration.py`.
-    - Update `configuration.py` with your Schwab credentials (`apiKey`, `apiRedirectUri`, `SchwabAccountID`, `appSecret`).
+    - Copy `.env.example` to `.env` and update it with your Schwab credentials (`SCHWAB_API_KEY`, `SCHWAB_REDIRECT_URI`, `SCHWAB_ACCOUNT_ID`, `SCHWAB_APP_SECRET`).
     - Customize strategy parameters and asset configurations within `configuration.py`.
 
 ## Usage

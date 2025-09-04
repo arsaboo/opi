@@ -21,12 +21,16 @@ cp configuration.example.py configuration.py
 ### Schwab API Setup
 1. Create an app on https://developer.schwab.com/
 2. Get your API key and secret
-3. Update configuration.py with your Schwab credentials:
-```python
-apiKey = 'your_api_key'
-apiRedirectUri = 'https://localhost'
-SchwabAccountID = 'your_account_id'
-appSecret = 'your_app_secret'
+3. Copy the .env file and update it with your Schwab credentials:
+```bash
+cp .env.example .env
+```
+Then edit the `.env` file with your credentials:
+```env
+SCHWAB_API_KEY=your_api_key_here
+SCHWAB_APP_SECRET=your_app_secret_here
+SCHWAB_REDIRECT_URI=your_redirect_uri_here
+SCHWAB_ACCOUNT_ID=your_account_id_here
 ```
 
 ## Architecture
@@ -80,42 +84,7 @@ Edit configuration.py to customize:
 - Market timing preferences
 - Debug modes
 
-## Troubleshooting
-
-Common issues:
-
-1. Authentication Errors:
-   - Error: "Invalid credentials"
-   - Solution: Verify API key and secret
-
-2. Permission Errors:
-   - Error: "Permission denied"
-   - Solution: Check account permissions
-
-3. Market Hours:
-   - Error: "Market is closed"
-   - Solution: Run during market hours or enable debug mode
-
-## Features
-
-- Interactive Textual UI for all operations
-- Roll short options positions with real-time data
-- Check box spreads with visual analysis
-- Analyze vertical spreads with sorting and filtering
-- Check synthetic covered calls with detailed views
-- View margin requirements with comprehensive breakdowns
-- Real-time status updates and logging
-- Keyboard shortcuts for quick navigation
-- Color-coded data for better visualization
-- Automatic data refresh for live updates
-
-## Configuration
-
-Edit configuration.py to customize:
-- Option rolling parameters
-- Spread analysis settings
-- Market timing preferences
-- Debug modes
+Note: API credentials are now stored in the `.env` file for better security.
 
 ## Troubleshooting
 

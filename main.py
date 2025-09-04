@@ -8,18 +8,31 @@ for all the bot's functionality.
 
 import sys
 import argparse
+import os
+import atexit
+import asyncio
+import alert
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 from api import Api
-from configuration import apiKey, apiRedirectUri, appSecret
 from ui.main import OpiApp
 from api.streaming.provider import get_provider
 from state_manager import save_symbols
-from configuration import SchwabAccountID
-import atexit
-import alert
-import asyncio
-import os
 
-from api.streaming.provider import get_provider
+# Get API credentials from environment variables
+apiKey = os.getenv("SCHWAB_API_KEY")
+apiRedirectUri = os.getenv("SCHWAB_REDIRECT_URI")
+appSecret = os.getenv("SCHWAB_APP_SECRET")
+SchwabAccountID = os.getenv("SCHWAB_ACCOUNT_ID")
+
+# Validate that all required environment variables are present
+if not all([apiKey, apiRedirectUri, appSecret, SchwabAccountID]):
+    print("ERROR: Missing required environment variables. Please check your .env file.")
+    print("Required variables: SCHWAB_API_KEY, SCHWAB_REDIRECT_URI, SCHWAB_APP_SECRET, SCHWAB_ACCOUNT_ID")
+    sys.exit(1)
 
 
 def setup_api_with_retry(api, max_attempts=3):
@@ -74,7 +87,7 @@ def main():
     # Initialize and setup API
     print("Initializing API and validating token...")
     api = Api(apiKey, apiRedirectUri, appSecret)
-    
+
     if not setup_api_with_retry(api):
         print("Failed to initialize API. Exiting...")
         try:
@@ -82,7 +95,7 @@ def main():
         except Exception:
             pass
         sys.exit(1)
-    
+
     print("API initialized successfully. Launching Textual UI...")
 
     # Launch the Textual UI
