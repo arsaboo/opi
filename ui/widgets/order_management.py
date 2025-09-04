@@ -561,16 +561,32 @@ class OrderManagementWidget(Static):
                     sym = leg.get("instrument", {}).get("symbol")
                     if sym:
                         all_symbols.append(sym)
-            # Subscribe to option symbols via streaming
+            # After working rows are rendered, set default selection immediately
+            try:
+                # Make working orders available for key handlers right away
+                self._working_orders = [o for o, _ in working]
+                if working:
+                    if hasattr(table, "move_cursor"):
+                        table.move_cursor(1, 0)
+                    self._selected_order_id = working[0][0].get("orderId")
+                else:
+                    if hasattr(table, "move_cursor"):
+                        table.move_cursor(0, 0)
+                    self._selected_order_id = None
+            except Exception:
+                pass
+
+            # Subscribe to option symbols via streaming (non-blocking)
             if stream_quotes and self._quote_provider:
                 try:
                     desired = {s for s in all_symbols if s}
                     removed = self._last_stream_opts - desired
                     added = desired - self._last_stream_opts
+                    # Do not block UI build while subscribing/unsubscribing
                     if removed:
-                        await self._quote_provider.unsubscribe_options(list(removed))
+                        asyncio.create_task(self._quote_provider.unsubscribe_options(list(removed)))
                     if added:
-                        await self._quote_provider.subscribe_options(list(added))
+                        asyncio.create_task(self._quote_provider.subscribe_options(list(added)))
                     self._last_stream_opts = desired
                 except Exception as e:
                     self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
@@ -624,7 +640,7 @@ class OrderManagementWidget(Static):
                 pass
 
             # Update internal lists
-            self._working_orders = [o for o, _ in working]
+            # _working_orders already set earlier to enable immediate key handling
             self._filled_orders = [o for o, _ in filled]
             self._other_orders = [o for o, _ in other]
             self._initialized = True
