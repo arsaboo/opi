@@ -9,7 +9,7 @@ from rich.text import Text
 from ..utils import style_cell as cell, style_ba
 import asyncio
 import keyboard
-from api.orders import handle_cancel, reset_cancel_flag, cancel_order
+from api.order_manager import handle_cancel, reset_cancel_flag, cancel_order
 from configuration import stream_quotes
 from api.streaming.provider import get_provider
 from api.streaming.subscription_manager import get_subscription_manager
@@ -397,7 +397,8 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
 
                             if MANUAL_ORDER:
                                 self.app.query_one(StatusLog).add_message("Manual order placed. Manage from Order Management (U=Update, C=Cancel).")
-                                break
+                                self._override_price = None
+                                return
                             # Monitor with 60s timeout
                             self.app.query_one(StatusLog).add_message(f"Monitoring order {order_id}...")
                             result = await self.monitor_order_ui(order_id, timeout=60, manual=False)

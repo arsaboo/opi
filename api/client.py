@@ -16,11 +16,10 @@ from tzlocal import get_localzone
 
 import alert
 from status import notify, notify_exception, publish_exception
-from core.common import round_to_nearest_five_cents
+from core.common import round_to_nearest_five_cents, extract_date, extract_strike_price, validDateFormat
 from configuration import SchwabAccountID, debugCanSendOrders
 from logger_config import get_logger
-from api.orders import monitor_order
-from core.common import extract_date, extract_strike_price, validDateFormat
+from api.order_manager import OrderManager
 
 logger = get_logger()
 
@@ -31,6 +30,7 @@ class Api:
     apiKey = ""
     apiRedirectUri = ""
     _account_hash = None
+    _order_manager = None
 
     def __init__(self, apiKey, apiRedirectUri, appSecret):
         # Token file is in the root directory
@@ -41,6 +41,13 @@ class Api:
         self.apiKey = apiKey
         self.apiRedirectUri = apiRedirectUri
         self.appSecret = appSecret
+        
+    @property
+    def order_manager(self):
+        """Lazy initialization of OrderManager"""
+        if self._order_manager is None:
+            self._order_manager = OrderManager(self)
+        return self._order_manager
 
     def setup(self, retries=3, delay=5):
         attempt = 0
@@ -359,140 +366,15 @@ class Api:
         Send an order for writing new contracts to the api
         fullPricePercentage is for reducing the price by a custom amount if we cant get filled
         """
-
-        if oldSymbol is None:
-            price = newCredit
-
-            if fullPricePercentage == 100:
-                price = round(price, 2)
-            else:
-                price = round(price * (fullPricePercentage / 100), 2)
-
-            # init a new position, sell to open
-            order = (
-                schwab.orders.options.option_sell_to_open_limit(
-                    newSymbol, newAmount, price
-                )
-                .set_duration(schwab.orders.common.Duration.DAY)
-                .set_session(schwab.orders.common.Session.NORMAL)
-            )
-
-            if newAmount > 1:
-                order.set_special_instruction(
-                    schwab.orders.common.SpecialInstruction.ALL_OR_NONE
-                )
-        else:
-            # roll
-
-            if oldAmount != newAmount:
-                # custom order
-                price = -(oldDebit * oldAmount - newCredit * newAmount)
-            else:
-                # diagonal, we ignore amount
-                price = -(oldDebit - newCredit)
-
-            if fullPricePercentage == 100:
-                price = round(price, 2)
-            else:
-                if price < 100:
-                    # reduce the price by 1$ for each retry, to have better fills and allow it to go below 0
-                    price = round(price - ((100 - fullPricePercentage) * 0.01), 2)
-                else:
-                    # reduce the price by 1% for each retry
-                    price = round(price * (fullPricePercentage / 100), 2)
-
-            order = schwab.orders.generic.OrderBuilder()
-
-            orderType = schwab.orders.common.OrderType.NET_CREDIT
-
-            if price < 0:
-                price = -price
-                orderType = schwab.orders.common.OrderType.NET_DEBIT
-
-            order.add_option_leg(
-                schwab.orders.common.OptionInstruction.BUY_TO_CLOSE,
-                oldSymbol,
-                oldAmount,
-            ).add_option_leg(
-                schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
-                newSymbol,
-                newAmount,
-            ).set_duration(
-                schwab.orders.common.Duration.DAY
-            ).set_session(
-                schwab.orders.common.Session.NORMAL
-            ).set_price(
-                price
-            ).set_order_type(
-                orderType
-            ).set_order_strategy_type(
-                schwab.orders.common.OrderStrategyType.SINGLE
-            )
-
-        if not debugCanSendOrders:
-            notify(str(order.build()))
-            return None
-
-        r = self.connectClient.place_order(SchwabAccountID, order)
-
-        order_id = Utils(self.connectClient, SchwabAccountID).extract_order_id(r)
-        assert order_id is not None
-
-        return order_id
+        return self.order_manager.write_new_contracts(
+            oldSymbol, oldAmount, oldDebit, newSymbol, newAmount, newCredit, fullPricePercentage
+        )
 
     def checkOrder(self, orderId):
-        r = self.connectClient.get_order(orderId, self.getAccountHash())
-
-        if r.status_code != 200:
-            try:
-                r.raise_for_status()
-            except Exception as e:
-                publish_exception(e, prefix="get_order")
-            raise
-
-        data = r.json()
-        if data["status"] == "FILLED":
-            notify(f"Check Order details: {data}")
-        complexOrderStrategyType = None
-
-        try:
-            status = data["status"]
-            filled = data["status"] == "FILLED"
-            price = data["price"]
-            partialFills = data["filledQuantity"]
-            orderType = "CREDIT"
-            typeAdjustedPrice = price
-
-            if data["orderType"] == "NET_DEBIT":
-                orderType = "DEBIT"
-                typeAdjustedPrice = -price
-
-            if "complexOrderStrategyType" in data:
-                complexOrderStrategyType = data["complexOrderStrategyType"]
-
-        except KeyError:
-            return alert.botFailed(None, "Error while checking working order")
-
-        return {
-            "status": status,
-            "filled": filled,
-            "price": price,
-            "partialFills": partialFills,
-            "complexOrderStrategyType": complexOrderStrategyType,
-            "typeAdjustedPrice": typeAdjustedPrice,
-            "orderType": orderType,
-        }
+        return self.order_manager.check_order_status(orderId)
 
     def cancelOrder(self, orderId):
-        r = self.connectClient.cancel_order(orderId, self.getAccountHash())
-
-        # throws error if cant cancel (code 400 - 404)
-        if r.status_code != 200:
-            try:
-                r.raise_for_status()
-            except Exception as e:
-                publish_exception(e, prefix="cancel_order")
-            raise
+        return self.order_manager.cancel_order(orderId)
 
     def getRecentOrders(self, max_results=50):
         """Get recent orders for the account."""
@@ -703,225 +585,27 @@ class Api:
         return shortPositions
 
     def rollOver(self, oldSymbol, newSymbol, amount, price):
-        # init a new position, sell to open,
-        # price is the net amount to be credited (received) for the roll
-        order = schwab.orders.generic.OrderBuilder()
-
-        orderType = schwab.orders.common.OrderType.NET_CREDIT
-
-        if price < 0:
-            price = -price
-            orderType = schwab.orders.common.OrderType.NET_DEBIT
-
-        order.add_option_leg(
-            schwab.orders.common.OptionInstruction.BUY_TO_CLOSE,
-            oldSymbol,
-            amount,
-        ).add_option_leg(
-            schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
-            newSymbol,
-            amount,
-        ).set_duration(
-            schwab.orders.common.Duration.DAY
-        ).set_session(
-            schwab.orders.common.Session.NORMAL
-        ).set_price(
-            str(price)
-        ).set_order_type(
-            orderType
-        ).set_order_strategy_type(
-            schwab.orders.common.OrderStrategyType.SINGLE
-        ).set_complex_order_strategy_type(
-            schwab.orders.common.ComplexOrderStrategyType.DIAGONAL
-        )
-
-        if not debugCanSendOrders:
-            notify("Order not placed: " + str(order.build()), level="warning")
-            return None
-        try:
-            r = self.connectClient.place_order(self.getAccountHash(), order)
-        except Exception as e:
-            notify_exception(e, prefix="Roll order placement error")
-            return alert.botFailed(None, "Error while placing the roll order")
-
-        order_id = Utils(self.connectClient, self.getAccountHash()).extract_order_id(r)
-        assert order_id is not None
-
-        return order_id
+        return self.order_manager.roll_over(oldSymbol, newSymbol, amount, price)
 
     def vertical_call_order(
         self, symbol, expiration, strike_low, strike_high, amount, *, price
     ):
-
-        if "$" in symbol:
-            # remove $ from symbol
-            symbol = symbol[1:]
-        long_call_sym = OptionSymbol(symbol, expiration, "C", str(strike_low)).build()
-        short_call_sym = OptionSymbol(symbol, expiration, "C", str(strike_high)).build()
-
-        order = schwab.orders.generic.OrderBuilder()
-
-        orderType = schwab.orders.common.OrderType.NET_DEBIT
-
-        order.add_option_leg(
-            schwab.orders.common.OptionInstruction.BUY_TO_OPEN,
-            long_call_sym,
-            amount,
-        ).add_option_leg(
-            schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
-            short_call_sym,
-            amount,
-        ).set_duration(
-            schwab.orders.common.Duration.DAY
-        ).set_session(
-            schwab.orders.common.Session.NORMAL
-        ).set_price(
-            str(price)
-        ).set_order_type(
-            orderType
-        ).set_order_strategy_type(
-            schwab.orders.common.OrderStrategyType.SINGLE
-        ).set_complex_order_strategy_type(
-            schwab.orders.common.ComplexOrderStrategyType.VERTICAL
+        return self.order_manager.vertical_call_order(
+            symbol, expiration, strike_low, strike_high, amount, price=price
         )
-
-        if not debugCanSendOrders:
-            notify("Order not placed: " + str(order.build()), level="warning")
-            return None  # Return None instead of exiting
-        hash = self.getAccountHash()
-        try:
-            r = self.connectClient.place_order(hash, order)
-        except Exception as e:
-            notify_exception(e, prefix="Vertical order placement error")
-            return alert.botFailed(None, "Error while placing the vertical call order")
-
-        order_id = Utils(self.connectClient, hash).extract_order_id(r)
-        assert order_id is not None
-
-        return order_id
 
     def synthetic_covered_call_order(
         self, symbol, expiration, strike_low, strike_high, amount, *, price
     ):
-
-        if "$" in symbol:
-            # remove $ from symbol
-            symbol = symbol[1:]
-        long_call_sym = OptionSymbol(symbol, expiration, "C", str(strike_low)).build()
-        short_put_sym = OptionSymbol(symbol, expiration, "P", str(strike_low)).build()
-        short_call_sym = OptionSymbol(symbol, expiration, "C", str(strike_high)).build()
-
-        order = schwab.orders.generic.OrderBuilder()
-
-        orderType = schwab.orders.common.OrderType.NET_DEBIT
-
-        order.add_option_leg(
-            schwab.orders.common.OptionInstruction.BUY_TO_OPEN,
-            long_call_sym,
-            amount,
-        ).add_option_leg(
-            schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
-            short_call_sym,
-            amount,
-        ).add_option_leg(
-            schwab.orders.common.OptionInstruction.SELL_TO_OPEN,
-            short_put_sym,
-            amount,
-        ).set_duration(
-            schwab.orders.common.Duration.DAY
-        ).set_session(
-            schwab.orders.common.Session.NORMAL
-        ).set_price(
-            str(price)
-        ).set_order_type(
-            orderType
-        ).set_order_strategy_type(
-            schwab.orders.common.OrderStrategyType.SINGLE
-        ).set_complex_order_strategy_type(
-            schwab.orders.common.ComplexOrderStrategyType.CUSTOM
+        return self.order_manager.synthetic_covered_call_order(
+            symbol, expiration, strike_low, strike_high, amount, price=price
         )
-
-        if not debugCanSendOrders:
-            notify("Order not placed: " + str(order.build()), level="warning")
-            return None  # Return None instead of exiting
-        hash = self.getAccountHash()
-        try:
-            r = self.connectClient.place_order(hash, order)
-        except Exception as e:
-            notify_exception(e, prefix="Synthetic covered call order error")
-            return alert.botFailed(None, "Error while placing the vertical call order")
-
-        order_id = Utils(self.connectClient, hash).extract_order_id(r)
-        assert order_id is not None
-
-        return order_id
 
     def place_order(self, order_func, order_params, price):
         """
         Place an order with automatic price improvements if not filled
         """
-        max_retries = 75
-        fixed_step = 0.05  # fixed $0.05 step per retry
-        initial_price = price
-
-
-        now = datetime.now(get_localzone())
-        if now.time() >= time_module(15, 30):  # After 3:30 PM
-            order_timeout = 15  # Update faster near market close
-        else:
-            order_timeout = 60  # Normal interval during regular hours
-
-        # Determine if this is a debit order (paying) or credit order (receiving)
-        is_debit_order = price > 0  # Positive price means we're paying
-
-        for retry in range(max_retries):
-            # Calculate new price with fixed $0.05 step
-            if is_debit_order:
-                # For debit orders, increase the price we're willing to pay
-                current_price = round_to_nearest_five_cents(initial_price + retry * fixed_step)
-            else:
-                # For credit orders, decrease the price we're willing to accept
-                current_price = round_to_nearest_five_cents(initial_price - retry * fixed_step)
-
-            if retry > 0:
-                if is_debit_order:
-                    notify(f"Attempt {retry + 1}/{max_retries}")
-                    notify(f"Improving price by +${retry * fixed_step:.2f} to {current_price}")
-                else:
-                    notify(f"Attempt {retry + 1}/{max_retries}")
-                    notify(f"Improving price by -${retry * fixed_step:.2f} to {current_price}")
-
-            try:
-                # Call order function with params and explicit price kwarg
-                order_id = order_func(*order_params, price=current_price)
-
-                if not order_id:
-                    notify("Failed to place order", level="error")
-                    return False
-
-                # Monitor order with longer timeout
-                result = monitor_order(self, order_id, timeout=order_timeout)
-
-                if result == True:  # Order filled
-                    return True
-                elif result == "cancelled":  # User cancelled
-                    return False
-                elif result == "timeout":  # Timeout - try price improvement
-                    try:
-                        self.cancelOrder(order_id)
-                        continue
-                    except Exception as e:
-                        notify_exception(e, prefix="Error cancelling order")
-                        return False
-                else:  # Other failure
-                    return False
-
-            except Exception as e:
-                notify_exception(e, prefix="Error during order placement")
-                return False
-
-        notify("Failed to fill order after all price improvement attempts", level="warning")
-        return False
+        return self.order_manager.place_order_with_improvement(order_func, order_params, price)
 
     def editOrderPrice(self, order_id, new_price):
         """Edit an existing order's limit price using Schwab's edit/replace endpoint when available.
@@ -931,116 +615,4 @@ class Api:
         Returns the new order ID (for replace flows) or the same order ID if edited in place.
         Returns None on failure.
         """
-        try:
-            account_hash = self.getAccountHash()
-            # Fetch current order JSON
-            r = self.connectClient.get_order(order_id, account_hash)
-            r.raise_for_status()
-            order = r.json()
-
-            # Build a minimal editable spec from existing order
-            # Keep only fields Schwab accepts for edit/replace
-            import schwab
-            legs = []
-            for leg in order.get("orderLegCollection", []) or []:
-                instr = leg.get("instrument", {})
-                symbol = instr.get("symbol")
-                qty = leg.get("quantity", 1)
-                instruction_str = leg.get("instruction", "BUY_TO_OPEN")
-                legs.append({
-                    "instruction": instruction_str,
-                    "instrument": {
-                        "symbol": symbol,
-                        "assetType": instr.get("assetType", "OPTION")
-                    },
-                    "quantity": qty,
-                })
-
-            order_type_str = order.get("orderType", "NET_DEBIT")
-            duration = order.get("duration", "DAY")
-            session = order.get("session", "NORMAL")
-            complex_type = order.get("complexOrderStrategyType")
-
-            order_spec = {
-                "orderType": order_type_str,
-                "session": session,
-                "price": str(abs(new_price)),
-                "duration": duration,
-                "orderStrategyType": order.get("orderStrategyType", "SINGLE"),
-                "orderLegCollection": legs,
-            }
-            if complex_type:
-                order_spec["complexOrderStrategyType"] = complex_type
-
-            # Try explicit replace/edit methods if exposed by client
-            replace_fn = getattr(self.connectClient, "replace_order", None)
-            edit_fn = getattr(self.connectClient, "edit_order", None)
-
-            if replace_fn is not None:
-                if not debugCanSendOrders:
-                    notify("Replace (debug): " + str(order_spec))
-                    return None
-                r2 = replace_fn(account_hash, order_id, order_spec)
-                # Some implementations return 200/201 with body
-                try:
-                    new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r2)
-                except Exception:
-                    new_order_id = order_id
-                return new_order_id
-            if edit_fn is not None:
-                if not debugCanSendOrders:
-                    notify("Edit (debug): " + str(order_spec))
-                    return None
-                r2 = edit_fn(account_hash, order_id, order_spec)
-                try:
-                    new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r2)
-                except Exception:
-                    new_order_id = order_id
-                return new_order_id
-
-            # Fallback: cancel-and-place using existing helper
-            try:
-                # Attempt cancel
-                self.cancelOrder(order_id)
-            except Exception as e:
-                logger.warning(f"editOrderPrice cancel fallback failed: {e}")
-
-            # Rebuild a replacement order from legs
-            import schwab
-            ob = schwab.orders.generic.OrderBuilder()
-            order_type_str = order.get("orderType", "NET_DEBIT")
-            order_type_enum = getattr(schwab.orders.common.OrderType, order_type_str, schwab.orders.common.OrderType.NET_DEBIT)
-            legs = order.get("orderLegCollection", [])
-            for leg in legs:
-                instr = leg.get("instrument", {})
-                symbol = instr.get("symbol")
-                qty = leg.get("quantity", 1)
-                instruction_str = leg.get("instruction", "BUY_TO_OPEN")
-                try:
-                    instruction_enum = getattr(schwab.orders.common.OptionInstruction, instruction_str)
-                except Exception:
-                    instruction_enum = schwab.orders.common.OptionInstruction.BUY_TO_OPEN if instruction_str.upper().startswith("BUY") else schwab.orders.common.OptionInstruction.SELL_TO_OPEN
-                ob.add_option_leg(instruction_enum, symbol, qty)
-
-            ob.set_duration(schwab.orders.common.Duration.DAY)
-            ob.set_session(schwab.orders.common.Session.NORMAL)
-            ob.set_price(str(abs(new_price)))
-            ob.set_order_type(order_type_enum)
-            ob.set_order_strategy_type(schwab.orders.common.OrderStrategyType.SINGLE)
-            co = order.get("complexOrderStrategyType")
-            if co:
-                try:
-                    co_enum = getattr(schwab.orders.common.ComplexOrderStrategyType, co)
-                    ob.set_complex_order_strategy_type(co_enum)
-                except Exception:
-                    pass
-
-            if not debugCanSendOrders:
-                notify("Replacement order (debug): " + str(ob.build()))
-                return None
-            r3 = self.connectClient.place_order(account_hash, ob)
-            new_order_id = Utils(self.connectClient, account_hash).extract_order_id(r3)
-            return new_order_id
-        except Exception as e:
-            logger.error(f"Error editing order {order_id}: {e}")
-            return None
+        return self.order_manager.edit_order_price(order_id, new_price)

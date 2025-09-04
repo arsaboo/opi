@@ -8,7 +8,7 @@ from rich.text import Text
 from ..utils import style_cell as cell
 import asyncio
 # keyboard not used here; avoid global hooks
-from api.orders import cancel_order
+from api.order_manager import cancel_order
 from core.common import round_to_nearest_five_cents
 from configuration import stream_quotes
 
