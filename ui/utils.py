@@ -11,6 +11,13 @@ PERCENT_FIELDS = {
     "protection",
 }
 
+# Percent value scaling rules:
+# - Fields in FRACTION_PERCENT_FIELDS are provided as fractions (0..1) and
+#   should be multiplied by 100 for display.
+# - All other fields in PERCENT_FIELDS are already provided as true percent
+#   values (e.g., 2.49 for 2.49%) and should NOT be scaled again.
+FRACTION_PERCENT_FIELDS = {"cagr", "protection", "ann_rom"}
+
 MONEY_FIELDS = {
     "investment",
     "borrowed",
@@ -41,7 +48,6 @@ RIGHT_JUSTIFY_FIELDS = {
     "Extrinsic",
     "Strike Δ",
     "Strike \u0010",
-    # Spreads and margin screens
     "strike_low",
     "strike_high",
     "low_strike",
@@ -120,9 +126,22 @@ def style_ba(
     return t
 
 
+def _get_delta_style(
+    v: Optional[float], pv: Optional[float], higher_is_better: bool = True
+) -> str:
+    if v is None or pv is None:
+        return ""
+    if v > pv:
+        return "bold green" if higher_is_better else "bold red"
+    if v < pv:
+        return "bold red" if higher_is_better else "bold green"
+    return ""
+
+
 def style_cell(field: str, value: Any, prev: Any | None = None) -> Text:
     style = ""
     text = "" if value is None else str(value)
+    justify = "left"
 
     # Status-like fields
     if field.lower() in {"status"}:
@@ -138,102 +157,73 @@ def style_cell(field: str, value: Any, prev: Any | None = None) -> Text:
     if field.lower() in {"config status", "config_status"} and text == "Not Configured":
         return Text(text, style="yellow", justify="left")
 
-    # Credit-like positive/negative coloring
-    if field in {"Credit", "Cr/Day", "CrDayPerPt"}:
-        v = _to_float(value)
-        if v is not None:
-            if v > 0:
-                style = "green"
-            elif v < 0:
-                style = "red"
-            pv = _to_float(prev)
-            if pv is not None:
-                if v > pv:
-                    style = "bold green"
-                elif v < pv:
-                    style = "bold red"
-        return Text(text, style=style, justify="right")
+    v = _to_float(value)
+    pv = _to_float(prev)
+    display = text
+    is_numeric = v is not None
 
-    if field in {"Strike Δ", "Strike \u0010"}:  # include any prior encoding artifacts
-        v = _to_float(value)
-        if v is not None:
-            if v > 0:
-                style = "green"
-            elif v < 0:
-                style = "red"
-        return Text(text, style=style, justify="right")
+    if is_numeric:
+        justify = "right"
 
-    # Extrinsic heuristic
-    if field == "Extrinsic":
-        v = _to_float(value)
-        if v is not None:
-            style = "green" if v < 1 else "red"
-        return Text(text, style=style, justify="right")
+        # Credit-like positive/negative coloring
+        if field in {"Credit", "Cr/Day", "CrDayPerPt"}:
+            style = _get_delta_style(v, pv)
+            if not style and v is not None:
+                if v > 0:
+                    style = "green"
+                elif v < 0:
+                    style = "red"
 
-    # Percent fields formatting and delta coloring
-    if field in PERCENT_FIELDS:
-        v = _to_float(value)
-        pv = _to_float(prev)
-        # Heuristic: convert fractions to percent. Special-case CAGR which can legitimately exceed 1.0
-        # (e.g., 1.66 => 166%) when ROI is very large.
-        display = text
-        if v is not None:
-            if "%" in str(value):
-                display = str(value)
-            else:
-                if field == "cagr":
+        # Strike delta
+        elif field in {"Strike Δ", "Strike \u0010"}:
+            if v is not None:
+                if v > 0:
+                    style = "green"
+                elif v < 0:
+                    style = "red"
+
+        # Extrinsic heuristic
+        elif field == "Extrinsic":
+            if v is not None:
+                style = "green" if v < 1 else "red"
+
+        # Percent fields formatting and delta coloring
+        elif field in PERCENT_FIELDS:
+            style = _get_delta_style(v, pv)
+            if "%" in text:
+                display = text
+            elif v is not None:
+                # Convert only fraction-based fields; others are already percent values
+                if field in FRACTION_PERCENT_FIELDS and 0 <= v <= 1:
                     display = _fmt_percent(v * 100)
                 else:
-                    display = _fmt_percent(v * 100 if 0 <= v <= 1 else v)
-        if v is not None and pv is not None:
-            if v > pv:
-                style = "bold green"
-            elif v < pv:
-                style = "bold red"
-        # Base color for positive/negative
-        if not style and v is not None:
-            style = "green" if v > 0 else "red" if v < 0 else ""
-        return Text(display, style=style, justify="right")
+                    display = _fmt_percent(v)
 
-    # Money fields formatting
-    if field in MONEY_FIELDS:
-        v = _to_float(value)
-        pv = _to_float(prev)
-        display = _fmt_money(v) if v is not None else text
-        if v is not None and pv is not None:
-            if v > pv:
-                style = "bold red"
-            elif v < pv:
-                style = "bold green"
-        return Text(display, style=style, justify="right")
+            if not style and v is not None:
+                style = "green" if v > 0 else "red" if v < 0 else ""
 
-    # Default numeric handling
-    if field == "Underlying Price":
-        v = _to_float(value)
-        pv = _to_float(prev)
-        style = ""
-        if v is not None and pv is not None:
-            if v > pv:
-                style = "bold green"
-            elif v < pv:
-                style = "bold red"
-        display = f"{v:.2f}" if isinstance(v, float) else (str(value) if value is not None else "")
-        return Text(display, style=style, justify="right")
+        # Money fields formatting
+        elif field in MONEY_FIELDS:
+            style = _get_delta_style(v, pv, higher_is_better=False)
+            if v is not None:
+                display = _fmt_money(v)
 
-    # Default numeric handling
-    v = _to_float(value)
-    if v is not None:
-        pv = _to_float(prev)
-        if pv is not None:
-            if v > pv:
-                style = "bold"
-            elif v < pv:
-                style = "bold"
-        return Text(f"{v}", style=style, justify="right")
+        # Underlying Price
+        elif field == "Underlying Price":
+            style = _get_delta_style(v, pv)
+            if isinstance(v, float):
+                display = f"{v:.2f}"
+
+        # Default numeric handling
+        else:
+            if pv is not None:
+                if v > pv or v < pv:
+                    style = "bold"
+            display = f"{v}"
 
     # If value is non-numeric but column is numeric-like, keep right alignment
-    if field in RIGHT_JUSTIFY_FIELDS:
-        return Text(text, style=style, justify="right")
+    if not is_numeric and field in RIGHT_JUSTIFY_FIELDS:
+        justify = "right"
 
     # Fallback
-    return Text(text, style=style, justify="left")
+    return Text(display, style=style, justify=justify)
