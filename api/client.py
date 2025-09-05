@@ -1,18 +1,13 @@
-import datetime
 import json
 import os
 import time
-from datetime import datetime, timedelta, time as time_module
+from datetime import datetime, timedelta
 from operator import itemgetter
 from statistics import median
 
 import pytz
 import requests
-import schwab
 from schwab import auth
-from schwab.orders.options import OptionSymbol
-from schwab.utils import Utils
-from tzlocal import get_localzone
 
 import alert
 from status import notify, notify_exception, publish_exception
@@ -566,14 +561,15 @@ class Api:
 
     def optionPositions(self, data):
         data = json.loads(data)
-        positions = data["securitiesAccount"]["positions"]
+        positions = data["securitiesAccount"].get("positions", [])
         logger.debug("Positions: %s", positions)
         shortPositions = []
         for position in positions:
+            # Only include short CALL option positions
             if (
-                position["instrument"]["assetType"] != "OPTION"
-                and position["instrument"].get("putCall") != "CALL"
-                and position["shortQuantity"] == 0
+                position.get("instrument", {}).get("assetType") != "OPTION"
+                or position["instrument"].get("putCall") != "CALL"
+                or position.get("shortQuantity", 0) == 0
             ):
                 continue
             entry = {

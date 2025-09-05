@@ -313,34 +313,7 @@ class StreamingQuoteProvider:
                 snap["LAST_PRICE"] = last["last"]
             self._quotes[key] = snap
 
-    def is_subscribed(self, symbol: str) -> bool:
-        return symbol in self._opt_subs or symbol.upper() in self._eq_subs
-
-    def get_bid_ask(self, symbol: str) -> Tuple[Optional[float], Optional[float]]:
-        q = self._quotes.get(symbol)
-        if not q:
-            return (None, None)
-        bid = q.get("BID_PRICE") or q.get("bidPrice") or q.get("BID") or q.get("bid")
-        ask = q.get("ASK_PRICE") or q.get("askPrice") or q.get("ASK") or q.get("ask")
-        try:
-            bid_f = float(bid) if bid is not None else None
-        except Exception:
-            bid_f = None
-        try:
-            ask_f = float(ask) if ask is not None else None
-        except Exception:
-            ask_f = None
-        return (bid_f, ask_f)
-
-    def get_last(self, symbol: str) -> Optional[float]:
-        q = self._quotes.get(symbol)
-        if not q:
-            return None
-        last = q.get("LAST_PRICE") or q.get("lastPrice") or q.get("LAST") or q.get("last")
-        try:
-            return float(last) if last is not None else None
-        except Exception:
-            return None
+    # Duplicate helper methods removed (see earlier definitions above)
 
     def get_all_subscribed(self) -> set[str]:
         return set(self._opt_subs) | set(self._eq_subs)

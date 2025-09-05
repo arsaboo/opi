@@ -36,11 +36,21 @@ SCHWAB_ACCOUNT_ID=your_account_id_here
 ## Architecture
 
 The codebase is organized with clear separation of concerns:
-- `api.py`: Handles all Schwab API interactions for options trading
-- `optionChain.py`: Processes option chain data from Schwab API
-- `cc.py`: Implements options rolling logic
-- `ui/`: Contains all Textual UI components and logic
-- `main.py`: Entry point that launches the Textual UI application
+- `api/`: SDK-facing logic
+  - `api/client.py` (`Api`): token setup, quotes, option chains, account lookup
+  - `api/option_chain.py` (`OptionChain`): maps Schwab option chain JSON to internal format
+  - `api/order_manager.py` (`OrderManager`): builds and sends orders, monitoring/cancel/edit
+  - `api/streaming/`: live quote provider and subscription coordination for UI
+- `core/`: computation utilities (spreads, pricing, date helpers)
+  - `core/box_spreads.py`: box spread evaluation
+  - `core/spreads_common.py`: common helpers for spreads
+  - `core/common.py`: shared utils (dates, moneyness, rounding)
+- `ui/`: Textual TUI (widgets, views, layout)
+  - `ui/main.py`: application shell and navigation
+  - `ui/widgets/`, `ui/views/`: feature screens and components
+- `status.py`: UI-aware status/exception publishing
+- `state_manager.py`: persistence of tracked symbols between runs
+- `main.py`: CLI entry point to launch the TUI
 
 ## Usage
 
@@ -73,8 +83,6 @@ All logs and status messages are displayed within the Textual UI status log pane
 - Keyboard shortcuts for quick navigation
 - Color-coded data for better visualization
 - Automatic data refresh for live updates
-- Machine learning enhanced roll timing with technical indicators
-- Advanced counterfactual analysis for optimal roll strategies
 
 ## Configuration
 
