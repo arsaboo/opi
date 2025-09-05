@@ -55,7 +55,7 @@ def make_chain(date_str: str, strikes, bids_asks, prefix: str):
 
 
 class TestBoxSpreads(unittest.TestCase):
-    def test_box_spread_buy_and_sell(self):
+    def test_box_spread_sell_only_positive_cost(self):
         # Build synthetic one-day chain at T+20 days
         days = 20
         date = (datetime.today() + timedelta(days=days)).strftime("%Y-%m-%d")
@@ -70,26 +70,16 @@ class TestBoxSpreads(unittest.TestCase):
         calls = json.dumps(make_chain(date, strikes, c_ba, "C"))
         puts = json.dumps(make_chain(date, strikes, p_ba, "P"))
 
-        # Buy box: mid_trade_price = -(LP+HC - HP - LC) = 6
-        buy = calculate_box_spread(spread, calls, puts, trade="buy")
-        self.assertIsNotNone(buy)
-        self.assertEqual(buy["direction"], "Buy")
-        self.assertEqual(buy["face_value"], spread * 100)
-        # Upfront = mid_trade_price * 100 = 600
-        self.assertAlmostEqual(buy["mid_upfront_amount"], 600.0, places=2)
-        # Annualized return = ((face - upfront)/face) * (365/days)
-        expected_buy_ann = ((spread * 100 - 600.0) / (spread * 100)) * (365 / days) * 100
-        self.assertAlmostEqual(buy["mid_annualized_return"], round(expected_buy_ann, 2), places=2)
-
-        # Sell box: mid_trade_price = (LC + HP - HC - LP) = 6
-        sell = calculate_box_spread(spread, calls, puts, trade="sell")
+        # Sell box only: mid_trade_price = (LC + HP - HC - LP) = 6
+        sell = calculate_box_spread(spread, calls, puts)
         self.assertIsNotNone(sell)
         self.assertEqual(sell["direction"], "Sell")
         self.assertEqual(sell["face_value"], spread * 100)
         # Borrowed = upfront (= mid_trade_price * 100)
         self.assertAlmostEqual(sell["borrowed"], 600.0, places=2)
-        expected_sell_ann = ((600.0 - spread * 100) / (spread * 100)) * (365 / days) * 100
-        self.assertAlmostEqual(sell["mid_annualized_return"], round(expected_sell_ann, 2), places=2)
+        # Positive cost rate: ((face - upfront)/upfront) * (365/days)
+        expected_cost = ((spread * 100 - 600.0) / 600.0) * (365 / days) * 100
+        self.assertAlmostEqual(sell["mid_annualized_return"], round(expected_cost, 2), places=2)
 
 
 if __name__ == '__main__':

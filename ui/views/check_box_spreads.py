@@ -27,7 +27,7 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
-        self.app.update_header("Options Trader - Box Spreads")
+        self.app.update_header("Options Trader - Sell Box Spreads")
         # Only check market status if not already set
         if self._previous_market_status is None:
             self.check_market_status()
@@ -45,11 +45,10 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
             "High Put B/A",
             "Mid Net Price",
             "Nat Net Price",
-            "Investment",
             "Borrowed",
             "Face Value",
-            "Mid Ann. Return %",
-            "Nat Ann. Return %",
+            "Mid Ann. Cost %",
+            "Nat Ann. Cost %",
             "Flags",
             "Refreshed"
         )
@@ -185,17 +184,14 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                 try:
                     v = float(str(val).replace("%", ""))
                     pv = float(str(prev_val).replace("%", "")) if prev_val is not None else None
-                    # For box spreads:
-                    # - Buying: Higher positive returns are better (green)
-                    # - Selling: Higher (less negative) returns are better (green)
-                    # Base style - color based on value (positive/green, negative/red)
-                    style = "green" if v > 0 else "red" if v < 0 else ""
-                    # Highlight changes - override with bold colors for increase/decrease
+                    # For sell box cost rates (positive): lower is better
+                    style = ""
+                    # Highlight changes: lower vs previous = better (bold green), higher = worse (bold red)
                     if pv is not None:
-                        if v > pv:
-                            style = "bold green"  # Bold green for increase
-                        elif v < pv:
-                            style = "bold red"    # Bold red for decrease
+                        if v < pv:
+                            style = "bold green"
+                        elif v > pv:
+                            style = "bold red"
                     return style
                 except:
                     return ""
@@ -237,12 +233,13 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                 try:
                     v = float(str(val).replace("%", ""))
                     pv = float(str(prev_val).replace("%", "")) if prev_val is not None else None
-                    style = "green" if v > 0 else "red" if v < 0 else ""
+                    # Lower cost is better
+                    style = ""
                     if pv is not None:
-                        if v > pv:
-                            style = "bold green"  # Bold green for increase
-                        elif v < pv:
-                            style = "bold red"    # Bold red for decrease
+                        if v < pv:
+                            style = "bold green"
+                        elif v > pv:
+                            style = "bold red"
                     return style
                 except:
                     return ""
@@ -277,11 +274,11 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                     style = get_cell_style(col_name, val, prev_val)
                     # Justify numerical columns to the right
                     right_justify_cols = {
-                        "low_strike", "high_strike", "net_price", "investment", "repayment",
+                        "low_strike", "high_strike", "net_price", "repayment",
                         "borrowed", "repayment_sell", "ann_cost_return", "margin_req",
                         "mid_net_price", "nat_net_price", "mid_annualized_return", "nat_annualized_return",
-                        "mid_upfront_amount", "mid_investment", "mid_borrowed", "nat_upfront_amount",
-                        "nat_investment", "nat_borrowed", "face_value", "days_to_expiry"
+                        "mid_upfront_amount", "mid_borrowed", "nat_upfront_amount",
+                        "nat_borrowed", "face_value", "days_to_expiry"
                     }
                     justify = "right" if col_name in right_justify_cols else "left"
 
@@ -304,7 +301,7 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                             style = get_cell_style(col_name, val, formatted_prev_val)
                         except ValueError:
                             pass  # Keep original value if conversion fails
-                    elif col_name in ["investment", "borrowed", "mid_upfront_amount", "nat_upfront_amount",
+                    elif col_name in ["borrowed", "mid_upfront_amount", "nat_upfront_amount",
                                       "face_value"]:
                         # Format monetary values
                         try:
@@ -407,8 +404,7 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                     high_put_ba_text,  # Styled B|A
                     cell("mid_net_price", row.get("mid_net_price"), prev_row.get("mid_net_price")),
                     cell("nat_net_price", row.get("nat_net_price"), prev_row.get("nat_net_price")),
-                    cell("mid_upfront_amount", row.get("mid_upfront_amount"), prev_row.get("mid_upfront_amount")) if row["direction"] == "Buy" else Text("", justify="right"),
-                    cell("mid_upfront_amount", row.get("mid_upfront_amount"), prev_row.get("mid_upfront_amount")) if row["direction"] == "Sell" else Text("", justify="right"),
+                    cell("mid_upfront_amount", row.get("mid_upfront_amount"), prev_row.get("mid_upfront_amount")),
                     face_value_text,
                     cell("mid_annualized_return", row.get("mid_annualized_return"), prev_row.get("mid_annualized_return")),
                     cell("nat_annualized_return", row.get("nat_annualized_return"), prev_row.get("nat_annualized_return")),
@@ -447,7 +443,8 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                 except Exception:
                     pass
         else:
-            table.add_row("No box spreads found.", *[""] * 16, refreshed_time)
+            # 17 columns total now (1 + 15 blanks + 1 time)
+            table.add_row("No box spreads found.", *[""] * 15, refreshed_time)
 
     def refresh_streaming_quotes(self) -> None:
         if not stream_quotes or not getattr(self, "_quote_provider", None) or not getattr(self, "_ba_maps", None):

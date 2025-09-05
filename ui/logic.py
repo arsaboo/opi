@@ -14,10 +14,9 @@ from core.synthetic_covered_calls import synthetic_covered_call_spread as core_s
 
 # Helpers for using core calculators from UI
 def calculate_box_spread_wrapper(spread, calls, puts):
-    buy_result = core_calc_box(spread, json.dumps(calls), json.dumps(puts), trade="buy")
-    sell_result = core_calc_box(spread, json.dumps(calls), json.dumps(puts), trade="sell")
+    # Sell-only box spread calculation
+    sell_result = core_calc_box(spread, json.dumps(calls), json.dumps(puts))
     return [
-        (buy_result, spread, "Buy"),
         (sell_result, spread, "Sell"),
     ]
 
@@ -203,7 +202,8 @@ async def process_short_position(api, short):
 
 async def get_box_spreads_data(api, asset="$SPX"):
     """
-    Fetches both buy and sell box spread data, showing only the best buy (lowest cost) and best sell (highest return) per expiry.
+    Fetch sell box spread data only, keeping the best sell (highest annualized return)
+    per expiry across spread widths.
     """
     try:
         days = spreads[asset].get("days", 2000)
@@ -228,24 +228,18 @@ async def get_box_spreads_data(api, asset="$SPX"):
         spread_ranges = range(100, 500, 50)
         results = []
         for spread in spread_ranges:
-            buy_result = await asyncio.to_thread(calculate_box_spread_wrapper, spread, calls, puts)
-            for result, _, direction in buy_result:
+            wrapped = await asyncio.to_thread(calculate_box_spread_wrapper, spread, calls, puts)
+            for result, _, _ in wrapped:
                 if result is not None:
                     results.append(result)
 
-        # Group by expiry date and direction, keep only best buy (lowest cost) and best sell (highest return)
+        # Group by expiry date only, keep best SELL per expiry (lowest cost)
         best_spreads = {}
         for spread in results:
-            key = (spread["date"], spread["direction"])
-            ann_return_val = float(spread["ann_rom"]) if spread["ann_rom"] is not None else 0
-            if spread["direction"] == "Buy":
-                # For buy, keep the highest annualized return
-                if key not in best_spreads or ann_return_val > float(best_spreads[key]["ann_rom"] or 0):
-                    best_spreads[key] = spread
-            else:
-                # For sell, keep the highest annualized return (most negative is worst, least negative is best)
-                if key not in best_spreads or ann_return_val > float(best_spreads[key]["ann_rom"] or 0):
-                    best_spreads[key] = spread
+            key = spread["date"]
+            ann_return_val = float(spread["ann_rom"]) if spread["ann_rom"] is not None else float("inf")
+            if key not in best_spreads or ann_return_val < float(best_spreads[key]["ann_rom"] or float("inf")):
+                best_spreads[key] = spread
 
         box_spreads = []
         for spread in best_spreads.values():
@@ -289,6 +283,22 @@ async def get_box_spreads_data(api, asset="$SPX"):
                     if high_put_ask < high_put_bid:
                         flags.append("High Put Negative Spread")
 
+                # Additional sanity flags
+                try:
+                    mid_upfront = spread.get("mid_upfront_amount")
+                    nat_net = spread.get("nat_net_price")
+                    mid_net = spread.get("mid_net_price")
+                    fv = spread.get("face_value")
+                    if isinstance(mid_upfront, (int, float)) and isinstance(fv, (int, float)):
+                        if mid_upfront >= fv:
+                            flags.append("Credit>Face")
+                    if isinstance(nat_net, (int, float)) and nat_net <= 0:
+                        flags.append("Nat<=0")
+                    if isinstance(mid_net, (int, float)) and mid_net <= 0:
+                        flags.append("Mid<=0")
+                except Exception:
+                    pass
+
                 box_spreads.append({
                     "direction": spread["direction"],
                     "date": spread["date"],
@@ -314,9 +324,9 @@ async def get_box_spreads_data(api, asset="$SPX"):
                     "face_value": spread.get("face_value", ""),
                     # Backward compatibility fields (using mid-based values)
                     "net_price": spread.get("net_price", ""),
-                    "investment": spread.get("investment", ""),
+                    "investment": None,
                     "borrowed": spread.get("borrowed", ""),
-                    "repayment": spread.get("repayment", ""),
+                    "repayment": None,
                     "repayment_sell": spread.get("repayment_sell", ""),
                     "ann_cost_return": spread.get("ann_rom", ""),
                     "days_to_expiry": spread.get("days_to_expiry", ""),

@@ -75,7 +75,7 @@ All logs and status messages are displayed within the Textual UI status log pane
 
 - Interactive Textual UI for all operations
 - Roll short options positions with real-time data
-- Check box spreads with visual analysis
+- Check sell box spreads with annualized cost view
 - Analyze vertical spreads with sorting and filtering
 - Check synthetic covered calls with detailed views
 - View margin requirements with comprehensive breakdowns
