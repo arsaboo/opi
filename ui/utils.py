@@ -208,6 +208,19 @@ def style_cell(field: str, value: Any, prev: Any | None = None) -> Text:
         return Text(display, style=style, justify="right")
 
     # Default numeric handling
+    if field == "Underlying Price":
+        v = _to_float(value)
+        pv = _to_float(prev)
+        style = ""
+        if v is not None and pv is not None:
+            if v > pv:
+                style = "bold green"
+            elif v < pv:
+                style = "bold red"
+        display = f"{v:.2f}" if isinstance(v, float) else (str(value) if value is not None else "")
+        return Text(display, style=style, justify="right")
+
+    # Default numeric handling
     v = _to_float(value)
     if v is not None:
         pv = _to_float(prev)

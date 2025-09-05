@@ -565,12 +565,11 @@ class Api:
         logger.debug("Positions: %s", positions)
         shortPositions = []
         for position in positions:
-            # Only include short CALL option positions
-            if (
-                position.get("instrument", {}).get("assetType") != "OPTION"
-                or position["instrument"].get("putCall") != "CALL"
-                or position.get("shortQuantity", 0) == 0
-            ):
+            # Include all short option positions (CALL or PUT)
+            instr = position.get("instrument", {})
+            if instr.get("assetType") != "OPTION":
+                continue
+            if position.get("shortQuantity", 0) == 0:
                 continue
             entry = {
                 "stockSymbol": position["instrument"].get("underlyingSymbol"),
