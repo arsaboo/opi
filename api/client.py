@@ -617,6 +617,26 @@ class Api:
             symbol, expiration, strike_low, strike_high, amount, price=price
         )
 
+    def sell_box_spread_order(
+        self,
+        low_call_symbol: str,
+        high_call_symbol: str,
+        low_put_symbol: str,
+        high_put_symbol: str,
+        amount: int,
+        *,
+        price: float,
+    ):
+        """Place a 4-leg SELL box spread order (custom complex strategy)."""
+        return self.order_manager.sell_box_spread_order(
+            low_call_symbol,
+            high_call_symbol,
+            low_put_symbol,
+            high_put_symbol,
+            amount,
+            price=price,
+        )
+
     def place_order(self, order_func, order_params, price):
         """
         Place an order with automatic price improvements if not filled

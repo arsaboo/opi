@@ -1,8 +1,10 @@
 from textual.widgets import DataTable
 from .base_spread_view import BaseSpreadView
 from textual import work
- 
+
 from datetime import datetime
+import asyncio
+import keyboard
 from .. import logic
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
@@ -11,6 +13,14 @@ from ..utils import style_cell as cell, style_ba, style_flags
 from configuration import stream_quotes
 from api.streaming.subscription_manager import get_subscription_manager
 from api.streaming.provider import get_provider
+from api.order_manager import handle_cancel, reset_cancel_flag, cancel_order
+from core.common import round_to_nearest_five_cents
+
+# Read manual ordering flag from configuration with safe default
+try:
+    from configuration import manual_order as MANUAL_ORDER
+except Exception:
+    MANUAL_ORDER = False
 
 class CheckBoxSpreadsWidget(BaseSpreadView):
     """A widget to display box spreads."""
@@ -20,6 +30,7 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
         self._prev_rows = None  # Store previous data for comparison
         self._box_spreads_data = []  # Store actual box spreads data for order placement
         self._previous_market_status = None  # Track previous market status
+        self._override_price = None  # User-edited initial price
 
     def compose(self):
         """Create child widgets."""
@@ -111,6 +122,17 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                                            box_spread_data.get("investment",
                                            box_spread_data.get("borrowed", 0)))
 
+        # Default price suggestion (per contract): prefer mid, fallback to nat
+        suggested_price = None
+        try:
+            suggested_price = (
+                float(mid_net_price)
+                if mid_net_price not in (None, "")
+                else float(nat_net_price) if nat_net_price not in (None, "") else None
+            )
+        except Exception:
+            suggested_price = None
+
         order_details = {
             "Type": type_label,
             "Direction": direction,
@@ -120,6 +142,8 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
             "Strike High": box_spread_data.get("high_strike", ""),
             "Spread Width": float(box_spread_data.get("high_strike", 0)) - float(box_spread_data.get("low_strike", 0)) if box_spread_data.get("high_strike") and box_spread_data.get("low_strike") else "",
             "Face Value": face_value,  # Pass numeric value, let order confirmation screen format it
+            # Editable price input (per contract)
+            "Price": suggested_price,
             "Mid Net Price": mid_net_price,
             "Nat Net Price": nat_net_price,
             "Upfront Amount": upfront_amount,  # Pass numeric value, let order confirmation screen format it
@@ -130,9 +154,16 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
         screen = OrderConfirmationScreen(order_details)
         self.app.push_screen(screen, callback=self.handle_order_confirmation)
 
-    def handle_order_confirmation(self, confirmed: bool) -> None:
-        """Handle the user's response to the order confirmation."""
+    def handle_order_confirmation(self, result) -> None:
+        """Handle the user's response to the order confirmation, capturing edited price if provided."""
+        confirmed = result.get("confirmed") if isinstance(result, dict) else bool(result)
         if confirmed:
+            # Capture price override if present
+            if isinstance(result, dict) and result.get("price") is not None:
+                try:
+                    self._override_price = float(result.get("price"))
+                except Exception:
+                    self._override_price = None
             self.app.query_one(StatusLog).add_message("Order confirmed. Placing box spread order...")
             self.place_box_spread_order()
         else:
@@ -140,30 +171,103 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
 
     @work
     async def place_box_spread_order(self) -> None:
-        """Place the box spread order."""
+        """Place the box spread SELL order with automatic price improvement and UI feedback."""
         try:
             # Get the selected row data
             table = self.query_one(DataTable)
             cursor_row = table.cursor_row
 
             if cursor_row < len(self._box_spreads_data):
-                box_spread_data = self._box_spreads_data[cursor_row]
+                row = self._box_spreads_data[cursor_row]
 
-                # Extract required data
-                # Note: Box spread order placement is more complex and would require implementing
-                # the actual order construction in the API. For now, we'll just log the attempt.
-                direction = box_spread_data.get("direction", "")
-                expiration = box_spread_data.get("date", "")
-                low_strike = box_spread_data.get("low_strike", "")
-                high_strike = box_spread_data.get("high_strike", "")
-                net_price = box_spread_data.get("net_price", "")
+                # Extract symbols for the 4 legs
+                low_call_symbol = row.get("low_call_symbol")
+                high_call_symbol = row.get("high_call_symbol")
+                low_put_symbol = row.get("low_put_symbol")
+                high_put_symbol = row.get("high_put_symbol")
 
-                self.app.query_one(StatusLog).add_message(f"Box spread order placement not yet implemented.")
-                self.app.query_one(StatusLog).add_message(f"Would place {direction} box spread:")
-                self.app.query_one(StatusLog).add_message(f"  Expiration: {expiration}")
-                self.app.query_one(StatusLog).add_message(f"  Low Strike: {low_strike}")
-                self.app.query_one(StatusLog).add_message(f"  High Strike: {high_strike}")
-                self.app.query_one(StatusLog).add_message(f"  Net Price: {net_price}")
+                if not all([low_call_symbol, high_call_symbol, low_put_symbol, high_put_symbol]):
+                    self.app.query_one(StatusLog).add_message("Error: Missing option leg symbols for box spread.")
+                    return
+
+                # Determine initial price (credit per contract)
+                try:
+                    initial_price = (
+                        self._override_price
+                        if self._override_price is not None
+                        else float(row.get("mid_net_price")) if row.get("mid_net_price") not in (None, "")
+                        else float(row.get("nat_net_price")) if row.get("nat_net_price") not in (None, "")
+                        else None
+                    )
+                except Exception:
+                    initial_price = None
+
+                if initial_price is None:
+                    self.app.query_one(StatusLog).add_message("Error: Could not determine initial price for box spread.")
+                    return
+
+                # Reset cancel flag and set keyboard cancel handler
+                try:
+                    reset_cancel_flag()
+                    keyboard.unhook_all()
+                    keyboard.on_press(handle_cancel)
+                except Exception:
+                    pass
+
+                # Manual vs automatic handling
+                try:
+                    if MANUAL_ORDER:
+                        # Place once at selected price; manage from Order Management
+                        order_id = await asyncio.to_thread(
+                            self.app.api.sell_box_spread_order,
+                            low_call_symbol,
+                            high_call_symbol,
+                            low_put_symbol,
+                            high_put_symbol,
+                            1,
+                            price=initial_price,
+                        )
+                        if order_id is None:
+                            self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
+                            self.app.query_one(StatusLog).add_message(
+                                f"Legs: {low_call_symbol} / {high_call_symbol} / {high_put_symbol} / {low_put_symbol} @ ${initial_price:.2f}"
+                            )
+                        else:
+                            self.app.query_one(StatusLog).add_message(
+                                "Manual order placed. Manage from Order Management (U=Update, C=Cancel)."
+                            )
+                        return
+                    else:
+                        # Use API-level placement with price improvements and monitoring
+                        order_func = self.app.api.sell_box_spread_order
+                        order_params = [
+                            low_call_symbol,
+                            high_call_symbol,
+                            low_put_symbol,
+                            high_put_symbol,
+                            1,  # quantity
+                        ]
+
+                        self.app.query_one(StatusLog).add_message(
+                            f"Placing SELL box spread @ ${initial_price:.2f} (will improve if not filled)"
+                        )
+
+                        result = await asyncio.to_thread(
+                            self.app.api.place_order, order_func, order_params, initial_price
+                        )
+
+                        if result is True:
+                            self.app.query_one(StatusLog).add_message("Box spread order filled successfully!")
+                        elif result == "cancelled":
+                            self.app.query_one(StatusLog).add_message("Box spread order cancelled by user.")
+                        else:
+                            self.app.query_one(StatusLog).add_message("Box spread order not filled after attempts.")
+                finally:
+                    self._override_price = None
+                    try:
+                        keyboard.unhook_all()
+                    except Exception:
+                        pass
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for box spread order placement.")
         except Exception as e:
