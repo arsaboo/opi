@@ -40,7 +40,7 @@ class Api:
         self.apiKey = apiKey
         self.apiRedirectUri = apiRedirectUri
         self.appSecret = appSecret
-        
+
     @property
     def order_manager(self):
         """Lazy initialization of OrderManager"""
@@ -380,7 +380,7 @@ class Api:
         try:
             # Try different approaches to get orders
             logger.debug(f"Attempting to fetch orders with account hash: {self.getAccountHash()}")
-            
+
             # First try: Get orders with basic parameters using account-specific method
             try:
                 r = self.connectClient.get_orders_for_account(
@@ -393,7 +393,7 @@ class Api:
                 return data
             except Exception as e:
                 logger.error(f"Error with basic get_orders_for_account: {e}")
-            
+
             # Second try: Get orders with status filter
             try:
                 r = self.connectClient.get_orders_for_account(
@@ -407,13 +407,13 @@ class Api:
                 return data
             except Exception as e:
                 logger.error(f"Error with status filter get_orders_for_account: {e}")
-                
+
             # Third try: Get orders with different parameters
             try:
                 from datetime import datetime, timedelta
                 end_date = datetime.now()
                 start_date = end_date - timedelta(days=30)
-                
+
                 r = self.connectClient.get_orders_for_account(
                     self.getAccountHash(),
                     max_results=max_results,
@@ -426,7 +426,7 @@ class Api:
                 return data
             except Exception as e:
                 logger.error(f"Error with date filter get_orders_for_account: {e}")
-                
+
             # If all attempts fail, return empty list
             return []
         except Exception as e:
@@ -440,32 +440,49 @@ class Api:
             order_id = order.get("orderId", "")
             status = order.get("status", "")
             entered_time = order.get("enteredTime", "")
-            
+
             # Extract asset and order type information
             asset = ""
             order_type = ""
             quantity = ""
             price = ""
-            
+
             # Handle different order structures
             if "orderLegCollection" in order and order["orderLegCollection"]:
                 first_leg = order["orderLegCollection"][0]
                 if "instrument" in first_leg:
-                    # Try to get the underlying symbol first, then fall back to symbol
-                    asset = first_leg["instrument"].get("underlyingSymbol", "")
-                    if not asset:
-                        asset = first_leg["instrument"].get("symbol", "")
-                
+                    instrument = first_leg["instrument"]
+                    # Try multiple symbol fields in order of preference
+                    for sym_field in ["underlyingSymbol", "symbol", "cusip"]:
+                        if sym_field in instrument and instrument[sym_field]:
+                            asset = str(instrument[sym_field])
+                            break
+
                 # Use instruction instead of orderLegType for better accuracy
                 order_type = first_leg.get("instruction", first_leg.get("orderLegType", ""))
-                quantity = first_leg.get("quantity", "")
-            
-            # Try different ways to get price
-            if "price" in order:
-                price = order["price"]
-            elif "orderPrice" in order:
-                price = order["orderPrice"]
-            
+
+                # Extract quantity
+                if "quantity" in first_leg:
+                    try:
+                        quantity = str(int(first_leg["quantity"]))
+                    except (ValueError, TypeError):
+                        quantity = str(first_leg["quantity"])
+
+            # Try different ways to get price with proper formatting
+            price_value = None
+            for price_field in ["price", "orderPrice", "limitPrice"]:
+                if price_field in order and order[price_field] is not None:
+                    try:
+                        price_value = float(order[price_field])
+                        price = f"${price_value:.2f}"
+                        break
+                    except (ValueError, TypeError):
+                        continue
+
+            # If no price found, keep as empty string
+            if not price:
+                price = ""
+
             formatted_order = {
                 "order_id": order_id,
                 "status": status,

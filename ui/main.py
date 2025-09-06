@@ -269,6 +269,7 @@ class OpiApp(App):
         except Exception:
             pass
         self.check_market_status()
+        self.check_expiring_options()
         self.query_one(StatusLog).add_message(
             "Welcome to the Options Trading Bot! Press a key to select an option."
         )
@@ -428,6 +429,55 @@ class OpiApp(App):
                 self._previous_market_status = current_status
         except Exception as e:
             self.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+
+    def check_expiring_options(self) -> None:
+        """Check for options expiring today and schedule notification 60 minutes before market close."""
+        try:
+            # Get today's date
+            from datetime import datetime, timedelta
+            import pytz
+            from tzlocal import get_localzone
+            
+            # Get market hours
+            exec_window = self.api.getOptionExecutionWindow()
+            
+            # Check if we have market hours data
+            if "closeDate" in exec_window and exec_window["closeDate"]:
+                close_time = exec_window["closeDate"]
+                
+                # Get today's date
+                today = datetime.now().date()
+                
+                # Get expiring shorts data
+                import asyncio
+                short_positions = asyncio.run(self.api.updateShortPosition())
+                
+                # Filter for options expiring today
+                expiring_today = [
+                    p for p in short_positions
+                    if datetime.strptime(p["expiration"], "%Y-%m-%d").date() == today
+                ]
+                
+                if expiring_today:
+                    # Calculate 60 minutes before market close
+                    notification_time = close_time - timedelta(minutes=60)
+                    current_time = datetime.now(pytz.UTC)
+                    
+                    # If we're within the notification window, send alert
+                    if current_time >= notification_time and current_time < close_time:
+                        option_symbols = [p["optionSymbol"] for p in expiring_today]
+                        message = f"Options expiring today: {', '.join(option_symbols)}. Market closes in 60 minutes."
+                        
+                        # Send notification
+                        try:
+                            import alert
+                            alert.alert(None, message)
+                        except Exception:
+                            pass
+                        
+                        self.query_one(StatusLog).add_message(message)
+        except Exception as e:
+            self.query_one(StatusLog).add_message(f"Error checking expiring options: {e}")
 
     def update_header(self, title: str) -> None:
         """Update the app title."""

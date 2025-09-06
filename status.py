@@ -3,6 +3,9 @@ from __future__ import annotations
 from queue import Queue
 from datetime import datetime
 import re
+import os
+
+from integrations.telegram import get_notifier
 
 # Thread-safe queue for status messages destined for the TUI Status Log.
 # Items are simple dicts with keys: time, level, message
@@ -106,6 +109,18 @@ def notify(message: str, level: str = "info") -> None:
             print(message)
         except Exception:
             pass
+
+    # Optional: forward warnings/errors to Telegram if configured
+    try:
+        route_levels = os.getenv("TELEGRAM_ROUTE_LEVELS", "error,warning").lower()
+        route_set = {s.strip() for s in route_levels.split(',') if s.strip()}
+        if level.lower() in route_set:
+            notifier = get_notifier()
+            if notifier is not None:
+                notifier.send(str(message), level=level)
+    except Exception:
+        # Never fail due to notifier issues
+        pass
 
 
 def notify_exception(exc: Exception, *, prefix: str | None = None, level: str = "error") -> None:

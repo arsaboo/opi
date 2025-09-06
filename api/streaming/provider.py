@@ -1,8 +1,10 @@
 import asyncio
+import time
 from typing import Dict, Iterable, Optional, Tuple
 
 from schwab.streaming import StreamClient
 from status import publish, publish_exception
+import alert
 
 
 class StreamingQuoteProvider:
@@ -19,6 +21,9 @@ class StreamingQuoteProvider:
         self._last: Dict[str, Dict[str, float]] = {}
         # Reconnect control
         self._error_streak: int = 0
+        # Extended failure tracking
+        self._last_success_time: float = time.time()
+        self._failure_notified: bool = False
 
     async def start(self) -> None:
         if self._running:
@@ -105,6 +110,9 @@ class StreamingQuoteProvider:
         while self._running:
             try:
                 await self.stream.handle_message()
+                # Update last success time and reset failure tracking
+                self._last_success_time = time.time()
+                self._failure_notified = False
                 # If we had errors previously, reset streak on success
                 if self._error_streak:
                     self._error_streak = 0
@@ -116,11 +124,23 @@ class StreamingQuoteProvider:
                     publish(f"Streaming connection lost; reconnecting in {backoff}s (attempt {self._error_streak}).")
                 except Exception:
                     pass
+                
+                # Check for extended failure (5 minutes)
+                if time.time() - self._last_success_time > 300 and not self._failure_notified:
+                    try:
+                        alert.alert(None, "Quote feed has been failing for more than 5 minutes. Please check connection.", True)
+                        self._failure_notified = True
+                    except Exception:
+                        pass
+                
                 await asyncio.sleep(backoff)
                 try:
                     await self._restart_stream()
                     try:
                         publish("Streaming connection re-established.")
+                        # Reset failure tracking on successful reconnection
+                        self._last_success_time = time.time()
+                        self._failure_notified = False
                     except Exception:
                         pass
                 except Exception as re:

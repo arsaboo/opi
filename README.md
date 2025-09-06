@@ -109,3 +109,68 @@ Common issues:
 3. Market Hours:
    - Error: "Market is closed"
    - Solution: Run during market hours or enable debug mode
+## Notifications
+
+The bot logs to the terminal UI and can also send Telegram alerts.
+
+Configure Telegram by adding the following to your `.env` (see `.env.example`):
+
+```
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_DEFAULT_CHAT_ID=123456789
+TELEGRAM_PARSE_MODE=HTML
+TELEGRAM_DISABLE_NOTIFICATIONS=false
+TELEGRAM_ROUTE_LEVELS=error,warning
+TELEGRAM_STARTUP_PING=false
+```
+
+Alerts raised via `alert.alert(...)` are always logged locally and, if enabled, sent to Telegram. In addition, `warning` and `error` messages from `status.notify(...)` are forwarded to Telegram when their level is included in `TELEGRAM_ROUTE_LEVELS`.
+
+### Set Up Telegram Bot
+
+1) Create a bot and get the token
+- In Telegram, talk to `@BotFather`
+- Send `/newbot`, follow prompts to name it and set a unique username
+- Copy the HTTP API token and set it as `TELEGRAM_BOT_TOKEN`
+
+2) Get your chat ID
+- Start a chat with your bot in Telegram and send any message (e.g., "hi"). For groups, add the bot and send a message in the group (mention or /start@YourBot).
+- Recommended (helper script):
+  ```bash
+  # Lists chat IDs from recent updates (requires TELEGRAM_BOT_TOKEN in .env)
+  python scripts/telegram_test_send.py list
+  # If you see "No updates found", delete webhook then try again:
+  python scripts/telegram_test_send.py delete-webhook
+  python scripts/telegram_test_send.py list
+  ```
+- Alternative (HTTP):
+  ```bash
+  curl -s "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getUpdates"
+  # Inspect JSON for message.chat.id
+  ```
+- Note: Group/supergroup chat IDs are negative (often start with -100). For channels, add the bot as admin.
+
+3) Configure `.env`
+```env
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=123456:ABC...
+TELEGRAM_DEFAULT_CHAT_ID=123456789   # or a negative ID for groups
+TELEGRAM_PARSE_MODE=HTML
+TELEGRAM_DISABLE_NOTIFICATIONS=false
+TELEGRAM_ROUTE_LEVELS=error,warning
+```
+
+4) Test a message
+- Using helper script:
+  ```bash
+  python scripts/telegram_test_send.py send --text "Hello from OPI" --level warning
+  ```
+- Or run the app and trigger any warning/error, or call a code path that uses `alert.alert(...)`.
+- You should see messages in your Telegram chat and in the app’s status log.
+
+Notes:
+- Keep your bot token private; do not commit `.env`.
+- If using a group, ensure the bot has permission to post messages.
+- You do not need to enable polling or webhooks for simple outbound notifications in this project.
+ - Set `TELEGRAM_STARTUP_PING=true` to receive a one-time "Bot started" message after successful API initialization.

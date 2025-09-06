@@ -1,69 +1,57 @@
-import smtplib
-from email.message import EmailMessage
+from integrations.telegram import get_notifier
+from status import notify
 
-from configuration import botAlert, mailConfig
 
 class BotFailedError(Exception):
     """Custom exception for bot failures."""
     pass
 
-class Mail:
-    def send(self, subject, message):
-        msg = EmailMessage()
-        msg.set_content(message)
 
-        msg["Subject"] = subject
-        msg["From"] = mailConfig["from"]
-        msg["To"] = mailConfig["to"]
+import os
 
-        s = smtplib.SMTP(mailConfig["smtp"], mailConfig["port"], None, 3)
-        s.login(mailConfig["username"], mailConfig["password"])
 
+def alert(asset, message, isError: bool = False):
+    """Send an alert: logs to status + posts to Telegram if configured.
+
+    - Always logs to console/UI via status.notify
+    - Posts to Telegram when TELEGRAM_* env is configured
+    - Raises BotFailedError if isError=True
+    """
+    level = "error" if isError else "info"
+
+    # Log locally to console/UI
+    if asset:
         try:
-            s.send_message(msg)
-            try:
-                from status import notify
-                notify('Sent alert "' + message + '" via email')
-            except Exception:
-                print('Sent alert "' + message + '" via email')
-        finally:
-            s.quit()
-
-
-def alert(asset, message, isError=False):
-    if botAlert == "email":
-        msg = EmailMessage()
-        msg.set_content(message)
-
-        if isError:
-            subj = "OPI Error"
-        else:
-            subj = "OPI Alert"
-
-        if asset:
-            subj = subj + ", Asset: " + asset
-
-        mail = Mail()
-        mail.send(subj, message)
-
-        if isError:
-            raise BotFailedError(message)
-    else:
-        if asset:
-            try:
-                from status import notify
-                notify("Asset: " + asset)
-            except Exception:
-                print("Asset: " + asset)
-
-        try:
-            from status import notify
-            notify(message)
+            notify(f"Asset: {asset}")
         except Exception:
-            print(message)
+            print(f"Asset: {asset}")
 
-        if isError:
-            raise BotFailedError(message)
+    try:
+        notify(str(message), level=level)
+    except Exception:
+        print(str(message))
+
+    # Send to Telegram if available, but avoid duplicate sends when
+    # status.notify is already routing this level.
+    try:
+        route_levels = os.getenv("TELEGRAM_ROUTE_LEVELS", "error,warning").lower()
+        route_set = {s.strip() for s in route_levels.split(',') if s.strip()}
+        should_send_direct = level.lower() not in route_set
+
+        if should_send_direct:
+            notifier = get_notifier()
+            if notifier is not None:
+                parts = []
+                if asset:
+                    parts.append(f"<b>Asset:</b> {asset}")
+                parts.append(str(message))
+                notifier.send("\n".join(parts), level=level)
+    except Exception:
+        # Best-effort; ignore notifier issues
+        pass
+
+    if isError:
+        raise BotFailedError(str(message))
 
 
 def botFailed(asset, message):

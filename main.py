@@ -98,6 +98,16 @@ def main():
 
     print("API initialized successfully. Launching Textual UI...")
 
+    # Optional Telegram startup ping
+    try:
+        if os.getenv("TELEGRAM_STARTUP_PING", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            from integrations.telegram import get_notifier
+            notifier = get_notifier()
+            if notifier is not None:
+                notifier.send("Bot started ✅", level="info")
+    except Exception:
+        pass
+
     # Launch the Textual UI
     try:
         # Best-effort save on interpreter exit as a safety net
@@ -135,4 +145,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

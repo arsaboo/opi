@@ -10,9 +10,10 @@ from logger_config import get_logger
 from schwab.orders.options import OptionSymbol
 from schwab.orders.generic import OrderBuilder
 from schwab.orders.common import (
-    Duration, Session, OrderType, OrderStrategyType, 
+    Duration, Session, OrderType, OrderStrategyType,
     ComplexOrderStrategyType, OptionInstruction
 )
+import alert
 
 # Global flag for order cancellation
 cancel_order = False
@@ -47,12 +48,88 @@ class OrderManager:
         if not debugCanSendOrders:
             notify(str(order_spec.build()))
             return None
-        
+
         r = self.api.connectClient.place_order(self._get_account_hash(), order_spec)
-        
+
         from schwab.utils import Utils
         order_id = Utils(self.api.connectClient, self._get_account_hash()).extract_order_id(r)
         assert order_id is not None
+
+        # Extract order details for notification
+        try:
+            order_details = order_spec.build()
+
+            # Extract details from order legs
+            symbol = "Unknown"
+            quantity = "Unknown"
+            price = "Unknown"
+
+            # Try to extract details from the built order
+            if hasattr(order_details, 'get'):
+                # Dictionary-like access
+                order_dict = order_details
+            elif hasattr(order_details, '__dict__'):
+                # Object with __dict__
+                order_dict = order_details.__dict__
+            else:
+                # Try to convert to dict
+                order_dict = dict(order_details) if order_details else {}
+
+            # Extract price first
+            for price_key in ['price', 'orderPrice', 'limitPrice']:
+                if price_key in order_dict and order_dict[price_key] is not None:
+                    try:
+                        price = f"${float(order_dict[price_key]):.2f}"
+                        break
+                    except (ValueError, TypeError):
+                        continue
+
+            # Extract from order legs
+            legs = order_dict.get('orderLegCollection', []) or []
+            if legs:
+                first_leg = legs[0]
+                if isinstance(first_leg, dict):
+                    # Extract quantity
+                    if 'quantity' in first_leg:
+                        try:
+                            quantity = str(int(first_leg['quantity']))
+                        except (ValueError, TypeError):
+                            quantity = str(first_leg['quantity'])
+
+                    # Extract symbol from instrument
+                    instrument = first_leg.get('instrument', {})
+                    if isinstance(instrument, dict):
+                        # Try different symbol fields
+                        for sym_key in ['symbol', 'underlyingSymbol', 'cusip']:
+                            if sym_key in instrument and instrument[sym_key]:
+                                symbol = str(instrument[sym_key])
+                                break
+
+            # If still unknown, try alternative extraction methods
+            if symbol == "Unknown" and hasattr(order_spec, '_legs'):
+                try:
+                    legs = order_spec._legs
+                    if legs:
+                        first_leg = legs[0]
+                        if hasattr(first_leg, 'instrument') and hasattr(first_leg.instrument, 'symbol'):
+                            symbol = str(first_leg.instrument.symbol)
+                        elif hasattr(first_leg, '_instrument'):
+                            symbol = str(first_leg._instrument)
+                except:
+                    pass
+
+            # Notify about order placement with details
+            try:
+                alert.alert(None, f"Order placed successfully for {symbol} (Quantity: {quantity}, Price: {price}, ID: {order_id})")
+            except Exception:
+                pass
+        except Exception as e:
+            # Fallback to simple notification if we can't extract details
+            try:
+                alert.alert(None, f"Order placed successfully (ID: {order_id})")
+            except Exception:
+                pass
+
         return order_id
 
     def write_new_contracts(
@@ -263,7 +340,7 @@ class OrderManager:
         # Check cache first
         cache_key = str(order_id)
         current_time = time.time()
-        
+
         if cache_key in self._order_cache:
             cached_time, cached_status = self._order_cache[cache_key]
             if current_time - cached_time < self._cache_expiry:
@@ -310,10 +387,10 @@ class OrderManager:
             "typeAdjustedPrice": type_adjusted_price,
             "orderType": order_type,
         }
-        
+
         # Cache the result
         self._order_cache[cache_key] = (current_time, status_result)
-        
+
         return status_result
 
     def cancel_order(self, order_id):
@@ -514,7 +591,7 @@ class OrderManager:
     def monitor_order(self, order_id, timeout=60):
         """Monitor order status and handle cancellation with dynamic display"""
         global cancel_order
-        
+
         start_time = time.time()
         last_status_check = 0
         next_log_time = 0  # throttle UI log updates
@@ -550,6 +627,11 @@ class OrderManager:
 
                     if order_status["filled"]:
                         notify("Order filled successfully!")
+                        # Notify about order filled
+                        try:
+                            alert.alert(None, f"Order {order_id} filled successfully!")
+                        except Exception:
+                            pass
                         return True
                     elif order_status["status"] == "REJECTED":
                         notify("Order rejected: " + order_status.get('rejection_reason', 'No reason provided'))

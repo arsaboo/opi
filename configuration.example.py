@@ -1,16 +1,9 @@
-# Schwab API settings (now loaded from .env file)
-# apiKey = ''  # create an app on https://developer.schwab.com/ to get one
-# apiRedirectUri = 'https://localhost'
-# SchwabAccountID = ''
-# appSecret = ''
-
 # Google Sheets settings
 SPREADSHEET_ID = ''  # ID from your Google Sheets URL
 USE_SHEETS = True    # Set to True to use Google Sheets instead of Schwab API
 
 # General settings
 dbName = 'db.json'
-botAlert = 'console'  # console, email
 loggingLevel = 'ERROR'  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 AutoTrade = False
 
@@ -87,15 +80,7 @@ configuration = {
     }
 }
 
-# Required for 'botAlert' email
-mailConfig = {
-    'smtp': None,
-    'port': 587,
-    'from': None,
-    'to': None,
-    'username': None,
-    'password': None,
-}
+
 
 # DEBUG MODES
 debugMarketOpen = True
