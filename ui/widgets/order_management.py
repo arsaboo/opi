@@ -346,12 +346,14 @@ class OrderManagementWidget(Static):
             order_id = formatted.get('order_id')
             current_price = formatted.get('price')
             try:
+                # Remove $ symbol if present and convert to float
+                if isinstance(current_price, str) and current_price.startswith('$'):
+                    current_price = current_price[1:]
                 current_price = float(current_price)
             except Exception:
                 self.app.query_one(StatusLog).add_message("Unable to parse current price for selected order.")
                 return
 
-            # Determine base price at first update
             base = self._base_price.get(order_id, current_price)
             self._base_price[order_id] = base
             step = self._manual_steps.get(order_id, 0) + 1
@@ -877,8 +879,3 @@ class OrderManagementWidget(Static):
         main_container = self.app.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
-
-
-
-
-
