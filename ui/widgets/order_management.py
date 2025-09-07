@@ -359,9 +359,22 @@ class OrderManagementWidget(Static):
             step = self._manual_steps.get(order_id, 0) + 1
             self._manual_steps[order_id] = step
 
-            # Compute improved price and round to $0.05
-            def round_to_nearest_five_cents(price):
-                return round(price * 20) / 20
+            # Compute improved price with symbol-aware tick size
+            def _tick_for_symbol(sym: str) -> float:
+                try:
+                    u = str(sym).split()[0].lstrip("$").upper()
+                    return 0.05 if u in {"SPX", "SPXW"} else 0.01
+                except Exception:
+                    return 0.01
+
+            def _round_to_tick(p: float, tick: float) -> float:
+                try:
+                    return round(round(float(p) / tick) * tick, 2)
+                except Exception:
+                    try:
+                        return round(float(p), 2)
+                    except Exception:
+                        return p
 
             # Determine debit vs credit from full order prior to suggestion
             client = self.app.api.connectClient
@@ -372,7 +385,18 @@ class OrderManagementWidget(Static):
             order_type_str = full_order.get("orderType", "NET_DEBIT")
             is_debit = (order_type_str == "NET_DEBIT")
 
-            new_price = round_to_nearest_five_cents(base + step * 0.05) if is_debit else round_to_nearest_five_cents(base - step * 0.05)
+            # Infer underlying from first leg for tick selection
+            tick = 0.01
+            try:
+                legs = full_order.get("orderLegCollection", []) or []
+                first_leg = legs[0] if legs else {}
+                sym = (first_leg.get("instrument") or {}).get("symbol") or ""
+                tick = _tick_for_symbol(sym)
+            except Exception:
+                pass
+
+            raw_price = (base + step * tick) if is_debit else (base - step * tick)
+            new_price = _round_to_tick(raw_price, tick)
 
             # Show confirmation modal with editable price
             details = {

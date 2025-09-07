@@ -44,12 +44,13 @@ class OrderManager:
     def _round_price_for_symbol(self, symbol: str, price: float) -> float:
         """Round limit price to a valid tick size for the underlying.
 
-        - SPX index options commonly use $0.05 ticks.
+        - SPX/SPXW index options commonly use $0.05 ticks.
         - ETF/equity options like SPY/QQQ use $0.01 ticks.
         """
         try:
             sym = symbol[1:] if symbol and symbol.startswith("$") else symbol
-            tick = 0.05 if str(sym).upper() in {"SPX"} else 0.01
+            u = str(sym).upper() if sym else ""
+            tick = 0.05 if u in {"SPX", "SPXW"} else 0.01
             # Round to nearest tick, then to 2 decimals for API
             return round(round(float(price) / tick) * tick, 2)
         except Exception:
@@ -116,8 +117,14 @@ class OrderManager:
             else:
                 price = round(price * (full_price_percentage / 100), 2)
 
+            # Normalize tick for the new symbol's underlying
+            try:
+                base_sym = (new_symbol or "").split()[0]
+            except Exception:
+                base_sym = ""
+            norm_price = self._round_price_for_symbol(base_sym, price)
             order = (
-                self.api.connectClient.options.option_sell_to_open_limit(new_symbol, new_amount, price)
+                self.api.connectClient.options.option_sell_to_open_limit(new_symbol, new_amount, norm_price)
                 .set_duration(Duration.DAY)
                 .set_session(Session.NORMAL)
             )
@@ -148,6 +155,12 @@ class OrderManager:
                 price = -price
                 order_type = OrderType.NET_DEBIT
 
+            # Normalize tick based on new leg underlying
+            try:
+                base_sym = (new_symbol or "").split()[0]
+            except Exception:
+                base_sym = ""
+            norm_price = self._round_price_for_symbol(base_sym, price)
             order.add_option_leg(
                 OptionInstruction.BUY_TO_CLOSE,
                 old_symbol,
@@ -156,7 +169,7 @@ class OrderManager:
                 OptionInstruction.SELL_TO_OPEN,
                 new_symbol,
                 new_amount,
-            ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(price).set_order_type(order_type).set_order_strategy_type(
+            ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(norm_price).set_order_type(order_type).set_order_strategy_type(
                 OrderStrategyType.SINGLE
             )
 
@@ -169,6 +182,12 @@ class OrderManager:
             price = -price
             order_type = OrderType.NET_DEBIT
 
+        # Normalize price based on new_symbol underlying
+        try:
+            base_sym = (new_symbol or "").split()[0]
+        except Exception:
+            base_sym = ""
+        norm_price = self._round_price_for_symbol(base_sym, price)
         order.add_option_leg(
             OptionInstruction.BUY_TO_CLOSE,
             old_symbol,
@@ -177,7 +196,7 @@ class OrderManager:
             OptionInstruction.SELL_TO_OPEN,
             new_symbol,
             amount,
-        ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(str(price)).set_order_type(order_type).set_order_strategy_type(
+        ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(str(norm_price)).set_order_type(order_type).set_order_strategy_type(
             OrderStrategyType.SINGLE
         ).set_complex_order_strategy_type(ComplexOrderStrategyType.DIAGONAL)
 
@@ -248,6 +267,12 @@ class OrderManager:
         """Create a 4-leg SELL box spread order (borrow now, repay at expiry)."""
         order = OrderBuilder()
         order_type = OrderType.NET_CREDIT
+        # Infer underlying from first leg for tick rounding
+        try:
+            base_sym = (low_call_symbol or high_call_symbol or low_put_symbol or high_put_symbol or "").split()[0]
+        except Exception:
+            base_sym = ""
+        norm_price = self._round_price_for_symbol(base_sym, price)
         order.add_option_leg(
             OptionInstruction.SELL_TO_OPEN,
             low_call_symbol,
@@ -264,7 +289,7 @@ class OrderManager:
             OptionInstruction.BUY_TO_OPEN,
             low_put_symbol,
             amount,
-        ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(str(price)).set_order_type(order_type).set_order_strategy_type(
+        ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(str(norm_price)).set_order_type(order_type).set_order_strategy_type(
             OrderStrategyType.SINGLE
         ).set_complex_order_strategy_type(ComplexOrderStrategyType.CUSTOM)
 
@@ -354,10 +379,22 @@ class OrderManager:
             session = order.get("session", "NORMAL")
             complex_type = order.get("complexOrderStrategyType")
 
+            # Determine an underlying-like symbol for tick rounding from first leg symbol
+            base_sym_for_tick = None
+            try:
+                if legs:
+                    leg_sym = legs[0].get("instrument", {}).get("symbol")
+                    if isinstance(leg_sym, str) and leg_sym:
+                        base_sym_for_tick = leg_sym.split()[0]
+            except Exception:
+                base_sym_for_tick = None
+
+            rounded_price = self._round_price_for_symbol(base_sym_for_tick or "", new_price)
+
             order_spec = {
                 "orderType": order_type_str,
                 "session": session,
-                "price": str(abs(new_price)),
+                "price": str(abs(rounded_price)),
                 "duration": duration,
                 "orderStrategyType": order.get("orderStrategyType", "SINGLE"),
                 "orderLegCollection": legs,
@@ -415,7 +452,7 @@ class OrderManager:
 
             ob.set_duration(Duration.DAY)
             ob.set_session(Session.NORMAL)
-            ob.set_price(str(abs(new_price)))
+            ob.set_price(str(abs(rounded_price)))
             ob.set_order_type(order_type_enum)
             ob.set_order_strategy_type(OrderStrategyType.SINGLE)
             co = order.get("complexOrderStrategyType")
@@ -440,8 +477,34 @@ class OrderManager:
 
     def place_order_with_improvement(self, order_func, order_params, price):
         max_retries = 75
-        fixed_step = 0.05
         initial_price = price
+
+        def _infer_base_symbol_and_tick() -> tuple[str | None, float]:
+            try:
+                name = getattr(order_func, "__name__", "") or ""
+            except Exception:
+                name = ""
+            base = None
+            try:
+                if name in {"rollOver", "roll_over"} and len(order_params) >= 2:
+                    base = (order_params[1] or "").split()[0]
+                elif name in {"vertical_call_order", "synthetic_covered_call_order"} and len(order_params) >= 1:
+                    base = (order_params[0] or "").split()[0]
+                elif name in {"sell_box_spread_order"} and len(order_params) >= 1:
+                    base = (order_params[0] or "").split()[0]
+                else:
+                    # Fallback: first string-like param
+                    for p in order_params:
+                        if isinstance(p, str) and p:
+                            base = p.split()[0]
+                            break
+            except Exception:
+                base = None
+            u = (str(base).lstrip("$").upper()) if base else ""
+            tick = 0.05 if u in {"SPX", "SPXW"} else 0.01
+            return base, tick
+
+        base_symbol, tick_size = _infer_base_symbol_and_tick()
 
         now = datetime.datetime.now(get_localzone())
         if now.time() >= datetime.time(15, 30):
@@ -453,17 +516,17 @@ class OrderManager:
 
         for retry in range(max_retries):
             if is_debit_order:
-                current_price = round_to_nearest_five_cents(initial_price + retry * fixed_step)
+                current_price = self._round_price_for_symbol(base_symbol or "", initial_price + retry * tick_size)
             else:
-                current_price = round_to_nearest_five_cents(initial_price - retry * fixed_step)
+                current_price = self._round_price_for_symbol(base_symbol or "", initial_price - retry * tick_size)
 
             if retry > 0:
                 if is_debit_order:
                     notify(f"Attempt {retry + 1}/{max_retries}")
-                    notify(f"Improving price by +${retry * fixed_step:.2f} to {current_price}")
+                    notify(f"Improving price by +${retry * tick_size:.2f} to {current_price}")
                 else:
                     notify(f"Attempt {retry + 1}/{max_retries}")
-                    notify(f"Improving price by -${retry * fixed_step:.2f} to {current_price}")
+                    notify(f"Improving price by -${retry * tick_size:.2f} to {current_price}")
 
             try:
                 order_id = order_func(*order_params, price=current_price)
