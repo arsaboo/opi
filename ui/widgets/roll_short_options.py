@@ -18,6 +18,12 @@ try:
 except Exception:
     MANUAL_ORDER = False
 
+# Import the global order monitoring service
+try:
+    from services.order_monitoring_service import order_monitoring_service
+except Exception:
+    order_monitoring_service = None
+
 class RollShortOptionsWidget(Static):
     """A widget to display short options to be rolled."""
 
@@ -176,65 +182,38 @@ class RollShortOptionsWidget(Static):
                     return
                 credit = float(credit)
                 initial_price = self._override_credit if self._override_credit is not None else credit
-                filled = False
 
-                # Try prices in sequence; single attempt in manual mode
-                attempts = [0] if MANUAL_ORDER else range(76)
-                for i in attempts:
-                    current_price = (
-                        initial_price if i == 0
-                        else round_to_nearest_five_cents(initial_price - i * 0.05)
-                    )
-
-                    if i > 0:
-                        self.app.query_one(StatusLog).add_message(f"Trying improved price: ${current_price} (attempt #{i})")
-
-                    # Place the order
+                # Manual mode: place once and manage from Order Management
+                if MANUAL_ORDER:
                     from .. import logic as ui_logic
-                    order_id = await ui_logic.roll_over(self.app.api, old_symbol, new_symbol, amount, current_price)
-
+                    order_id = await ui_logic.roll_over(self.app.api, old_symbol, new_symbol, amount, initial_price)
                     if order_id is None:
                         self.app.query_one(StatusLog).add_message("Order not placed (debug mode or error).")
-                        break
-
-                    # Manual mode: do not monitor; use Order Management to manage
-                    if MANUAL_ORDER:
+                    else:
                         self.app.query_one(StatusLog).add_message("Manual roll order placed. Manage from Order Management (U=Update, C=Cancel).")
-                        self._override_credit = None
-                        return
-                    # Non-manual: start monitoring feedback
-                    self.app.query_one(StatusLog).add_message(f"Monitoring roll order {order_id}...")
-                    result = await self.monitor_order_ui(order_id)
-
-                    if result is True:
-                        self.app.query_one(StatusLog).add_message("Roll order filled successfully!")
-                        filled = True
-                        break
-                    elif result == "cancelled":
-                        self.app.query_one(StatusLog).add_message("Roll order cancelled.")
-                        break
-                    elif result == "rejected":
-                        self.app.query_one(StatusLog).add_message("Roll order rejected, trying next price...")
-                        continue
-                    elif result == "timeout":
-                        if MANUAL_ORDER:
-                            self.app.query_one(StatusLog).add_message("Roll order timed out. Use Order Management (U to update, C to cancel).")
-                            break
-                        else:
-                            self.app.query_one(StatusLog).add_message("Roll order timed out, trying next price...")
-                            # Cancel the timed-out order before next attempt
-                            try:
-                                from .. import logic as ui_logic
-                                await ui_logic.cancel_order(self.app.api, order_id)
-                            except Exception as e:
-                                self.app.query_one(StatusLog).add_message(f"Error cancelling timed-out order: {e}")
-                            continue
-
-                    # Brief pause between attempts
-                    if i > 0 and not MANUAL_ORDER:
-                        await asyncio.sleep(1)
-                if not filled:
+                    self._override_credit = None
+                    return
+                
+                # Non-manual: use API's built-in price improvement logic
+                self.app.query_one(StatusLog).add_message(f"Placing roll order with automatic price improvement...")
+                
+                # Try prices in sequence using API's place_order method
+                order_func = self.app.api.rollOver
+                order_params = [old_symbol, new_symbol, amount]
+                
+                result = await asyncio.to_thread(
+                    self.app.api.place_order, order_func, order_params, initial_price
+                )
+                
+                if result is True:
+                    self.app.query_one(StatusLog).add_message("Roll order filled successfully!")
+                elif result == "cancelled":
+                    self.app.query_one(StatusLog).add_message("Roll order cancelled by user.")
+                else:
                     self.app.query_one(StatusLog).add_message("Roll order not filled after all attempts.")
+                    
+                self._override_credit = None
+                
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for roll order placement.")
         except Exception as e:

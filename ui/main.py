@@ -280,6 +280,13 @@ class OpiApp(App):
                 id="welcome_message",
             )
         )
+        # Initialize global order monitoring service
+        try:
+            from services.order_monitoring_service import order_monitoring_service
+            order_monitoring_service.set_app_reference(self)
+        except Exception as e:
+            self.query_one(StatusLog).add_message(f"Error initializing order monitoring service: {e}")
+        
         # Warm up streaming provider early to reduce initial delay
         try:
             async def _warm_and_load():
@@ -363,6 +370,13 @@ class OpiApp(App):
 
     def on_exit(self) -> None:
         """Persist current subscriptions to state-<accountId>.json upon exit."""
+        # Stop all order monitoring tasks
+        try:
+            from services.order_monitoring_service import order_monitoring_service
+            order_monitoring_service.stop_all_monitoring()
+        except Exception:
+            pass
+            
         try:
             acc = SchwabAccountID
             prov = get_provider(self.api.connectClient)

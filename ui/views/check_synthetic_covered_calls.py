@@ -21,6 +21,12 @@ try:
 except Exception:
     MANUAL_ORDER = False
 
+# Import the global order monitoring service
+try:
+    from services.order_monitoring_service import order_monitoring_service
+except Exception:
+    order_monitoring_service = None
+
 class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
     """A widget to display synthetic covered calls."""
 
@@ -385,101 +391,58 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                 strike_high = float(synthetic_covered_call_data.get("strike_high", 0))
                 net_debit = float(synthetic_covered_call_data.get("investment", 0)) / 100  # Convert from total to per contract
 
-                # Place the order using the api method
-                try:
+                # Manual mode: place once and manage from Order Management
+                if MANUAL_ORDER:
                     # Reset cancel flag and clear keyboard hooks
                     reset_cancel_flag()
                     keyboard.unhook_all()
-                    keyboard.on_press(handle_cancel)
-
-                    # Try prices in sequence, starting with user-provided price if present, otherwise original
-                    initial_price = self._override_price if self._override_price is not None else net_debit
-                    order_id = None
-                    filled = False
-
-                    attempts = [0] if MANUAL_ORDER else range(0, 76)
-                    for i in attempts:  # 0 = original price, 1-75 = improvements
-                        if not cancel_order:  # Check if cancelled
-                            current_price = (
-                                initial_price if i == 0
-                                else round_to_nearest_five_cents(initial_price + i * 0.05)
-                            )
-
-                            if i > 0:
-                                self.app.query_one(StatusLog).add_message(f"Trying new price: ${current_price} (improvement #{i})")
-
-                            # Place order
-                            from .. import logic as ui_logic
-                            order_id = await ui_logic.synthetic_covered_call_order(
-                                self.app.api,
-                                asset,
-                                expiration,
-                                strike_low,
-                                strike_high,
-                                1,
-                                price=current_price,
-                            )
-
-                            # Check if order was placed (None when debugCanSendOrders is False)
-                            if order_id is None:
-                                self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
-                                self.app.query_one(StatusLog).add_message(f"Asset: {asset}, Expiration: {expiration}, Strike Low: {strike_low}, Strike High: {strike_high}, Price: {current_price}")
-                                break
-
-                            if MANUAL_ORDER:
-                                self.app.query_one(StatusLog).add_message("Manual order placed. Manage from Order Management (U=Update, C=Cancel).")
-                                self._override_price = None
-                                return
-                            # Monitor with 60s timeout
-                            self.app.query_one(StatusLog).add_message(f"Monitoring order {order_id}...")
-                            result = await self.monitor_order_ui(order_id, timeout=60, manual=False)
-
-                            # Add status update based on result
-                            if result is True:
-                                self.app.query_one(StatusLog).add_message(f"Order {order_id} filled successfully!")
-                            elif result == "cancelled":
-                                self.app.query_one(StatusLog).add_message(f"Order {order_id} cancelled by user.")
-                            elif result == "rejected":
-                                self.app.query_one(StatusLog).add_message(f"Order {order_id} rejected.")
-                            elif result == "timeout":
-                                self.app.query_one(StatusLog).add_message(f"Order {order_id} timed out.")
-
-                            if result is True:  # Order filled
-                                filled = True
-                                break
-                            elif result == "cancelled":  # User cancelled
-                                break
-                            elif result == "rejected":  # Order rejected
-                                if MANUAL_ORDER:
-                                    break
-                                continue  # Try next price
-                            # On timeout, continue to next price improvement
-
-                            # Brief pause between attempts
-                            if i > 0 and not MANUAL_ORDER:
-                                await asyncio.sleep(1)
-                        else:
-                            break
-
-                    if filled:
-                        self.app.query_one(StatusLog).add_message("Synthetic covered call order filled successfully!")
-                        self._override_price = None
-                    elif cancel_order:
-                        self.app.query_one(StatusLog).add_message("Synthetic covered call order cancelled by user.")
-                        if order_id:
-                            try:
-                                from .. import logic as ui_logic
-                                await ui_logic.cancel_order(self.app.api, order_id)
-                                self.app.query_one(StatusLog).add_message("Order cancelled successfully.")
-                            except Exception as e:
-                                self.app.query_one(StatusLog).add_message(f"Error cancelling order: {e}")
+                    
+                    # Place order at initial price
+                    from .. import logic as ui_logic
+                    order_id = await ui_logic.synthetic_covered_call_order(
+                        self.app.api,
+                        asset,
+                        expiration,
+                        strike_low,
+                        strike_high,
+                        1,
+                        price=net_debit,
+                    )
+                    
+                    if order_id is None:
+                        self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
+                        self.app.query_one(StatusLog).add_message(f"Asset: {asset}, Expiration: {expiration}, Strike Low: {strike_low}, Strike High: {strike_high}, Price: {net_debit}")
                     else:
-                        self.app.query_one(StatusLog).add_message("Synthetic covered call order not filled after all attempts.")
-                except Exception as e:
-                    self.app.query_one(StatusLog).add_message(f"Error placing synthetic covered call order: {e}")
-                finally:
+                        self.app.query_one(StatusLog).add_message("Manual order placed. Manage from Order Management (U=Update, C=Cancel).")
+                    
                     self._override_price = None
                     keyboard.unhook_all()
+                    return
+
+                # Non-manual: use API's built-in price improvement logic
+                self.app.query_one(StatusLog).add_message(f"Placing synthetic covered call order with automatic price improvement...")
+                
+                # Use initial price (user override if provided, otherwise computed net debit)
+                initial_price = self._override_price if self._override_price is not None else net_debit
+                
+                # Use the API's place_order method which handles price improvements
+                order_func = self.app.api.synthetic_covered_call_order
+                order_params = [asset, expiration, strike_low, strike_high, 1]
+                
+                result = await asyncio.to_thread(
+                    self.app.api.place_order, order_func, order_params, initial_price
+                )
+                
+                if result is True:
+                    self.app.query_one(StatusLog).add_message("Synthetic covered call order filled successfully!")
+                elif result == "cancelled":
+                    self.app.query_one(StatusLog).add_message("Synthetic covered call order cancelled by user.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Synthetic covered call order not filled after all attempts.")
+                    
+                self._override_price = None
+                keyboard.unhook_all()
+                
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for synthetic covered call order placement.")
         except Exception as e:

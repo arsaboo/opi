@@ -461,10 +461,9 @@ class OrderManager:
                 elif result == "timeout":
                     try:
                         self.cancel_order(order_id)
-                        continue
                     except Exception as e:
-                        notify_exception(e, prefix="Error cancelling order")
-                        return False
+                        notify_exception(e, prefix="Error cancelling order (continuing with next price improvement)")
+                    continue
                 else:
                     return False
 

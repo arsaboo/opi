@@ -22,6 +22,12 @@ try:
 except Exception:
     MANUAL_ORDER = False
 
+# Import the global order monitoring service
+try:
+    from services.order_monitoring_service import order_monitoring_service
+except Exception:
+    order_monitoring_service = None
+
 class CheckBoxSpreadsWidget(BaseSpreadView):
     """A widget to display box spreads."""
 
@@ -238,7 +244,12 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                             )
                         return
                     else:
-                        # Use API-level placement with price improvements and monitoring
+                        # Use API's built-in placement with price improvements and monitoring
+                        self.app.query_one(StatusLog).add_message(
+                            f"Placing SELL box spread @ ${initial_price:.2f} (will improve if not filled)"
+                        )
+
+                        # Use the API's place_order method which handles price improvements
                         order_func = self.app.api.sell_box_spread_order
                         order_params = [
                             low_call_symbol,
@@ -247,10 +258,6 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                             high_put_symbol,
                             1,  # quantity
                         ]
-
-                        self.app.query_one(StatusLog).add_message(
-                            f"Placing SELL box spread @ ${initial_price:.2f} (will improve if not filled)"
-                        )
 
                         result = await asyncio.to_thread(
                             self.app.api.place_order, order_func, order_params, initial_price
