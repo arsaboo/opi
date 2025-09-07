@@ -41,6 +41,23 @@ class OrderManager:
         self._order_cache: dict[str, tuple[float, dict]] = {}
         self._cache_expiry = 1  # seconds
 
+    def _round_price_for_symbol(self, symbol: str, price: float) -> float:
+        """Round limit price to a valid tick size for the underlying.
+
+        - SPX index options commonly use $0.05 ticks.
+        - ETF/equity options like SPY/QQQ use $0.01 ticks.
+        """
+        try:
+            sym = symbol[1:] if symbol and symbol.startswith("$") else symbol
+            tick = 0.05 if str(sym).upper() in {"SPX"} else 0.01
+            # Round to nearest tick, then to 2 decimals for API
+            return round(round(float(price) / tick) * tick, 2)
+        except Exception:
+            try:
+                return round(float(price), 2)
+            except Exception:
+                return price
+
     def _get_account_hash(self):
         return self.api.getAccountHash()
 
@@ -174,6 +191,7 @@ class OrderManager:
 
         order = OrderBuilder()
         order_type = OrderType.NET_DEBIT
+        norm_price = self._round_price_for_symbol(symbol, price)
         order.add_option_leg(
             OptionInstruction.BUY_TO_OPEN,
             long_call_sym,
@@ -182,7 +200,7 @@ class OrderManager:
             OptionInstruction.SELL_TO_OPEN,
             short_call_sym,
             amount,
-        ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(str(price)).set_order_type(order_type).set_order_strategy_type(
+        ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(str(norm_price)).set_order_type(order_type).set_order_strategy_type(
             OrderStrategyType.SINGLE
         ).set_complex_order_strategy_type(ComplexOrderStrategyType.VERTICAL)
 
@@ -197,6 +215,8 @@ class OrderManager:
 
         order = OrderBuilder()
         order_type = OrderType.NET_DEBIT
+        # Ensure price adheres to symbol tick size (avoid 3-decimal rejections)
+        norm_price = self._round_price_for_symbol(symbol, price)
         order.add_option_leg(
             OptionInstruction.BUY_TO_OPEN,
             long_call_sym,
@@ -209,7 +229,7 @@ class OrderManager:
             OptionInstruction.SELL_TO_OPEN,
             short_put_sym,
             amount,
-        ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(str(price)).set_order_type(order_type).set_order_strategy_type(
+        ).set_duration(Duration.DAY).set_session(Session.NORMAL).set_price(str(norm_price)).set_order_type(order_type).set_order_strategy_type(
             OrderStrategyType.SINGLE
         ).set_complex_order_strategy_type(ComplexOrderStrategyType.CUSTOM)
 
@@ -535,4 +555,3 @@ class OrderManager:
         except Exception:
             pass
         return "timeout"
-

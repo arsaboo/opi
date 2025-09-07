@@ -357,7 +357,8 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
                 expiration = datetime.strptime(vertical_spread_data.get("expiration", ""), "%Y-%m-%d").date()
                 strike_low = float(vertical_spread_data.get("strike_low", 0))
                 strike_high = float(vertical_spread_data.get("strike_high", 0))
-                net_debit = float(vertical_spread_data.get("investment", 0)) / 100  # Convert from total to per contract
+                # Convert total investment ($ per contract) back to option price; ensure 2 decimals
+                net_debit = round(float(vertical_spread_data.get("investment", 0)) / 100, 2)
 
                 # Manual mode: place once and manage from Order Management
                 if MANUAL_ORDER:
@@ -365,7 +366,12 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
                     reset_cancel_flag()
                     keyboard.unhook_all()
                     
-                    # Place order at initial price
+                    # Place order at chosen price (use edited override if provided)
+                    chosen_price = self._override_price if self._override_price is not None else net_debit
+                    try:
+                        chosen_price = round(float(chosen_price), 2)
+                    except Exception:
+                        pass
                     from .. import logic as ui_logic
                     order_id = await ui_logic.vertical_call_order(
                         self.app.api,
@@ -374,7 +380,7 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
                         strike_low,
                         strike_high,
                         1,
-                        price=net_debit,
+                        price=chosen_price,
                     )
                     
                     if order_id is None:

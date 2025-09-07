@@ -462,9 +462,8 @@ class OpiApp(App):
                 # Get today's date
                 today = datetime.now().date()
                 
-                # Get expiring shorts data
-                import asyncio
-                short_positions = asyncio.run(self.api.updateShortPosition())
+                # Get expiring shorts data (synchronously to avoid event-loop conflicts)
+                short_positions = self.api.updateShortPosition()
                 
                 # Filter for options expiring today
                 expiring_today = [

@@ -389,7 +389,8 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                 expiration = datetime.strptime(synthetic_covered_call_data.get("expiration", ""), "%Y-%m-%d").date()
                 strike_low = float(synthetic_covered_call_data.get("strike_low", 0))
                 strike_high = float(synthetic_covered_call_data.get("strike_high", 0))
-                net_debit = float(synthetic_covered_call_data.get("investment", 0)) / 100  # Convert from total to per contract
+                # Convert total investment ($ per contract) back to option price; ensure 2 decimals for validity
+                net_debit = round(float(synthetic_covered_call_data.get("investment", 0)) / 100, 2)
 
                 # Manual mode: place once and manage from Order Management
                 if MANUAL_ORDER:
@@ -397,7 +398,13 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                     reset_cancel_flag()
                     keyboard.unhook_all()
                     
-                    # Place order at initial price
+                    # Place order at chosen price (use edited override if provided)
+                    chosen_price = self._override_price if self._override_price is not None else net_debit
+                    # Ensure two-decimal precision for submission UI -> API will further normalize tick size
+                    try:
+                        chosen_price = round(float(chosen_price), 2)
+                    except Exception:
+                        pass
                     from .. import logic as ui_logic
                     order_id = await ui_logic.synthetic_covered_call_order(
                         self.app.api,
@@ -406,7 +413,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                         strike_low,
                         strike_high,
                         1,
-                        price=net_debit,
+                        price=chosen_price,
                     )
                     
                     if order_id is None:

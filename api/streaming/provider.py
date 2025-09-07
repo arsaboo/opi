@@ -234,6 +234,7 @@ class StreamingQuoteProvider:
             if not key:
                 continue
             last = self._last.setdefault(key, {})
+            # Normalize and update last-good only if present and valid
             rb = c.get("BID_PRICE") or c.get("bidPrice") or c.get("BID") or c.get("bid")
             ra = c.get("ASK_PRICE") or c.get("askPrice") or c.get("ASK") or c.get("ask")
             rl = c.get("LAST_PRICE") or c.get("lastPrice") or c.get("LAST") or c.get("last")
@@ -258,6 +259,7 @@ class StreamingQuoteProvider:
                         last["last"] = fl
             except Exception:
                 pass
+            # Publish a normalized snapshot using last-good values
             snap = {"key": key}
             if "bid" in last:
                 snap["BID_PRICE"] = last["bid"]
@@ -298,40 +300,6 @@ class StreamingQuoteProvider:
             return float(last) if last is not None else None
         except Exception:
             return None
-
-    async def _on_level_one_equity(self, msg: Dict) -> None:
-        contents = msg.get("content") or []
-        for c in contents:
-            key = c.get("key") or c.get("symbol")
-            if not key:
-                continue
-            last = self._last.setdefault(key, {})
-            raw_bid = c.get("BID_PRICE") or c.get("bidPrice") or c.get("BID") or c.get("bid")
-            raw_ask = c.get("ASK_PRICE") or c.get("askPrice") or c.get("ASK") or c.get("ask")
-            raw_last = c.get("LAST_PRICE") or c.get("lastPrice") or c.get("LAST") or c.get("last")
-            try:
-                if raw_bid is not None:
-                    last["bid"] = float(raw_bid)
-            except Exception:
-                pass
-            try:
-                if raw_ask is not None:
-                    last["ask"] = float(raw_ask)
-            except Exception:
-                pass
-            try:
-                if raw_last is not None:
-                    last["last"] = float(raw_last)
-            except Exception:
-                pass
-            snap = {"key": key}
-            if "bid" in last:
-                snap["BID_PRICE"] = last["bid"]
-            if "ask" in last:
-                snap["ASK_PRICE"] = last["ask"]
-            if "last" in last:
-                snap["LAST_PRICE"] = last["last"]
-            self._quotes[key] = snap
 
     # Duplicate helper methods removed (see earlier definitions above)
 
