@@ -376,59 +376,95 @@ class Api:
         return self.order_manager.cancel_order(orderId)
 
     def getRecentOrders(self, max_results=50):
-        """Get recent orders for the account."""
+        """Get recent orders for the account.
+
+        Behavior:
+        - Always include ALL working orders (WORKING/ACCEPTED/PENDING_ACTIVATION), regardless of age.
+        - Fill the remainder with the most recent other orders up to `max_results`.
+        - Uses a wider date window to avoid hiding older working orders.
+        """
         try:
-            # Try different approaches to get orders
-            logger.debug(f"Attempting to fetch orders with account hash: {self.getAccountHash()}")
+            logger.debug(
+                f"Attempting to fetch orders with account hash: {self.getAccountHash()}"
+            )
 
-            # First try: Get orders with basic parameters using account-specific method
+            # Prefer a wide, explicit date window with ALL statuses to ensure coverage
             try:
-                r = self.connectClient.get_orders_for_account(
-                    self.getAccountHash(),
-                    max_results=max_results
-                )
-                r.raise_for_status()
-                data = r.json()
-                logger.debug(f"Orders fetched successfully: {len(data) if isinstance(data, list) else 'Not a list'}")
-                return data
-            except Exception as e:
-                logger.error(f"Error with basic get_orders_for_account: {e}")
-
-            # Second try: Get orders with status filter
-            try:
-                r = self.connectClient.get_orders_for_account(
-                    self.getAccountHash(),
-                    max_results=max_results,
-                    status=self.connectClient.Order.Status.ALL
-                )
-                r.raise_for_status()
-                data = r.json()
-                logger.debug(f"Orders with status filter: {len(data) if isinstance(data, list) else 'Not a list'}")
-                return data
-            except Exception as e:
-                logger.error(f"Error with status filter get_orders_for_account: {e}")
-
-            # Third try: Get orders with different parameters
-            try:
-                from datetime import datetime, timedelta
                 end_date = datetime.now()
-                start_date = end_date - timedelta(days=30)
+                # Fetch a generous window so older GTC working orders are included
+                start_date = end_date - timedelta(days=180)
 
                 r = self.connectClient.get_orders_for_account(
                     self.getAccountHash(),
-                    max_results=max_results,
+                    # Fetch more to allow UI-side trimming but keep working orders
+                    max_results=max(500, max_results),
+                    status=self.connectClient.Order.Status.ALL,
                     from_entered_datetime=start_date,
-                    to_entered_datetime=end_date
+                    to_entered_datetime=end_date,
                 )
                 r.raise_for_status()
                 data = r.json()
-                logger.debug(f"Orders with date filter: {len(data) if isinstance(data, list) else 'Not a list'}")
-                return data
+                if not isinstance(data, list):
+                    data = []
+                logger.debug(f"Orders with wide date+ALL status: {len(data)}")
             except Exception as e:
-                logger.error(f"Error with date filter get_orders_for_account: {e}")
+                logger.error(f"Wide window get_orders_for_account failed: {e}")
+                data = []
 
-            # If all attempts fail, return empty list
-            return []
+            # Fallback chain if the wide-window query returned nothing
+            if not data:
+                # Try ALL statuses without date filter
+                try:
+                    r = self.connectClient.get_orders_for_account(
+                        self.getAccountHash(),
+                        max_results=max(500, max_results),
+                        status=self.connectClient.Order.Status.ALL,
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                    if not isinstance(data, list):
+                        data = []
+                    logger.debug(
+                        f"Orders with ALL status (no dates): {len(data)}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Error with ALL-status get_orders_for_account: {e}"
+                    )
+
+            if not data:
+                # Final fallback: basic call
+                try:
+                    r = self.connectClient.get_orders_for_account(
+                        self.getAccountHash(), max_results=max(500, max_results)
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                    if not isinstance(data, list):
+                        data = []
+                    logger.debug(
+                        f"Basic get_orders_for_account returned: {len(data)}"
+                    )
+                except Exception as e:
+                    logger.error(f"Basic get_orders_for_account failed: {e}")
+                    data = []
+
+            # Ensure working orders are not dropped due to recency/limit
+            working_statuses = {"ACCEPTED", "WORKING", "PENDING_ACTIVATION"}
+            try:
+                working = [o for o in data if str(o.get("status")) in working_statuses]
+                others = [o for o in data if str(o.get("status")) not in working_statuses]
+            except Exception:
+                working, others = [], []
+
+            # Compose result: include all working orders first, then fill with others
+            # Do not trim working orders; keep up to `max_results` additional non-working
+            fill_count = max(0, max_results - len(working))
+            result = working + others[:fill_count]
+            logger.debug(
+                f"Returning {len(result)} orders (working: {len(working)}, others: {len(result) - len(working)})"
+            )
+            return result
         except Exception as e:
             logger.error(f"Unexpected error fetching recent orders: {e}")
             return []
