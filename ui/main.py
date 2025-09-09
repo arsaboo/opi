@@ -286,7 +286,7 @@ class OpiApp(App):
             order_monitoring_service.set_app_reference(self)
         except Exception as e:
             self.query_one(StatusLog).add_message(f"Error initializing order monitoring service: {e}")
-        
+
         # Warm up streaming provider early to reduce initial delay
         try:
             async def _warm_and_load():
@@ -376,7 +376,7 @@ class OpiApp(App):
             order_monitoring_service.stop_all_monitoring()
         except Exception:
             pass
-            
+
         try:
             acc = SchwabAccountID
             prov = get_provider(self.api.connectClient)
@@ -451,43 +451,43 @@ class OpiApp(App):
             from datetime import datetime, timedelta
             import pytz
             from tzlocal import get_localzone
-            
+
             # Get market hours
             exec_window = self.api.getOptionExecutionWindow()
-            
+
             # Check if we have market hours data
             if "closeDate" in exec_window and exec_window["closeDate"]:
                 close_time = exec_window["closeDate"]
-                
+
                 # Get today's date
                 today = datetime.now().date()
-                
+
                 # Get expiring shorts data (synchronously to avoid event-loop conflicts)
                 short_positions = self.api.updateShortPosition()
-                
+
                 # Filter for options expiring today
                 expiring_today = [
                     p for p in short_positions
                     if datetime.strptime(p["expiration"], "%Y-%m-%d").date() == today
                 ]
-                
+
                 if expiring_today:
                     # Calculate 60 minutes before market close
                     notification_time = close_time - timedelta(minutes=60)
                     current_time = datetime.now(pytz.UTC)
-                    
+
                     # If we're within the notification window, send alert
                     if current_time >= notification_time and current_time < close_time:
                         option_symbols = [p["optionSymbol"] for p in expiring_today]
                         message = f"Options expiring today: {', '.join(option_symbols)}. Market closes in 60 minutes."
-                        
+
                         # Send notification
                         try:
                             import alert
                             alert.alert(None, message)
                         except Exception:
                             pass
-                        
+
                         self.query_one(StatusLog).add_message(message)
         except Exception as e:
             self.query_one(StatusLog).add_message(f"Error checking expiring options: {e}")

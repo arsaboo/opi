@@ -39,8 +39,8 @@ class AppHeader(Static):
         self._init_symbols()
         # Refresh paint every second
         self._tick = self.set_interval(1, self.refresh_view)
-        # Poll REST last every 10s as fallback
-        self._poll = self.set_interval(10, self._poll_last_rest)
+        # Poll REST/ATM last every 2s as canonical source for header numbers
+        self._poll = self.set_interval(2, self._poll_last_rest)
 
     def set_title(self, title: str) -> None:
         self._title = title
@@ -88,25 +88,16 @@ class AppHeader(Static):
 
     @work
     async def _poll_last_rest(self) -> None:
+        """Refresh canonical index values using the same API method as tables."""
         try:
-            syms = [s for s in self._chosen.values() if s]
-            if not syms:
-                return
-            r = self.app.api.connectClient.get_quotes(syms)
-            r.raise_for_status()
-            data = r.json()
-            for label, sym in self._chosen.items():
-                if not sym:
-                    continue
-                q = data.get(sym) or {}
-                last = (
-                    q.get("quote", {}).get("lastPrice")
-                    or q.get("quote", {}).get("regularMarketLastPrice")
-                    or q.get("quote", {}).get("mark")
-                )
+            # Reuse the exact source used by UI tables to avoid mismatches
+            # Canonical symbols
+            for label, canon in (("SPX", "$SPX"), ("NDX", "$NDX")):
                 try:
-                    self._rest_last[label] = float(last) if last is not None else None
+                    price = self.app.api.getATMPrice(canon)
+                    self._rest_last[label] = float(price) if price is not None else None
                 except Exception:
+                    # Keep previous value on failure
                     pass
         except Exception:
             pass
@@ -117,15 +108,16 @@ class AppHeader(Static):
         left_plain_parts: list[str] = []
 
         def add_label(label: str) -> None:
-            last = None
-            sym = self._chosen.get(label)
-            if sym and self._provider:
-                try:
-                    last = self._provider.get_last(sym)
-                except Exception:
-                    last = None
+            # Prefer canonical value computed via Api.getATMPrice (matches table values)
+            last = self._rest_last.get(label)
             if last is None:
-                last = self._rest_last.get(label)
+                # Fallback to streaming if canonical is not yet available
+                sym = self._chosen.get(label)
+                if sym and self._provider:
+                    try:
+                        last = self._provider.get_last(sym)
+                    except Exception:
+                        last = None
             prev = self._prev_close.get(label)
             if last is None:
                 seg = f"{label} —   "
