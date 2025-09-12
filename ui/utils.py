@@ -31,6 +31,9 @@ MONEY_FIELDS = {
     "nat_borrowed",
     "face_value",
     "margin",
+    # Roll short options P/L values
+    "P/L Day",
+    "P/L Open",
 }
 
 # Fields that should right-justify even when the value is non-numeric
@@ -39,7 +42,9 @@ RIGHT_JUSTIFY_FIELDS = {
     "Current Strike",
     "DTE",
     "Underlying Price",
+    "Underlying",
     "Quantity",
+    "Qty",
     "New Strike",
     "Roll Out (Days)",
     "Credit",
@@ -202,14 +207,29 @@ def style_cell(field: str, value: Any, prev: Any | None = None) -> Text:
             if not style and v is not None:
                 style = "green" if v > 0 else "red" if v < 0 else ""
 
-        # Money fields formatting
+        # Money fields formatting (generic)
         elif field in MONEY_FIELDS:
-            style = _get_delta_style(v, pv, higher_is_better=False)
-            if v is not None:
-                display = _fmt_money(v)
+            # Special handling for P/L fields: color by sign
+            if field in {"P/L Day", "P/L Open"}:
+                if v is not None:
+                    display = _fmt_money(v)
+                    # Base style by sign
+                    if v > 0:
+                        style = "green"
+                    elif v < 0:
+                        style = "red"
+                    # Emphasize if changed
+                    if pv is not None and v != pv:
+                        style = f"bold {style}".strip()
+                else:
+                    display = text
+            else:
+                style = _get_delta_style(v, pv, higher_is_better=False)
+                if v is not None:
+                    display = _fmt_money(v)
 
         # Underlying Price
-        elif field == "Underlying Price":
+        elif field in {"Underlying Price", "Underlying"}:
             style = _get_delta_style(v, pv)
             if isinstance(v, float):
                 display = f"{v:.2f}"

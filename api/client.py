@@ -631,6 +631,8 @@ class Api:
                 "count": position["shortQuantity"],
                 "strike": extract_strike_price(position["instrument"]["description"]),
                 "receivedPremium": position["averagePrice"],
+                # Pass through current day P/L when available from the account payload
+                "currentDayProfitLoss": position.get("currentDayProfitLoss"),
             }
             shortPositions.append(entry)
         shortPositions = sorted(shortPositions, key=itemgetter("expiration"))

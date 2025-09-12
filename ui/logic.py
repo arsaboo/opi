@@ -162,6 +162,10 @@ async def process_short_position(api, short):
         cr_day = "N/A"
         extrinsic_left = "N/A"
         cr_day_per_pt = "N/A"
+        # P/L metrics
+        pl_day_raw = short.get("currentDayProfitLoss")
+        pl_day = round(float(pl_day_raw), 2) if pl_day_raw is not None else "N/A"
+        pl_open = "N/A"
         if credit != "N/A" and roll_out_days != "N/A" and roll_out_days > 0:
             cr_day = round(credit / roll_out_days, 2)
             # Calculate CrDayPerPt (normalized per point of roll-up, in cash dollars)
@@ -174,15 +178,26 @@ async def process_short_position(api, short):
         if prem_short_contract is not None:
             intrinsic_value = max(0, underlying_price - current_strike)
             extrinsic_left = round(prem_short_contract - intrinsic_value, 2)
+            # Compute P/L Open using current mark vs avg price for a SHORT position
+            try:
+                avg_price = float(short.get("receivedPremium", 0) or 0)
+                qty = int(short.get("count", 0) or 0)
+                mark = float(prem_short_contract)
+                pl_open_val = (avg_price - mark) * 100 * qty
+                pl_open = round(pl_open_val, 2)
+            except Exception:
+                pl_open = "N/A"
 
         return {
             "Ticker": stock_symbol,
             "Current Strike": current_strike,
             "Expiration": str(short_expiration_date),
             "DTE": dte,
-            "Underlying Price": round(underlying_price, 2),
+            "Underlying": round(underlying_price, 2),
             "Status": status,
-            "Quantity": int(short.get("count", 0)),
+            "Qty": int(short.get("count", 0)),
+            "P/L Day": pl_day,
+            "P/L Open": pl_open,
             "New Strike": new_strike,
             "New Expiration": new_expiration,
             "Roll Out (Days)": roll_out_days,
@@ -194,6 +209,7 @@ async def process_short_position(api, short):
             "Config Status": config_status,
             "optionSymbol": short["optionSymbol"],  # Add for rollOver
             "New Option Symbol": new_option_symbol,  # Add for rollOver
+            "receivedPremium": short.get("receivedPremium"),
         }
     except Exception as e:
         prefix = f"process_short_position {short.get('optionSymbol', 'N/A')}"

@@ -50,9 +50,11 @@ class RollShortOptionsWidget(Static):
             "Current Strike",
             "Expiration",
             "DTE",
-            "Underlying Price",
+            "Underlying",
             "Status",
-            "Quantity",
+            "Qty",
+            "P/L Day",
+            "P/L Open",
             "New Strike",
             "New Expiration",
             "Days Δ",
@@ -130,7 +132,7 @@ class RollShortOptionsWidget(Static):
         except Exception:
             roll_up_amount = ""
         roll_out_days = roll_data.get("Days Δ", "") or roll_data.get("Roll Out (Days)", "")
-        underlying_value = roll_data.get("Underlying Price", "")
+        underlying_value = roll_data.get("Underlying", roll_data.get("Underlying Price", ""))
 
         order_details = {
             "Asset": roll_data.get("Ticker", ""),
@@ -139,7 +141,7 @@ class RollShortOptionsWidget(Static):
             "Current Expiration": roll_data.get("Expiration", ""),  # Current expiration
             "New Expiration": roll_data.get("New Expiration", ""),  # New expiration
             "Credit": roll_data.get("Credit", ""),
-            "Quantity": roll_data.get("Quantity", roll_data.get("count", "")),
+            "Quantity": roll_data.get("Qty", roll_data.get("Quantity", roll_data.get("count", ""))),
             "Roll Up Amount": roll_up_amount,
             "Days Δ": roll_out_days,
             "Current Underlying Value": underlying_value
@@ -175,7 +177,8 @@ class RollShortOptionsWidget(Static):
                 # Extract necessary data
                 old_symbol = roll_data.get("optionSymbol", "")
                 new_symbol = roll_data.get("New Option Symbol", "")
-                amount = int(roll_data.get("Quantity", 1))
+                # Accept either new label (Qty) or legacy (Quantity)
+                amount = int(roll_data.get("Qty", roll_data.get("Quantity", 1)))
                 credit = roll_data.get("Credit", "N/A")
                 if not old_symbol or not new_symbol or credit == "N/A":
                     self.app.query_one(StatusLog).add_message("Error: Missing or invalid data for roll order.")
@@ -298,9 +301,11 @@ class RollShortOptionsWidget(Static):
                     cell("Current Strike", row.get("Current Strike"), prev_row.get("Current Strike")),
                     Text(str(row["Expiration"]), style="", justify="left"),
                     cell("DTE", row.get("DTE"), prev_row.get("DTE")),
-                    cell("Underlying Price", row.get("Underlying Price"), prev_row.get("Underlying Price")),
+                    cell("Underlying", row.get("Underlying", row.get("Underlying Price")), prev_row.get("Underlying", prev_row.get("Underlying Price"))),
                     cell("Status", row.get("Status", ""), prev_row.get("Status")),
-                    cell("Quantity", row.get("Quantity", row.get("count", "")), prev_row.get("Quantity", prev_row.get("count"))),
+                    cell("Qty", row.get("Qty", row.get("Quantity", row.get("count", ""))), prev_row.get("Qty", prev_row.get("Quantity", prev_row.get("count")))),
+                    cell("P/L Day", row.get("P/L Day"), prev_row.get("P/L Day")),
+                    cell("P/L Open", row.get("P/L Open"), prev_row.get("P/L Open")),
                     Text(str(row.get("New Strike", "")), style="", justify="center"),
                     Text(str(row.get("New Expiration", "")), style="", justify="center"),
                     Text(str(row.get("Roll Out (Days)", "")), style="", justify="center"),
@@ -321,18 +326,24 @@ class RollShortOptionsWidget(Static):
                     ticker = row.get("Ticker")
                     strike = float(row.get("Current Strike", 0)) if row.get("Current Strike") else 0.0
                     cols = list(self.query_one(DataTable).columns.keys())
-                    col_under = (cols.index("Underlying Price") if "Underlying Price" in cols else 4)
-                    col_extr = (cols.index("Extrinsic") if "Extrinsic" in cols else 13)
-                    col_credit = (cols.index("Credit") if "Credit" in cols else 10)
+                    col_under = (cols.index("Underlying") if "Underlying" in cols else (cols.index("Underlying Price") if "Underlying Price" in cols else 4))
+                    col_extr = (cols.index("Extrinsic") if "Extrinsic" in cols else 15)
+                    col_credit = (cols.index("Credit") if "Credit" in cols else 12)
+                    col_pl_open = cols.index("P/L Open") if "P/L Open" in cols else None
+                    qty_val = row.get("Qty", row.get("Quantity", row.get("count", 0)))
+                    avg_price = row.get("receivedPremium") if row.get("receivedPremium") is not None else None
                     self._credit_maps.append({
                         "row_key": row_key,
                         "col_credit": col_credit,
                         "col_under": col_under,
                         "col_extr": col_extr,
+                        "col_pl_open": col_pl_open,
                         "old_symbol": old_sym,
                         "new_symbol": new_sym,
                         "ticker": ticker,
                         "strike": strike,
+                        "qty": int(qty_val) if qty_val is not None else 0,
+                        "avg": float(avg_price) if avg_price is not None else None,
                     })
                 except Exception:
                     pass
@@ -448,5 +459,38 @@ class RollShortOptionsWidget(Static):
                         except Exception:
                             extr_style = ""
                         table.update_cell(m["row_key"], m["col_extr"], Text(f"{extrinsic:.2f}", style=extr_style, justify="right"))
+                # Update P/L Open = (avg - mark) * 100 * qty for short
+                try:
+                    if old_sym and m.get("col_pl_open") is not None and m.get("avg") is not None:
+                        last_opt = self._quote_provider.get_last(old_sym)
+                        bid, ask = self._quote_provider.get_bid_ask(old_sym)
+                        mark = None
+                        if last_opt is not None:
+                            mark = last_opt
+                        elif bid is not None and ask is not None:
+                            mark = (bid + ask) / 2
+                        if mark is not None:
+                            pl_val = (float(m["avg"]) - float(mark)) * 100 * int(m.get("qty", 0))
+                            prev_pl = m.get("last_pl_open")
+                            style = m.get("last_pl_open_style", "")
+                            try:
+                                if prev_pl is not None:
+                                    if float(pl_val) > float(prev_pl):
+                                        style = "bold green"
+                                    elif float(pl_val) < float(prev_pl):
+                                        style = "bold red"
+                            except Exception:
+                                pass
+                            # Base color by sign
+                            if not style:
+                                try:
+                                    style = "green" if pl_val > 0 else ("red" if pl_val < 0 else "")
+                                except Exception:
+                                    style = ""
+                            m["last_pl_open"] = pl_val
+                            m["last_pl_open_style"] = style
+                            table.update_cell(m["row_key"], m["col_pl_open"], Text(f"${pl_val:,.2f}", style=style, justify="right"))
+                except Exception:
+                    pass
         except Exception:
             pass
