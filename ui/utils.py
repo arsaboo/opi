@@ -89,7 +89,21 @@ def _to_float(val: Any) -> Optional[float]:
 
 
 def _fmt_money(val: float) -> str:
-    return f"${val:,.2f}"
+    """Format monetary values.
+
+    - Positive values: `$123.45`
+    - Negative values: `($123.45)`
+    - Zero: `$0.00`
+    """
+    try:
+        v = float(val)
+    except Exception:
+        # Fall back to original behavior if non-numeric slips through
+        return f"${val:,.2f}"
+
+    if v < 0:
+        return f"(${abs(v):,.2f})"
+    return f"${v:,.2f}"
 
 
 def _fmt_percent(val: float) -> str:

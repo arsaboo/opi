@@ -6,6 +6,7 @@ from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 from ..utils import style_cell as cell
+from ..utils import _fmt_money as fmt_money
 import asyncio
 # keyboard not used here; avoid global hooks
 from api.order_manager import cancel_order
@@ -489,7 +490,7 @@ class RollShortOptionsWidget(Static):
                                     style = ""
                             m["last_pl_open"] = pl_val
                             m["last_pl_open_style"] = style
-                            table.update_cell(m["row_key"], m["col_pl_open"], Text(f"${pl_val:,.2f}", style=style, justify="right"))
+                            table.update_cell(m["row_key"], m["col_pl_open"], Text(fmt_money(pl_val), style=style, justify="right"))
                 except Exception:
                     pass
         except Exception:
