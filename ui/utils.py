@@ -53,6 +53,8 @@ RIGHT_JUSTIFY_FIELDS = {
     "Extrinsic",
     "Strike Δ",
     "Strike \u0010",
+    "P/L Day",
+    "P/L Open",
     "strike_low",
     "strike_high",
     "low_strike",
