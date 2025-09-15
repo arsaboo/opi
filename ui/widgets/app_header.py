@@ -2,29 +2,27 @@ from textual.widgets import Static
 from textual import work
 from textual.timer import Timer
 from rich.text import Text
-from typing import Dict, Optional
+from typing import Optional
 
 from api.streaming.provider import get_provider, ensure_provider
 from configuration import stream_quotes
 
 
 class AppHeader(Static):
-    """Single-line header with indices (SPX, NDX) and current screen title."""
+    """Single-line header showing SPX and the current screen title.
 
-    CANDIDATES = {
-        "SPX": ["$SPX", "$SPX.X"],
-        "NDX": ["$NDX", "$NDX.X"],
-    }
+    Subscribes to and displays $SPX using streaming quotes and performs
+    a one-time REST query to fetch previous close for delta/percent.
+    """
+
+    SPX_SYM = "$SPX"
 
     def __init__(self) -> None:
         super().__init__()
         self._provider = None
-        self._chosen: Dict[str, Optional[str]] = {k: None for k in self.CANDIDATES}
-        self._prev_close: Dict[str, Optional[float]] = {k: None for k in self.CANDIDATES}
-        self._rest_last: Dict[str, Optional[float]] = {k: None for k in self.CANDIDATES}
+        self._spx_prev: Optional[float] = None
         self._title: str = "Options Trader"
         self._tick: Optional[Timer] = None
-        self._poll: Optional[Timer] = None
 
     def on_mount(self) -> None:
         # styling consistent with original Header
@@ -35,70 +33,40 @@ class AppHeader(Static):
             self._provider = get_provider(self.app.api.connectClient)
         except Exception:
             self._provider = None
-        # Resolve best symbols and prev close
-        self._init_symbols()
+        # Initialize: fetch previous close and ensure streaming subs
+        self._init_header()
         # Refresh paint every second
         self._tick = self.set_interval(1, self.refresh_view)
-        # Poll REST/ATM last every 2s as canonical source for header numbers
-        self._poll = self.set_interval(2, self._poll_last_rest)
 
     def set_title(self, title: str) -> None:
         self._title = title
         self.refresh()
 
     @work
-    async def _init_symbols(self) -> None:
+    async def _init_header(self) -> None:
+        # One-time previous close via REST for SPX
         try:
-            # Probe all candidates; pick first that returns a quote
-            all_syms = []
-            for arr in self.CANDIDATES.values():
-                all_syms.extend(arr)
-            r = self.app.api.connectClient.get_quotes(all_syms)
+            r = self.app.api.connectClient.get_quotes([self.SPX_SYM])
             r.raise_for_status()
             data = r.json()
-            for label, cands in self.CANDIDATES.items():
-                chosen = None
-                prev = None
-                for sym in cands:
-                    q = data.get(sym) or {}
-                    last = q.get("quote", {}).get("lastPrice")
-                    pcls = (
-                        q.get("quote", {}).get("previousClose")
-                        or q.get("quote", {}).get("closePrice")
-                        or q.get("quote", {}).get("regularMarketPreviousClose")
-                    )
-                    if last is not None or pcls is not None:
-                        chosen = sym
-                        try:
-                            prev = float(pcls) if pcls is not None else None
-                        except Exception:
-                            prev = None
-                        break
-                self._chosen[label] = chosen
-                self._prev_close[label] = prev
-            # Ensure provider is running, then subscribe to chosen symbols (avoid redundancy)
+            def prev_close(q: dict) -> Optional[float]:
+                quote = q.get("quote", {}) if isinstance(q, dict) else {}
+                pc = quote.get("previousClose") or quote.get("closePrice") or quote.get("regularMarketPreviousClose")
+                try:
+                    return float(pc) if pc is not None else None
+                except Exception:
+                    return None
+            self._spx_prev = prev_close(data.get(self.SPX_SYM, {}))
+        except Exception:
+            # Previous close is optional; continue
+            pass
+
+        # Ensure provider and subscribe to both symbols
+        try:
             if stream_quotes:
                 prov = await ensure_provider(self.app.api.connectClient)
                 self._provider = prov
-                to_sub = [s for s in self._chosen.values() if s]
-                if to_sub:
-                    await prov.subscribe_equities(to_sub)
-        except Exception:
-            pass
-
-    @work
-    async def _poll_last_rest(self) -> None:
-        """Refresh canonical index values using the same API method as tables."""
-        try:
-            # Reuse the exact source used by UI tables to avoid mismatches
-            # Canonical symbols
-            for label, canon in (("SPX", "$SPX"), ("NDX", "$NDX")):
-                try:
-                    price = self.app.api.getATMPrice(canon)
-                    self._rest_last[label] = float(price) if price is not None else None
-                except Exception:
-                    # Keep previous value on failure
-                    pass
+                await prov.subscribe_equities([self.SPX_SYM])
         except Exception:
             pass
 
@@ -107,18 +75,13 @@ class AppHeader(Static):
         left_text = Text()
         left_plain_parts: list[str] = []
 
-        def add_label(label: str) -> None:
-            # Prefer canonical value computed via Api.getATMPrice (matches table values)
-            last = self._rest_last.get(label)
-            if last is None:
-                # Fallback to streaming if canonical is not yet available
-                sym = self._chosen.get(label)
-                if sym and self._provider:
-                    try:
-                        last = self._provider.get_last(sym)
-                    except Exception:
-                        last = None
-            prev = self._prev_close.get(label)
+        def add_symbol(label: str, symbol: str, prev: Optional[float]) -> None:
+            last = None
+            if self._provider:
+                try:
+                    last = self._provider.get_last(symbol)
+                except Exception:
+                    last = None
             if last is None:
                 seg = f"{label} —   "
                 left_plain_parts.append(seg)
@@ -130,10 +93,8 @@ class AppHeader(Static):
                 pct = 100.0 * delta / prev
                 sign = "+" if delta >= 0 else ""
                 color = "bold green" if delta >= 0 else "bold red"
-                # Plain string for width calc
                 seg_plain = f"{label:>3} {last_str} {sign}{delta:.2f} ({sign}{pct:.2f}%)  "
                 left_plain_parts.append(seg_plain)
-                # Styled text
                 left_text.append(f"{label:>3} {last_str} ")
                 left_text.append(f"{sign}{delta:.2f}", style=color)
                 left_text.append(f" ({sign}{pct:.2f}%)  ", style=color)
@@ -142,13 +103,11 @@ class AppHeader(Static):
                 left_plain_parts.append(seg)
                 left_text.append(seg)
 
-        add_label("SPX")
-        add_label("NDX")
+        add_symbol("SPX", self.SPX_SYM, self._spx_prev)
 
         left_plain = "".join(left_plain_parts)
         width = getattr(self.size, "width", 0) or 0
         title = self._title
-        # Compute padding to approximately center the title, accounting for left content
         if width > 0:
             pad = max(1, (width - len(title)) // 2 - len(left_plain))
         else:

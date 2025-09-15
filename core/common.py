@@ -69,7 +69,7 @@ def parse_option_details(api, data, option_symbol):
                     ticker = "$SPX"
                 else:
                     ticker = contract["underlying"]
-                underlying_price = api.getATMPrice(ticker)
+                underlying_price = api.get_price(ticker)
                 return short_strike, short_price, short_expiry, underlying_price
     return None, None, None, None
 

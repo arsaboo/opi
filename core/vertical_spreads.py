@@ -12,10 +12,9 @@ def bull_call_spread(api, asset, spread=100, days=90, downsideProtection=0.25, p
     toDate = datetime.today() + timedelta(days=days)
     fromDate = datetime.today() + timedelta(days=minDays)
     optionChain = OptionChain(api, asset, toDate, days)
-    quote = api.get_quote(asset)
-    if not (quote and asset in quote and quote[asset] and "quote" in quote[asset]):
+    underlying_price = api.get_price(asset)
+    if underlying_price is None:
         return None
-    underlying_price = quote[asset]["quote"].get("lastPrice")
     chain = optionChain.get()
 
     chain = [entry for entry in chain if datetime.strptime(entry["date"], "%Y-%m-%d") >= fromDate]

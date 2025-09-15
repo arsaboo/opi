@@ -13,10 +13,9 @@ def synthetic_covered_call_spread(api, asset, spread=100, days=90, downsideProte
     fromDate = datetime.today() + timedelta(days=minDays)
 
     optionChain = OptionChain(api, asset, toDate, days)
-    quote = api.get_quote(asset)
-    if not (quote and asset in quote and quote[asset] and "quote" in quote[asset]):
+    underlying_price = api.get_price(asset)
+    if underlying_price is None:
         return None
-    underlying_price = quote[asset]["quote"].get("lastPrice")
 
     calls = optionChain.get()
     # Use a reasonable strike count similar to calls path (OptionChain.get uses 150)

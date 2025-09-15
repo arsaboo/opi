@@ -34,6 +34,9 @@ class RollShortOptionsWidget(Static):
         self._roll_data = []  # Store the actual roll data for each row
         self._previous_market_status = None  # Track previous market status
         self._override_credit = None  # User-edited initial credit
+        self._selected_row_data = None
+        self._row_data_by_key = {}
+        self._selected_row_key = None
 
     def compose(self):
         """Create child widgets."""
@@ -118,14 +121,58 @@ class RollShortOptionsWidget(Static):
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
-        # Get the selected row data
-        row_index = event.cursor_row
-        if hasattr(self, '_roll_data') and self._roll_data and row_index < len(self._roll_data):
-            selected_data = self._roll_data[row_index]
-            # Show order confirmation dialog
-            self.show_order_confirmation(selected_data)
+        selected_data = None
+        row_key = None
+        try:
+            row_key = getattr(event, "row_key", None)
+            if row_key is not None:
+                selected_data = self._row_data_by_key.get(row_key)
+        except Exception:
+            selected_data = None
+        if selected_data is None:
+            row_index = getattr(event, "cursor_row", 0)
+            if hasattr(self, '_roll_data') and self._roll_data and row_index < len(self._roll_data):
+                selected_data = self._roll_data[row_index]
+        if selected_data:
+            self._selected_row_data = selected_data
+            self._selected_row_key = row_key
+            # Block if credit is not available (prefer streaming if present)
+            eff_credit = self._get_effective_credit(row_key, selected_data)
+            if eff_credit is None:
+                try:
+                    self.app.query_one(StatusLog).add_message("Cannot place roll: Credit is N/A for the selected row.")
+                except Exception:
+                    pass
+                return
+            self.show_order_confirmation(selected_data, eff_credit)
 
-    def show_order_confirmation(self, roll_data) -> None:
+    def _get_effective_credit(self, row_key, roll_data):
+        """Return latest usable credit (float) or None if unavailable.
+
+        Priority:
+        1) Streaming last credit mapped to the row
+        2) Static credit value from roll_data if numeric
+        """
+        # Try streaming mapped credit first
+        try:
+            if getattr(self, "_credit_maps", None):
+                for m in self._credit_maps:
+                    if m.get("row_key") == row_key and m.get("last_credit") is not None:
+                        return float(m.get("last_credit"))
+        except Exception:
+            pass
+        # Fallback to roll_data field
+        try:
+            cred = roll_data.get("Credit")
+            if cred is None:
+                return None
+            if isinstance(cred, str) and cred.strip().upper() == "N/A":
+                return None
+            return float(cred)
+        except Exception:
+            return None
+
+    def show_order_confirmation(self, roll_data, effective_credit=None) -> None:
         """Show order confirmation screen."""
         # Calculate roll up amount (difference between new and current strike)
         try:
@@ -135,13 +182,17 @@ class RollShortOptionsWidget(Static):
         roll_out_days = roll_data.get("Days Δ", "") or roll_data.get("Roll Out (Days)", "")
         underlying_value = roll_data.get("Underlying", roll_data.get("Underlying Price", ""))
 
+        # Use effective credit if provided (e.g., from streaming) else raw value
+        if effective_credit is None:
+            effective_credit = self._get_effective_credit(self._selected_row_key, roll_data)
+
         order_details = {
             "Asset": roll_data.get("Ticker", ""),
             "Current Strike": roll_data.get("Current Strike", ""),
             "New Strike": roll_data.get("New Strike", ""),
             "Current Expiration": roll_data.get("Expiration", ""),  # Current expiration
             "New Expiration": roll_data.get("New Expiration", ""),  # New expiration
-            "Credit": roll_data.get("Credit", ""),
+            "Credit": (f"{effective_credit:.2f}" if isinstance(effective_credit, (int, float)) else roll_data.get("Credit", "")),
             "Quantity": roll_data.get("Qty", roll_data.get("Quantity", roll_data.get("count", ""))),
             "Roll Up Amount": roll_up_amount,
             "Days Δ": roll_out_days,
@@ -170,19 +221,23 @@ class RollShortOptionsWidget(Static):
     async def place_order(self) -> None:
         """Place the roll order with price improvements and UI monitoring."""
         try:
-            # Get the selected row data
-            table = self.query_one(DataTable)
-            cursor_row = table.cursor_row
-            if cursor_row < len(self._roll_data):
-                roll_data = self._roll_data[cursor_row]
+            # Use persisted selection first
+            roll_data = self._selected_row_data
+            if not roll_data:
+                table = self.query_one(DataTable)
+                cursor_row = table.cursor_row
+                if cursor_row < len(self._roll_data):
+                    roll_data = self._roll_data[cursor_row]
+            if roll_data:
                 # Extract necessary data
                 old_symbol = roll_data.get("optionSymbol", "")
                 new_symbol = roll_data.get("New Option Symbol", "")
                 # Accept either new label (Qty) or legacy (Quantity)
                 amount = int(roll_data.get("Qty", roll_data.get("Quantity", 1)))
-                credit = roll_data.get("Credit", "N/A")
-                if not old_symbol or not new_symbol or credit == "N/A":
-                    self.app.query_one(StatusLog).add_message("Error: Missing or invalid data for roll order.")
+                # Determine effective credit (streaming preferred)
+                credit = self._get_effective_credit(self._selected_row_key, roll_data)
+                if not old_symbol or not new_symbol or credit is None:
+                    self.app.query_one(StatusLog).add_message("Cannot place roll: Credit is N/A for the selected row.")
                     return
                 credit = float(credit)
                 initial_price = self._override_credit if self._override_credit is not None else credit
@@ -217,6 +272,7 @@ class RollShortOptionsWidget(Static):
                     self.app.query_one(StatusLog).add_message("Roll order not filled after all attempts.")
                     
                 self._override_credit = None
+                self._selected_row_data = None
                 
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for roll order placement.")
@@ -288,6 +344,7 @@ class RollShortOptionsWidget(Static):
         data = await logic.get_expiring_shorts_data(self.app.api)
         table = self.query_one(DataTable)
         table.clear()
+        self._row_data_by_key = {}
         self._credit_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
 
@@ -320,6 +377,7 @@ class RollShortOptionsWidget(Static):
                 ]
                 # Add row with styled cells
                 row_key = table.add_row(*cells)
+                self._row_data_by_key[row_key] = row
                 # Map symbols for streaming roll credit
                 try:
                     old_sym = row.get("optionSymbol")

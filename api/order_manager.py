@@ -479,7 +479,8 @@ class OrderManager:
         max_retries = 75
         initial_price = price
 
-        def _infer_base_symbol_and_tick() -> tuple[str | None, float]:
+        from typing import Optional, Tuple
+        def _infer_base_symbol_and_tick() -> Tuple[Optional[str], float]:
             try:
                 name = getattr(order_func, "__name__", "") or ""
             except Exception:

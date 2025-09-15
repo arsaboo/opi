@@ -9,7 +9,7 @@ from .. import logic
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
-from ..utils import style_cell as cell, style_ba, style_flags
+from ..utils import style_cell as cell, style_ba, style_flags, _fmt_money as fmt_money
 from configuration import stream_quotes
 from api.streaming.subscription_manager import get_subscription_manager
 from api.streaming.provider import get_provider
@@ -37,6 +37,7 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
         self._box_spreads_data = []  # Store actual box spreads data for order placement
         self._previous_market_status = None  # Track previous market status
         self._override_price = None  # User-edited initial price
+        self._selected_row_data = None  # Persist selected row across confirmation/refresh
 
     def compose(self):
         """Create child widgets."""
@@ -60,8 +61,8 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
             "High Call B/A",
             "Low Put B/A",
             "High Put B/A",
-            "Mid Net Price",
-            "Nat Net Price",
+            "Mid Price",
+            "Nat Price",
             "Borrowed",
             "Face Value",
             "Mid Ann. Cost %",
@@ -83,7 +84,8 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
         # Add periodic market status check every 30 seconds
         self.set_interval(30, self.check_market_status)
         # Streaming maps
-        self._ba_maps = []
+        self._ba_maps = []  # per-leg B/A cell updates
+        self._row_calc = []  # per-row recalculation of mid/net using streaming
         if stream_quotes:
             try:
                 self._quote_provider = get_provider(self.app.api.connectClient)
@@ -103,9 +105,23 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
         # Get the selected row data
-        row_index = event.cursor_row
-        if hasattr(self, '_box_spreads_data') and self._box_spreads_data and row_index < len(self._box_spreads_data):
-            selected_data = self._box_spreads_data[row_index]
+        selected_data = None
+        try:
+            # Prefer row_key from event when available (robust to sorting)
+            row_key = getattr(event, "row_key", None)
+            if row_key is not None and hasattr(self, "_row_data_by_key"):
+                selected_data = self._row_data_by_key.get(row_key)
+        except Exception:
+            selected_data = None
+
+        if selected_data is None:
+            # Fallback to cursor index mapping
+            row_index = getattr(event, "cursor_row", 0)
+            if hasattr(self, '_box_spreads_data') and self._box_spreads_data and row_index < len(self._box_spreads_data):
+                selected_data = self._box_spreads_data[row_index]
+
+        if selected_data:
+            self._selected_row_data = selected_data
             # Show order confirmation dialog
             self.show_order_confirmation(selected_data)
 
@@ -167,10 +183,12 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
             # Capture price override if present
             if isinstance(result, dict) and result.get("price") is not None:
                 try:
-                    self._override_price = float(result.get("price"))
+                    self._override_price = float(result["price"])  # Capture the edited price
                 except Exception:
-                    self._override_price = None
+                    self._override_price = None  # Reset if conversion fails
+
             self.app.query_one(StatusLog).add_message("Order confirmed. Placing box spread order...")
+            # Use the row that was selected when confirmation opened
             self.place_box_spread_order()
         else:
             self.app.query_one(StatusLog).add_message("Box spread order cancelled by user.")
@@ -179,13 +197,16 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
     async def place_box_spread_order(self) -> None:
         """Place the box spread SELL order with automatic price improvement and UI feedback."""
         try:
-            # Get the selected row data
-            table = self.query_one(DataTable)
-            cursor_row = table.cursor_row
+            # Use persisted selected row data to avoid selecting the wrong row after refresh
+            row = self._selected_row_data
+            if not row:
+                # Fallback to current cursor if no persisted selection
+                table = self.query_one(DataTable)
+                cursor_row = table.cursor_row
+                if cursor_row < len(self._box_spreads_data):
+                    row = self._box_spreads_data[cursor_row]
 
-            if cursor_row < len(self._box_spreads_data):
-                row = self._box_spreads_data[cursor_row]
-
+            if row:
                 # Extract symbols for the 4 legs
                 low_call_symbol = row.get("low_call_symbol")
                 high_call_symbol = row.get("high_call_symbol")
@@ -221,64 +242,65 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                     pass
 
                 # Manual vs automatic handling
-                try:
-                    if MANUAL_ORDER:
-                        # Place once at selected price; manage from Order Management
-                        order_id = await asyncio.to_thread(
-                            self.app.api.sell_box_spread_order,
-                            low_call_symbol,
-                            high_call_symbol,
-                            low_put_symbol,
-                            high_put_symbol,
-                            1,
-                            price=initial_price,
-                        )
-                        if order_id is None:
-                            self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
-                            self.app.query_one(StatusLog).add_message(
-                                f"Legs: {low_call_symbol} / {high_call_symbol} / {high_put_symbol} / {low_put_symbol} @ ${initial_price:.2f}"
-                            )
-                        else:
-                            self.app.query_one(StatusLog).add_message(
-                                "Manual order placed. Manage from Order Management (U=Update, C=Cancel)."
-                            )
-                        return
-                    else:
-                        # Use API's built-in placement with price improvements and monitoring
+                if MANUAL_ORDER:
+                    # Place once at selected price; manage from Order Management
+                    order_id = await asyncio.to_thread(
+                        self.app.api.sell_box_spread_order,
+                        low_call_symbol,
+                        high_call_symbol,
+                        low_put_symbol,
+                        high_put_symbol,
+                        1,
+                        price=initial_price,
+                    )
+                    if order_id is None:
+                        self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
                         self.app.query_one(StatusLog).add_message(
-                            f"Placing SELL box spread @ ${initial_price:.2f} (will improve if not filled)"
+                            f"Legs: {low_call_symbol} / {high_call_symbol} / {high_put_symbol} / {low_put_symbol} @ ${initial_price:.2f}"
                         )
-
-                        # Use the API's place_order method which handles price improvements
-                        order_func = self.app.api.sell_box_spread_order
-                        order_params = [
-                            low_call_symbol,
-                            high_call_symbol,
-                            low_put_symbol,
-                            high_put_symbol,
-                            1,  # quantity
-                        ]
-
-                        result = await asyncio.to_thread(
-                            self.app.api.place_order, order_func, order_params, initial_price
+                    else:
+                        self.app.query_one(StatusLog).add_message(
+                            "Manual order placed. Manage from Order Management (U=Update, C=Cancel)."
                         )
+                    return
+                else:
+                    # Use API's built-in placement with price improvements and monitoring
+                    self.app.query_one(StatusLog).add_message(
+                        f"Placing SELL box spread @ ${initial_price:.2f} (will improve if not filled)"
+                    )
 
-                        if result is True:
-                            self.app.query_one(StatusLog).add_message("Box spread order filled successfully!")
-                        elif result == "cancelled":
-                            self.app.query_one(StatusLog).add_message("Box spread order cancelled by user.")
-                        else:
-                            self.app.query_one(StatusLog).add_message("Box spread order not filled after attempts.")
-                finally:
-                    self._override_price = None
-                    try:
-                        keyboard.unhook_all()
-                    except Exception:
-                        pass
-            else:
+                    # Use the API's place_order method which handles price improvements
+                    order_func = self.app.api.sell_box_spread_order
+                    order_params = [
+                        low_call_symbol,
+                        high_call_symbol,
+                        low_put_symbol,
+                        high_put_symbol,
+                        1,  # quantity
+                    ]
+
+                    result = await asyncio.to_thread(
+                        self.app.api.place_order, order_func, order_params, initial_price
+                    )
+
+                    if result is True:
+                        self.app.query_one(StatusLog).add_message("Box spread order filled successfully!")
+                    elif result == "cancelled":
+                        self.app.query_one(StatusLog).add_message("Box spread order cancelled by user.")
+                    else:
+                        self.app.query_one(StatusLog).add_message("Box spread order not filled after attempts.")
+
+            if not row:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for box spread order placement.")
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error placing box spread order: {e}")
+        finally:
+            self._override_price = None
+            self._selected_row_data = None
+            try:
+                keyboard.unhook_all()
+            except Exception:
+                pass
 
     @work
     async def run_get_box_spreads_data(self) -> None:
@@ -286,6 +308,8 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
         data = await logic.get_box_spreads_data(self.app.api)
         table = self.query_one(DataTable)
         table.clear()
+        # Reset row-key mapping for selection lookup
+        self._row_data_by_key = {}
         self._ba_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
 
@@ -524,6 +548,8 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                 ]
                 # Add row with styled cells
                 row_key = table.add_row(*cells)
+                # Map row_key -> data for robust selection regardless of sorting
+                self._row_data_by_key[row_key] = row
                 # Map symbols for streaming updates if present
                 try:
                     lcs = row.get("low_call_symbol")
@@ -542,6 +568,28 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                         self._ba_maps.append({"row_key": row_key, "col_key": col_lp, "symbol": lps, "last_bid": locals().get("low_put_bid"), "last_ask": locals().get("low_put_ask")})
                     if hps:
                         self._ba_maps.append({"row_key": row_key, "col_key": col_hp, "symbol": hps, "last_bid": locals().get("high_put_bid"), "last_ask": locals().get("high_put_ask")})
+                    # Row-level recalculation map
+                    try:
+                        col_mid = self._col_keys[9] if len(self._col_keys) > 9 else 9
+                        col_borr = self._col_keys[11] if len(self._col_keys) > 11 else 11
+                        col_mid_ann = self._col_keys[13] if len(self._col_keys) > 13 else 13
+                        self._row_calc.append({
+                            "row_key": row_key,
+                            "low_call": lcs,
+                            "high_call": hcs,
+                            "low_put": lps,
+                            "high_put": hps,
+                            "face_value": row.get("face_value"),
+                            "days": row.get("days_to_expiry"),
+                            "col_mid": col_mid,
+                            "col_borr": col_borr,
+                            "col_mid_ann": col_mid_ann,
+                            "last_mid": row.get("mid_net_price"),
+                            "last_borr": row.get("mid_upfront_amount"),
+                            "last_mid_ann": row.get("mid_annualized_return"),
+                        })
+                    except Exception:
+                        pass
                 except Exception:
                     pass
             self._prev_rows = data
@@ -606,9 +654,82 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
                 ba_text.append("|")
                 ba_text.append(f"{float(ask):.2f}" if ask is not None else "", style=ask_style)
                 table.update_cell(m["row_key"], m["col_key"], ba_text)
+            # After updating B/A cells, recompute mid/net metrics per row when all legs have current quotes
+            for rc in getattr(self, "_row_calc", []):
+                lcs, hcs, lps, hps = rc.get("low_call"), rc.get("high_call"), rc.get("low_put"), rc.get("high_put")
+                if not all([lcs, hcs, lps, hps]):
+                    continue
+                # Collect mids where possible; if one side missing use last stored in _ba_maps
+                def mid_for(sym):
+                    b, a = self._quote_provider.get_bid_ask(sym)
+                    if b is None or a is None:
+                        return None
+                    try:
+                        return (float(b) + float(a)) / 2.0
+                    except Exception:
+                        return None
+                lc_mid = mid_for(lcs)
+                hc_mid = mid_for(hcs)
+                lp_mid = mid_for(lps)
+                hp_mid = mid_for(hps)
+                if None in (lc_mid, hc_mid, lp_mid, hp_mid):
+                    continue
+                try:
+                    mid_trade = lc_mid + hp_mid - hc_mid - lp_mid
+                    upfront = mid_trade * 100.0
+                    face_value = float(rc.get("face_value") or 0)
+                    days = int(rc.get("days") or 0)
+                    ann = None
+                    if upfront > 0 and face_value > 0 and days > 0 and upfront < face_value:
+                        ann = ((face_value - upfront) / upfront) * (365.0 / days) * 100.0
+                    # Update cells with basic coloring on change
+                    prev_mid = rc.get("last_mid")
+                    prev_borr = rc.get("last_borr")
+                    prev_ann = rc.get("last_mid_ann")
+                    mid_style = rc.get("last_mid_style", "")
+                    borr_style = rc.get("last_borr_style", "")
+                    ann_style = rc.get("last_ann_style", "")
+                    try:
+                        if prev_mid is not None and mid_trade is not None:
+                            if float(mid_trade) > float(prev_mid):
+                                mid_style = "bold green"
+                            elif float(mid_trade) < float(prev_mid):
+                                mid_style = "bold red"
+                    except Exception:
+                        pass
+                    try:
+                        if prev_borr is not None and upfront is not None:
+                            if float(upfront) > float(prev_borr):
+                                borr_style = "bold green"
+                            elif float(upfront) < float(prev_borr):
+                                borr_style = "bold red"
+                    except Exception:
+                        pass
+                    try:
+                        if prev_ann is not None and ann is not None:
+                            if float(ann) < float(prev_ann):
+                                # Lower cost is better -> green when ann decreases
+                                ann_style = "bold green"
+                            elif float(ann) > float(prev_ann):
+                                ann_style = "bold red"
+                    except Exception:
+                        pass
+                    if mid_trade is not None:
+                        # Keep numeric alignment to the right
+                        table.update_cell(rc["row_key"], rc["col_mid"], Text(f"{mid_trade:.2f}", style=mid_style, justify="right"))
+                        rc["last_mid"] = mid_trade
+                        rc["last_mid_style"] = mid_style
+                    if upfront is not None:
+                        # Display as currency consistently with initial render
+                        table.update_cell(rc["row_key"], rc["col_borr"], Text(fmt_money(upfront), style=borr_style, justify="right"))
+                        rc["last_borr"] = upfront
+                        rc["last_borr_style"] = borr_style
+                    if ann is not None:
+                        # Ensure percent sign and right alignment
+                        table.update_cell(rc["row_key"], rc["col_mid_ann"], Text(f"{ann:.2f}%", style=ann_style, justify="right"))
+                        rc["last_mid_ann"] = ann
+                        rc["last_ann_style"] = ann_style
+                except Exception:
+                    continue
         except Exception:
             pass
-
-
-
-

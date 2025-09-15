@@ -1,26 +1,110 @@
 #!/usr/bin/env python3
 """
 Test script to explore account information available from the Schwab API.
+
+Added: streaming index ticker probe. Usage examples:
+
+  python scripts/test_schwab.py stream-indices --seconds 15
+
+This will connect the streaming API and subscribe to several SPX/NDX
+candidate symbols via level-one equities, then report which symbols
+produced ticks.
 """
 
 import json
 import sys
 import os
+from dotenv import load_dotenv  # Add this import
 
-# Add the current directory to the path so we can import the api module
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Load environment variables from .env file
+load_dotenv()
 
+# Add the parent directory of the project to the path so we can import the api module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import asyncio
 from api import Api
-from configuration import apiKey, apiRedirectUri, appSecret
+
+async def probe_index_streams(api, seconds=15):
+    """Subscribe to candidate index symbols and report which stream.
+
+    Uses level_one_equity subscriptions. Prints received LAST_PRICE per symbol.
+    """
+    from schwab.streaming import StreamClient
+
+    # Gather account id
+    r = api.connectClient.get_account_numbers()
+    r.raise_for_status()
+    acct = int(r.json()[0]["accountNumber"])
+
+    stream = StreamClient(api.connectClient, account_id=acct)
+    seen = {}
+
+    def _handle(msg):
+        for c in msg.get("content") or []:
+            key = c.get("key") or c.get("symbol")
+            lp = c.get("LAST_PRICE") or c.get("lastPrice") or c.get("LAST") or c.get("last")
+            if key is not None and lp is not None:
+                try:
+                    seen.setdefault(key, []).append(float(lp))
+                except Exception:
+                    pass
+
+    stream.add_level_one_equity_handler(_handle)
+
+    # Candidate symbols to try
+    spx_candidates = ["$SPX", "$SPX.X", "SPX"]
+    ndx_candidates = ["$NDX", "$NDX.X", "NDX"]
+    symbols = list({*spx_candidates, *ndx_candidates})
+
+    await stream.login()
+    await stream.level_one_equity_subs(symbols)
+
+    print(f"Subscribed to: {symbols}")
+    print(f"Collecting for {seconds}s...")
+    end = asyncio.get_event_loop().time() + seconds
+    while asyncio.get_event_loop().time() < end:
+        await stream.handle_message()
+
+    print("\nResults (symbols with received LAST):")
+    if not seen:
+        print("  No ticks received. Try running during market hours or extend --seconds.")
+    else:
+        for sym, vals in seen.items():
+            try:
+                sample = ", ".join(f"{v:.2f}" for v in vals[:3])
+            except Exception:
+                sample = str(vals[:3])
+            print(f"  {sym}: {len(vals)} ticks; samples: {sample}")
+
+    try:
+        await stream.logout()
+    except Exception:
+        pass
+
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Schwab API test utility")
+    parser.add_argument("mode", nargs="?", default="rest", choices=["rest", "stream-indices"], help="Test mode")
+    parser.add_argument("--seconds", dest="seconds", type=int, default=15, help="Seconds to capture streaming data")
+    args = parser.parse_args()
+
     print("Initializing API...")
-    api = Api(apiKey, apiRedirectUri, appSecret)
+    api = Api(
+        os.getenv("SCHWAB_API_KEY"),
+        os.getenv("SCHWAB_REDIRECT_URI"),
+        os.getenv("SCHWAB_APP_SECRET")  # Updated initialization
+    )
 
     try:
         # Setup the API connection
         api.setup()
         print("API initialized successfully!")
+
+        if args.mode == "stream-indices":
+            asyncio.run(probe_index_streams(api, seconds=args.seconds))
+            return
 
         # Get account numbers
         print("\n1. Getting account numbers...")

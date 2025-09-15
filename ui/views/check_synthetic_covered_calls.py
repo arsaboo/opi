@@ -40,6 +40,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
         self._quote_provider = None
         self._col_keys = []
         self._ba_maps = []  # entries: {row_key, col_key, symbol, last_bid, last_ask}
+        self._row_data_by_key = {}
 
     def compose(self):
         """Create child widgets."""
@@ -111,6 +112,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
         data = await logic.get_vertical_spreads_data(self.app.api, synthetic=True)
         table = self.query_one(DataTable)
         table.clear()
+        self._row_data_by_key = {}
         self._ba_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
         # Status logs removed after debugging; rely on core.common CAGR
@@ -285,6 +287,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                 ]
                 # Add row with styled cells
                 row_key = table.add_row(*cells)
+                self._row_data_by_key[row_key] = row
                 # Use symbols from data when present
                 try:
                     col_call_low = self._col_keys[3] if len(self._col_keys) > 3 else 3
@@ -327,10 +330,19 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
-        # Get the selected row data
-        row_index = event.cursor_row
-        if hasattr(self, '_synthetic_covered_calls_data') and self._synthetic_covered_calls_data and row_index < len(self._synthetic_covered_calls_data):
-            selected_data = self._synthetic_covered_calls_data[row_index]
+        # Prefer row_key mapping for robust selection
+        selected_data = None
+        try:
+            row_key = getattr(event, "row_key", None)
+            if row_key is not None:
+                selected_data = self._row_data_by_key.get(row_key)
+        except Exception:
+            selected_data = None
+        if selected_data is None:
+            row_index = getattr(event, "cursor_row", 0)
+            if hasattr(self, '_synthetic_covered_calls_data') and self._synthetic_covered_calls_data and row_index < len(self._synthetic_covered_calls_data):
+                selected_data = self._synthetic_covered_calls_data[row_index]
+        if selected_data:
             # Store the selected data for later use
             self._selected_synthetic_covered_call_data = selected_data
             # Show order confirmation dialog
@@ -448,6 +460,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
                     self.app.query_one(StatusLog).add_message("Synthetic covered call order not filled after all attempts.")
                     
                 self._override_price = None
+                self._selected_synthetic_covered_call_data = None
                 keyboard.unhook_all()
                 
             else:

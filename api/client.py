@@ -167,7 +167,11 @@ class Api:
             return alert.botFailed(None, "Error while getting account hash value")
 
     def getATMPrice(self, asset):
-        # client can be None
+        # Prefer streaming price when available; fall back to REST
+        price = self.get_price(asset)
+        if price is not None:
+            return price
+        # As a last resort, attempt a direct REST single-quote call
         r = self.connectClient.get_quote(asset)
         if r.status_code != 200:
             try:
@@ -175,21 +179,15 @@ class Api:
             except Exception as e:
                 publish_exception(e, prefix="get_quote")
             raise
-
-        data = r.json()
-        lastPrice = 0
-
         try:
-            if data[asset]["assetMainType"] == "OPTION":
-                lastPrice = median(
-                    [data[asset]["quote"]["bidPrice"], data[asset]["quote"]["askPrice"]]
-                )
-            else:
-                lastPrice = data[asset]["quote"]["lastPrice"]
-        except KeyError:
-            return alert.botFailed(asset, "Wrong data from api when getting ATM price")
-
-        return lastPrice
+            data = r.json()
+            q = data.get(asset, {}).get("quote", {})
+            lp = q.get("lastPrice")
+            if lp is not None:
+                return float(lp)
+        except Exception:
+            pass
+        return None
 
     def getOptionChain(self, asset, strikes, date, daysLessAllowed):
         fromDate = date - timedelta(days=daysLessAllowed)
@@ -294,62 +292,7 @@ class Api:
             logger.error(f"Error processing market hours data: {e}")
             return {"open": False, "openDate": None, "nowDate": now, "error": str(e)}
 
-    def display_margin_requirements(api, shorts):
-        if not shorts:
-            notify("No short options positions found.")
-            return
-
-        # Get account data for margin information
-        r = api.connectClient.get_account(
-            api.getAccountHash(), fields=api.connectClient.Account.Fields.POSITIONS
-        )
-        data = r.json()
-
-        # Get margin data for all shorts
-        margin_data = []
-        total_margin = 0
-
-        for short in shorts:
-            margin = 0
-            option_type = "Call" if "C" in short["optionSymbol"] else "Put"
-
-            for position in data["securitiesAccount"]["positions"]:
-                if position["instrument"]["symbol"] == short["optionSymbol"]:
-                    if "maintenanceRequirement" in position:
-                        margin = position["maintenanceRequirement"]
-                    break
-
-            # Only include positions with non-zero margin
-            if margin > 0:
-                total_margin += margin
-                margin_data.append({
-                    "symbol": short["stockSymbol"],
-                    "type": f"Short {option_type}",
-                    "strike": short["strike"],
-                    "expiration": short["expiration"],
-                    "count": int(short["count"]),
-                    "margin": margin
-                })
-
-        # Sort by margin in descending order
-        margin_data.sort(key=lambda x: x["margin"], reverse=True)
-
-        if not margin_data:
-            notify("No positions with margin requirements found.")
-            return
-
-        # Print total margin requirement
-        notify(f"Total Margin Requirement: ${total_margin:,.2f}")
-
-        # Keep the detailed table on stdout only if UI is not active
-        header = "Detailed Margin Requirements (Sorted by Margin)"
-        notify(header)
-
-        for position in margin_data:
-            # Avoid flooding the Status Log with table rows; log concisely
-            notify(
-                f"{position['symbol']} {position['type']} x{position['count']} @ {position['strike']} exp {position['expiration']}: ${position['margin']:,}"
-            )
+    # display_margin_requirements: removed as unused (margin view provided by UI logic)
 
     def writeNewContracts(
         self,
@@ -572,38 +515,83 @@ class Api:
             raise
         return r.json()
 
-    def getOptionDetails(self, asset):
-        r = self.connectClient.get_quotes(asset)
+    def get_price(self, symbol):
+        """Streaming-first price lookup for an underlying or index.
 
+        Attempts to read the latest last price from the streaming provider.
+        Falls back to REST `get_quotes` if streaming is unavailable or missing.
+        """
+        try:
+            # Try streaming provider first
+            from api.streaming.provider import get_provider
+            prov = get_provider(self.connectClient)
+            if prov is not None:
+                # Try symbol as-is
+                last = prov.get_last(symbol)
+                if last is not None:
+                    return float(last)
+                # Try common alternates for indices
+                alternates = []
+                s = str(symbol)
+                if s.upper() in {"$SPX", "SPX"}:
+                    alternates = ["$SPX", "$SPX.X", "SPX"]
+                elif s.upper() in {"$NDX", "NDX"}:
+                    alternates = ["$NDX", "$NDX.X", "NDX"]
+                else:
+                    # Also try plain/with $ variations
+                    if s.startswith("$"):
+                        alternates = [s, s + ".X", s[1:]]
+                    else:
+                        alternates = [s, "$" + s, s + ".X"]
+                for alt in alternates:
+                    last = prov.get_last(alt)
+                    if last is not None:
+                        return float(last)
+        except Exception:
+            pass
+        # Fallback to REST: use batched get_quotes for consistency
+        try:
+            r = self.connectClient.get_quotes([symbol])
+            r.raise_for_status()
+            data = r.json()
+            q = data.get(symbol, {}).get("quote", {})
+            last = q.get("lastPrice")
+            if last is not None:
+                return float(last)
+            # Try alternates if the exact key isn't returned
+            for alt in (symbol + ".X", symbol.replace("$", ""), "$" + symbol.replace("$", "")):
+                q = data.get(alt, {}).get("quote", {})
+                last = q.get("lastPrice")
+                if last is not None:
+                    return float(last)
+        except Exception:
+            pass
+        return None
+
+    def getOptionDetails(self, asset):
+        # Deprecated: avoid using REST for per-option detail here; kept for backward compatibility
+        r = self.connectClient.get_quotes(asset)
         if r.status_code != 200:
             try:
                 r.raise_for_status()
             except Exception as e:
                 publish_exception(e, prefix="get_quotes single")
             raise
-
         data = r.json()
-
         try:
             year = str(data[asset]["reference"]["expirationYear"])
             month = str(data[asset]["reference"]["expirationMonth"]).zfill(2)
             day = str(data[asset]["reference"]["expirationDay"]).zfill(2)
             expiration = year + "-" + month + "-" + day
-
             if not validDateFormat(expiration):
-                return alert.botFailed(
-                    asset, "Incorrect date format from api: " + expiration
-                )
-
+                return alert.botFailed(asset, "Incorrect date format from api: " + expiration)
             return {
                 "strike": data[asset]["reference"]["strikePrice"],
                 "expiration": expiration,
-                "delta": data[asset]["quote"]["delta"],
+                "delta": data[asset]["quote"].get("delta"),
             }
         except KeyError:
-            return alert.botFailed(
-                asset, "Wrong data from api when getting option expiry data"
-            )
+            return alert.botFailed(asset, "Wrong data from api when getting option expiry data")
 
     def updateShortPosition(self):
         # get account positions

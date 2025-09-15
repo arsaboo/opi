@@ -429,7 +429,8 @@ async def get_vertical_spreads_data(api, synthetic=False):
                     # Ensure these are floats for UI logic
                     "investment": float(best_spread['total_investment']),
                     "max_profit": float(best_spread['total_return']),
-                    "cagr": float(best_spread['cagr_percentage']) / 100.0,
+                    # Provide CAGR as a true percent value (e.g., 199.0 for 199%) to display correctly even when >100%
+                    "cagr": float(best_spread['cagr_percentage']),
                     "protection": float(best_spread['downside_protection']) / 100.0,
                     "margin_req": float(best_spread['margin_requirement']),
                     "ann_rom": float(best_spread['return_on_margin']) / 100.0,

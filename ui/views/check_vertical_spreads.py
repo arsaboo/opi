@@ -38,6 +38,8 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
         self._quote_provider = None
         self._col_keys = []
         self._ba_maps = []  # entries: {row_key, col_key, symbol, last_bid, last_ask}
+        self._selected_row_data = None
+        self._row_data_by_key = {}
 
     def compose(self):
         """Create child widgets."""
@@ -105,6 +107,7 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
         data = await logic.get_vertical_spreads_data(self.app.api)
         table = self.query_one(DataTable)
         table.clear()
+        self._row_data_by_key = {}
         self._ba_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
 
@@ -268,6 +271,7 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
                 ]
                 # Add row with styled cells
                 row_key = table.add_row(*cells)
+                self._row_data_by_key[row_key] = row
                 # Use symbols directly from data when available
                 try:
                     sym1 = row.get("symbol1")
@@ -293,11 +297,20 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
-        # Get the selected row data
-        row_index = event.cursor_row
-        if hasattr(self, '_vertical_spreads_data') and self._vertical_spreads_data and row_index < len(self._vertical_spreads_data):
-            selected_data = self._vertical_spreads_data[row_index]
-            # Show order confirmation dialog
+        # Prefer row_key mapping for robust selection under sorting/refresh
+        selected_data = None
+        try:
+            row_key = getattr(event, "row_key", None)
+            if row_key is not None:
+                selected_data = self._row_data_by_key.get(row_key)
+        except Exception:
+            selected_data = None
+        if selected_data is None:
+            row_index = getattr(event, "cursor_row", 0)
+            if hasattr(self, '_vertical_spreads_data') and self._vertical_spreads_data and row_index < len(self._vertical_spreads_data):
+                selected_data = self._vertical_spreads_data[row_index]
+        if selected_data:
+            self._selected_row_data = selected_data
             self.show_order_confirmation(selected_data)
 
     def show_order_confirmation(self, vertical_spread_data) -> None:
@@ -345,13 +358,15 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
     async def place_vertical_spread_order(self) -> None:
         """Place the vertical spread order."""
         try:
-            # Get the selected row data
-            table = self.query_one(DataTable)
-            cursor_row = table.cursor_row
+            # Use persisted selection if available
+            vertical_spread_data = self._selected_row_data
+            if not vertical_spread_data:
+                table = self.query_one(DataTable)
+                cursor_row = table.cursor_row
+                if cursor_row < len(self._vertical_spreads_data):
+                    vertical_spread_data = self._vertical_spreads_data[cursor_row]
 
-            if cursor_row < len(self._vertical_spreads_data):
-                vertical_spread_data = self._vertical_spreads_data[cursor_row]
-
+            if vertical_spread_data:
                 # Extract required data
                 asset = vertical_spread_data.get("asset", "")
                 expiration = datetime.strptime(vertical_spread_data.get("expiration", ""), "%Y-%m-%d").date()
@@ -416,6 +431,7 @@ class CheckVerticalSpreadsWidget(BaseSpreadView):
                     
                 self._override_price = None
                 keyboard.unhook_all()
+                self._selected_row_data = None
                 
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for vertical spread order placement.")

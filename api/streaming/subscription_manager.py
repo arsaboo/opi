@@ -1,12 +1,18 @@
-from typing import Iterable, Optional, Set, Dict
+from typing import Iterable, Optional, Set, Dict, Any, TYPE_CHECKING
 import asyncio
-from .provider import get_provider, StreamingQuoteProvider
+if TYPE_CHECKING:
+    from .provider import StreamingQuoteProvider  # pragma: no cover
 
 
 class SubscriptionManager:
-    def __init__(self, connect_client, provider: Optional[StreamingQuoteProvider] = None) -> None:
+    def __init__(self, connect_client, provider: Optional['StreamingQuoteProvider'] = None) -> None:
         # Allow injection for tests; default to real provider
-        self._provider = provider if provider is not None else get_provider(connect_client)
+        if provider is not None:
+            self._provider = provider
+        else:
+            # Lazy import to avoid hard dependency during tests
+            from .provider import get_provider  # type: ignore
+            self._provider = get_provider(connect_client)
         self._screens: Dict[str, Dict[str, Set[str]]] = {}
         self._last_opts: Set[str] = set()
         self._last_eqs: Set[str] = set()
