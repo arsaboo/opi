@@ -38,6 +38,21 @@ class RollShortOptionsWidget(Static):
         self._row_data_by_key = {}
         self._selected_row_key = None
 
+    def _build_row_identity(self, row):
+        """Return a tuple that uniquely identifies a row for cursor persistence."""
+        if not isinstance(row, dict):
+            return None
+        symbol = row.get("optionSymbol") or row.get("Option Symbol")
+        if symbol:
+            return ("symbol", str(symbol))
+        return (
+            "fallback",
+            str(row.get("Ticker", "")),
+            str(row.get("Expiration", "")),
+            str(row.get("Current Strike", "")),
+            str(row.get("Qty") or row.get("Quantity") or row.get("count")),
+        )
+
     def compose(self):
         """Create child widgets."""
         yield DataTable(id="roll_short_options_table")
@@ -343,10 +358,29 @@ class RollShortOptionsWidget(Static):
         """Worker to get the expiring shorts data."""
         data = await logic.get_expiring_shorts_data(self.app.api)
         table = self.query_one(DataTable)
+
+        prev_cursor_row = getattr(table, "cursor_row", None)
+        prev_cursor_column = getattr(table, "cursor_column", 0)
+        if not isinstance(prev_cursor_column, int):
+            try:
+                prev_cursor_column = int(prev_cursor_column)
+            except Exception:
+                prev_cursor_column = 0
+        prev_selected_identity = None
+        if self._selected_row_key is not None:
+            prev_row = self._row_data_by_key.get(self._selected_row_key)
+            if prev_row:
+                prev_selected_identity = self._build_row_identity(prev_row)
+        if prev_selected_identity is None and self._selected_row_data:
+            prev_selected_identity = self._build_row_identity(self._selected_row_data)
+
         table.clear()
         self._row_data_by_key = {}
         self._credit_maps = []
         refreshed_time = datetime.now().strftime("%H:%M:%S")
+
+        restore_selected_key = None
+        restore_cursor_row = None
 
         if data:
             prev_rows = self._prev_rows or []
@@ -354,6 +388,7 @@ class RollShortOptionsWidget(Static):
             for idx, row in enumerate(data):
                 prev_row = prev_rows[idx] if idx < len(prev_rows) else {}
                 self._roll_data.append(row)
+                identity = self._build_row_identity(row)
                 cells = [
                     Text(str(row["Ticker"]), style="", justify="left"),
                     cell("Current Strike", row.get("Current Strike"), prev_row.get("Current Strike")),
@@ -378,6 +413,9 @@ class RollShortOptionsWidget(Static):
                 # Add row with styled cells
                 row_key = table.add_row(*cells)
                 self._row_data_by_key[row_key] = row
+                if restore_selected_key is None and identity == prev_selected_identity:
+                    restore_selected_key = row_key
+                    restore_cursor_row = idx
                 # Map symbols for streaming roll credit
                 try:
                     old_sym = row.get("optionSymbol")
@@ -406,6 +444,27 @@ class RollShortOptionsWidget(Static):
                     })
                 except Exception:
                     pass
+            if restore_selected_key is not None:
+                self._selected_row_key = restore_selected_key
+                self._selected_row_data = self._row_data_by_key.get(restore_selected_key)
+            elif prev_selected_identity is not None:
+                self._selected_row_key = None
+                self._selected_row_data = None
+
+            target_row = None
+            if restore_cursor_row is not None:
+                target_row = restore_cursor_row
+            elif prev_cursor_row is not None and data:
+                target_row = min(prev_cursor_row, len(data) - 1)
+            if target_row is not None and target_row >= 0:
+                try:
+                    table.move_cursor(target_row, prev_cursor_column)
+                except Exception:
+                    try:
+                        table.cursor_coordinate = (target_row, prev_cursor_column)
+                    except Exception:
+                        pass
+
             self._prev_rows = data
             # Reconcile streaming symbols for options and equities (subscribe/unsubscribe)
             if stream_quotes and getattr(self, "_quote_provider", None):
@@ -441,6 +500,11 @@ class RollShortOptionsWidget(Static):
                 except Exception:
                     pass
         else:
+            self._roll_data = []
+            self._prev_rows = []
+            if prev_selected_identity is not None:
+                self._selected_row_key = None
+                self._selected_row_data = None
             try:
                 # message in first col, refreshed in last col
                 total_cols = len(self.query_one(DataTable).columns)
