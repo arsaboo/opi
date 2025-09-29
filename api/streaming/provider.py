@@ -24,6 +24,8 @@ class StreamingQuoteProvider:
         # Extended failure tracking
         self._last_success_time: float = time.time()
         self._failure_notified: bool = False
+        # Heartbeat/timeout tracking
+        self._last_message_time: float = time.time()
 
     async def start(self) -> None:
         if self._running:
@@ -109,13 +111,29 @@ class StreamingQuoteProvider:
         assert self.stream is not None
         while self._running:
             try:
-                await self.stream.handle_message()
+                # Use a timeout to periodically check for heartbeat
+                await asyncio.wait_for(self.stream.handle_message(), timeout=30.0)
                 # Update last success time and reset failure tracking
                 self._last_success_time = time.time()
+                # Update last message time for heartbeat
+                self._last_message_time = time.time()
                 self._failure_notified = False
                 # If we had errors previously, reset streak on success
                 if self._error_streak:
                     self._error_streak = 0
+            except asyncio.TimeoutError:
+                # Check if we've exceeded the heartbeat timeout (5 minutes = 300 seconds)
+                time_since_last_message = time.time() - self._last_message_time
+                if time_since_last_message > 300:  # 5 minutes
+                    # Trigger a restart due to heartbeat timeout
+                    try:
+                        publish(f"Streaming connection heartbeat timeout after {int(time_since_last_message)}s, restarting...")
+                    except Exception:
+                        pass
+                    await self._restart_stream_for_heartbeat_timeout()
+                    continue  # Continue the loop after restart
+                # If we haven't exceeded the heartbeat timeout, continue waiting for messages
+                continue
             except (ConnectionResetError, OSError) as e:
                 # Socket dropped; attempt reconnect with backoff and resubscribe
                 self._error_streak += 1
@@ -140,6 +158,7 @@ class StreamingQuoteProvider:
                         publish("Streaming connection re-established.")
                         # Reset failure tracking on successful reconnection
                         self._last_success_time = time.time()
+                        self._last_message_time = time.time()  # Reset message time on successful connection
                         self._failure_notified = False
                     except Exception:
                         pass
@@ -184,6 +203,15 @@ class StreamingQuoteProvider:
                 await self.stream.level_one_equity_subs(list(self._eq_subs))
         except Exception:
             pass
+
+    async def _restart_stream_for_heartbeat_timeout(self) -> None:
+        """Restart the stream specifically due to heartbeat timeout - reset the error streak."""
+        # Reset the error streak for heartbeat timeouts to avoid exponential backoff
+        # since this is a different type of failure
+        self._error_streak = 0
+        await self._restart_stream()
+        # Update last message time on successful restart to prevent immediate restart cycle
+        self._last_message_time = time.time()
 
     async def _on_level_one_option(self, msg: Dict) -> None:
         contents = msg.get("content") or []
