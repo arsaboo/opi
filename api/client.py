@@ -626,6 +626,55 @@ class Api:
         shortPositions = sorted(shortPositions, key=itemgetter("expiration"))
         return shortPositions
 
+    def getAllOptionPositions(self):
+        """Return all open option positions (long and short)."""
+        r = self.connectClient.get_account(
+            self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
+        )
+        return self.mapAllOptionPositions(r.text)
+
+    def mapAllOptionPositions(self, data):
+        data = json.loads(data)
+        positions = data["securitiesAccount"].get("positions", [])
+        option_positions = []
+
+        for position in positions:
+            instrument = position.get("instrument", {})
+            if instrument.get("assetType") != "OPTION":
+                continue
+
+            long_qty = float(position.get("longQuantity") or 0)
+            short_qty = float(position.get("shortQuantity") or 0)
+            if long_qty == 0 and short_qty == 0:
+                continue
+
+            description = instrument.get("description", "") or ""
+            expiration = extract_date(description)
+            strike_str = extract_strike_price(description)
+            try:
+                strike = float(strike_str) if strike_str is not None else None
+            except Exception:
+                strike = None
+
+            option_positions.append(
+                {
+                    "stockSymbol": instrument.get("underlyingSymbol"),
+                    "optionSymbol": instrument.get("symbol"),
+                    "expiration": expiration,
+                    "strike": strike,
+                    "shortQuantity": short_qty,
+                    "longQuantity": long_qty,
+                    "averagePrice": position.get("averagePrice"),
+                    "marketValue": position.get("marketValue"),
+                    "currentDayProfitLoss": position.get("currentDayProfitLoss"),
+                    "putCall": instrument.get("putCall"),
+                    "description": description,
+                }
+            )
+
+        option_positions.sort(key=lambda p: (p.get("expiration") or "", p.get("optionSymbol") or ""))
+        return option_positions
+
     def rollOver(self, oldSymbol, newSymbol, amount, price):
         return self.order_manager.roll_over(oldSymbol, newSymbol, amount, price)
 

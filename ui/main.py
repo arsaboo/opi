@@ -5,6 +5,7 @@ from textual.containers import Container
 from textual.widgets import Footer, Static
 from .widgets.status_log import StatusLog
 from .widgets.roll_short_options import RollShortOptionsWidget
+from .widgets.open_option_positions import OpenOptionPositionsWidget
 from .views.check_box_spreads import CheckBoxSpreadsWidget
 from .views.check_vertical_spreads import CheckVerticalSpreadsWidget
 from .views.check_synthetic_covered_calls import CheckSyntheticCoveredCallsWidget
@@ -242,6 +243,7 @@ class OpiApp(App):
         ("4", "check_synthetic_covered_calls", "Synth Cov Calls"),
         ("5", "view_margin_requirements", "View Margin"),
         ("6", "order_management", "Order Management"),
+        ("7", "open_option_positions", "Open Positions"),
         ("d", "toggle_dark", "Toggle dark mode"),
         ("q", "quit", "Quit"),
     ]
@@ -422,6 +424,16 @@ class OpiApp(App):
         main_container.remove_children()
         main_container.mount(OrderManagementWidget())
         self.query_one(StatusLog).add_message("Order Management selected.")
+
+    def action_open_option_positions(self) -> None:
+        """Action to view all open option positions."""
+        self.update_header("Options Trader - Open Option Positions")
+        main_container = self.query_one("#main_container")
+        main_container.remove_children()
+        widget = OpenOptionPositionsWidget()
+        widget._previous_market_status = self._previous_market_status
+        main_container.mount(widget)
+        self.query_one(StatusLog).add_message("Open Option Positions selected.")
 
     def check_market_status(self) -> None:
         """Check and display market status information."""

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from configuration import configuration, spreads
 from status import notify_exception
 from core.covered_calls import find_best_rollover
-from core.common import get_median_price, classify_status
+from core.common import get_median_price, classify_status, threshold_points
 from api.option_chain import OptionChain
 from core.box_spreads import calculate_box_spread as core_calc_box
 from core.vertical_spreads import bull_call_spread as core_bull_call
@@ -215,6 +215,204 @@ async def process_short_position(api, short):
         prefix = f"process_short_position {short.get('optionSymbol', 'N/A')}"
         notify_exception(e, prefix=prefix)
         return None
+
+def _extract_mark_from_quote(quote):
+    """Return best-effort mark price from a Schwab quote payload."""
+    if not isinstance(quote, dict):
+        return None
+    for key in ("mark", "markPrice", "lastPrice"):
+        val = quote.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+    bid = quote.get("bid")
+    ask = quote.get("ask")
+    try:
+        if bid is not None and ask is not None:
+            return (float(bid) + float(ask)) / 2
+        if bid is not None:
+            return float(bid)
+        if ask is not None:
+            return float(ask)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _classify_option_status(strike, underlying_price, option_type, *, itm_limit, deep_itm_limit, deep_otm_limit):
+    try:
+        strike_val = float(strike)
+        under_val = float(underlying_price)
+    except (TypeError, ValueError):
+        return None
+
+    itm_pts = threshold_points(itm_limit, under_val)
+    deep_itm_pts = threshold_points(deep_itm_limit, under_val)
+    deep_otm_pts = threshold_points(deep_otm_limit, under_val)
+
+    opt_type = (option_type or "CALL").upper()
+    diff = strike_val - under_val if opt_type != "PUT" else under_val - strike_val
+
+    if diff > deep_otm_pts:
+        return "deep_OTM"
+    if diff > 0:
+        return "OTM"
+    if diff + itm_pts > 0:
+        return "just_ITM"
+    if diff + deep_itm_pts > 0:
+        return "ITM"
+    return "deep_ITM"
+
+
+async def get_open_option_positions_data(api):
+    """Fetch all open option positions for display."""
+    try:
+        positions = await asyncio.to_thread(api.getAllOptionPositions)
+        if not positions:
+            return []
+
+        option_symbols = sorted({p.get("optionSymbol") for p in positions if p.get("optionSymbol")})
+        quotes = {}
+        if option_symbols:
+            try:
+                response = await asyncio.to_thread(api.connectClient.get_quotes, option_symbols)
+                response.raise_for_status()
+                quotes = response.json()
+            except Exception as e:
+                notify_exception(e, prefix="get_open_option_positions_data:get_quotes")
+                quotes = {}
+
+        today = datetime.now().date()
+        underlying_cache = {}
+        results = []
+
+        status_map = {
+            "deep_OTM": "Deep OTM",
+            "OTM": "OTM",
+            "just_ITM": "Just ITM",
+            "ITM": "ITM",
+            "deep_ITM": "Deep ITM",
+        }
+
+        for position in positions:
+            option_symbol = position.get("optionSymbol")
+            underlying = position.get("stockSymbol")
+            if not option_symbol or not underlying:
+                continue
+
+            expiration_str = position.get("expiration")
+            expiration_date = None
+            dte_value = "N/A"
+            if expiration_str:
+                try:
+                    expiration_date = datetime.strptime(expiration_str, "%Y-%m-%d").date()
+                    dte_value = (expiration_date - today).days
+                except Exception:
+                    expiration_date = None
+                    dte_value = "N/A"
+
+            strike = position.get("strike")
+            try:
+                strike_val = float(strike) if strike is not None else None
+            except (TypeError, ValueError):
+                strike_val = None
+
+            if underlying not in underlying_cache:
+                underlying_cache[underlying] = await asyncio.to_thread(api.getATMPrice, underlying)
+            underlying_price = underlying_cache.get(underlying)
+
+            cfg = configuration.get(underlying, {})
+            option_type = (position.get("putCall") or "CALL").upper()
+            status = "Unknown"
+            if strike_val is not None and underlying_price is not None:
+                status_key = _classify_option_status(
+                    strike_val,
+                    underlying_price,
+                    option_type,
+                    itm_limit=cfg.get("ITMLimit", 25),
+                    deep_itm_limit=cfg.get("deepITMLimit", 50),
+                    deep_otm_limit=cfg.get("deepOTMLimit", 10),
+                )
+                if status_key:
+                    status = status_map.get(status_key, status_key)
+
+            long_qty = float(position.get("longQuantity") or 0)
+            short_qty = float(position.get("shortQuantity") or 0)
+            net_qty = long_qty - short_qty
+            if abs(net_qty) < 1e-6:
+                continue
+
+            abs_qty = abs(net_qty)
+            if abs(abs_qty - round(abs_qty)) < 1e-6:
+                qty_display = int(round(net_qty))
+            else:
+                qty_display = round(net_qty, 2)
+
+            quote_payload = quotes.get(option_symbol, {}).get("quote", {}) if quotes else {}
+            mark = _extract_mark_from_quote(quote_payload)
+
+            avg_price = position.get("averagePrice")
+            try:
+                avg_price_val = float(avg_price) if avg_price is not None else None
+            except (TypeError, ValueError):
+                avg_price_val = None
+
+            pl_open = "N/A"
+            if avg_price_val is not None and mark is not None:
+                pl_calc = (mark - avg_price_val) * 100 * abs_qty if net_qty > 0 else (avg_price_val - mark) * 100 * abs_qty
+                pl_open = round(pl_calc, 2)
+
+            pl_day = position.get("currentDayProfitLoss")
+            if pl_day is not None:
+                try:
+                    pl_day = round(float(pl_day), 2)
+                except (TypeError, ValueError):
+                    pl_day = "N/A"
+            else:
+                pl_day = "N/A"
+
+            if isinstance(underlying_price, (int, float)):
+                underlying_display = round(underlying_price, 2)
+            else:
+                underlying_display = "N/A"
+
+            results.append(
+                {
+                    "Ticker": underlying,
+                    "Option Symbol": option_symbol,
+                    "Side": "Long" if net_qty > 0 else "Short",
+                    "Type": option_type,
+                    "Current Strike": strike_val,
+                    "Expiration": expiration_str,
+                    "_sort_expiration": expiration_date,
+                    "DTE": dte_value,
+                    "Underlying": underlying_display,
+                    "Status": status,
+                    "Qty": qty_display,
+                    "Avg Price": round(avg_price_val, 2) if isinstance(avg_price_val, (int, float)) else "N/A",
+                    "Mark": round(mark, 2) if isinstance(mark, (int, float)) else "N/A",
+                    "P/L Day": pl_day,
+                    "P/L Open": pl_open,
+                }
+            )
+
+        results.sort(
+            key=lambda row: (
+                row.get("_sort_expiration") or datetime.max.date(),
+                row.get("Option Symbol") or "",
+            )
+        )
+
+        for row in results:
+            row.pop("_sort_expiration", None)
+
+        return results
+
+    except Exception as e:
+        notify_exception(e, prefix="get_open_option_positions_data")
+        return []
 
 async def get_box_spreads_data(api, asset="$SPX"):
     """
