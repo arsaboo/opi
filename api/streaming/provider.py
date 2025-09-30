@@ -15,6 +15,7 @@ class StreamingQuoteProvider:
         self._quotes: Dict[str, Dict] = {}
         self._running = False
         self._task: Optional[asyncio.Task] = None
+        self._watchdog_task: Optional[asyncio.Task] = None
         self._opt_subs: set[str] = set()
         self._eq_subs: set[str] = set()
         # Persist last-good values per symbol so UI doesn't flap when a field is missing
@@ -26,6 +27,8 @@ class StreamingQuoteProvider:
         self._failure_notified: bool = False
         # Heartbeat/timeout tracking
         self._last_message_time: float = time.time()
+        self._watchdog_last_restart: float = 0.0
+        self._restart_lock: asyncio.Lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self._running:
@@ -43,12 +46,20 @@ class StreamingQuoteProvider:
         await self.stream.login()
         self._running = True
         self._task = asyncio.create_task(self._pump())
+        self._watchdog_task = asyncio.create_task(self._heartbeat_watchdog())
 
     async def stop(self) -> None:
         self._running = False
         if self._task:
             self._task.cancel()
             self._task = None
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except Exception:
+                pass
+            self._watchdog_task = None
         try:
             if self.stream:
                 # Try to logout/close cleanly
@@ -150,7 +161,7 @@ class StreamingQuoteProvider:
                         self._failure_notified = True
                     except Exception:
                         pass
-                
+
                 await asyncio.sleep(backoff)
                 try:
                     await self._restart_stream()
@@ -159,6 +170,7 @@ class StreamingQuoteProvider:
                         # Reset failure tracking on successful reconnection
                         self._last_success_time = time.time()
                         self._last_message_time = time.time()  # Reset message time on successful connection
+                        self._watchdog_last_restart = self._last_message_time
                         self._failure_notified = False
                     except Exception:
                         pass
@@ -174,35 +186,41 @@ class StreamingQuoteProvider:
         """Recreate the StreamClient, login, and resubscribe symbols."""
         if not self._running:
             return
-        # Close previous stream if exists
-        try:
-            if self.stream:
-                try:
-                    await self.stream.logout()
-                except Exception:
-                    pass
-        finally:
-            self.stream = None
+        async with self._restart_lock:
+            if not self._running:
+                return
+            # Close previous stream if exists
+            try:
+                if self.stream:
+                    try:
+                        await self.stream.logout()
+                    except Exception:
+                        pass
+            finally:
+                self.stream = None
 
-        # Rebuild stream and handlers, then login
-        self.stream = StreamClient(self.client, account_id=self.account_id)
-        self.stream.add_level_one_option_handler(self._on_level_one_option)
-        try:
-            self.stream.add_level_one_equity_handler(self._on_level_one_equity)
-        except Exception:
-            pass
-        await self.stream.login()
-        # Resubscribe existing symbol sets
-        try:
-            if self._opt_subs:
-                await self.stream.level_one_option_subs(list(self._opt_subs))
-        except Exception:
-            pass
-        try:
-            if self._eq_subs:
-                await self.stream.level_one_equity_subs(list(self._eq_subs))
-        except Exception:
-            pass
+            # Rebuild stream and handlers, then login
+            self.stream = StreamClient(self.client, account_id=self.account_id)
+            self.stream.add_level_one_option_handler(self._on_level_one_option)
+            try:
+                self.stream.add_level_one_equity_handler(self._on_level_one_equity)
+            except Exception:
+                pass
+            await self.stream.login()
+            # Resubscribe existing symbol sets
+            try:
+                if self._opt_subs:
+                    await self.stream.level_one_option_subs(list(self._opt_subs))
+            except Exception:
+                pass
+            try:
+                if self._eq_subs:
+                    await self.stream.level_one_equity_subs(list(self._eq_subs))
+            except Exception:
+                pass
+            # Reset heartbeat timing on successful restart
+            self._last_message_time = time.time()
+            self._watchdog_last_restart = self._last_message_time
 
     async def _restart_stream_for_heartbeat_timeout(self) -> None:
         """Restart the stream specifically due to heartbeat timeout - reset the error streak."""
@@ -212,6 +230,37 @@ class StreamingQuoteProvider:
         await self._restart_stream()
         # Update last message time on successful restart to prevent immediate restart cycle
         self._last_message_time = time.time()
+        self._watchdog_last_restart = self._last_message_time
+
+    async def _heartbeat_watchdog(self) -> None:
+        """Monitor the heartbeat independently of the pump and trigger restarts when stale."""
+        try:
+            while self._running:
+                await asyncio.sleep(60)
+                if not self._running:
+                    break
+                elapsed = time.time() - self._last_message_time
+                if elapsed <= 300:
+                    continue
+                now = time.time()
+                # Avoid rapid-fire restarts if multiple triggers occur
+                if now - self._watchdog_last_restart < 60:
+                    continue
+                try:
+                    publish(
+                        f"Streaming heartbeat stale for {int(elapsed)}s; forcing restart via watchdog."
+                    )
+                except Exception:
+                    pass
+                try:
+                    await self._restart_stream_for_heartbeat_timeout()
+                except Exception as exc:
+                    publish_exception(exc, prefix="Heartbeat watchdog restart failed")
+        except asyncio.CancelledError:
+            # Normal shutdown
+            pass
+        except Exception as exc:
+            publish_exception(exc, prefix="Heartbeat watchdog crashed")
 
     async def _on_level_one_option(self, msg: Dict) -> None:
         contents = msg.get("content") or []
@@ -333,6 +382,10 @@ class StreamingQuoteProvider:
 
     def get_all_subscribed(self) -> set[str]:
         return set(self._opt_subs) | set(self._eq_subs)
+
+    def get_last_heartbeat_time(self) -> Optional[float]:
+        """Return the timestamp (epoch seconds) of the most recent message."""
+        return self._last_message_time
 
 
 _global_provider: Optional[StreamingQuoteProvider] = None

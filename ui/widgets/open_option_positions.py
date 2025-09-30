@@ -1,12 +1,10 @@
-from datetime import datetime
-
 from rich.text import Text
 from textual import work
 from textual.widgets import DataTable, Static
 
 from .. import logic
 from ..widgets.status_log import StatusLog
-from ..utils import style_cell as cell
+from ..utils import style_cell as cell, get_refreshed_time_str
 
 
 class OpenOptionPositionsWidget(Static):
@@ -40,6 +38,7 @@ class OpenOptionPositionsWidget(Static):
             "Qty",
             "Avg Price",
             "Mark",
+            "Extrinsic",
             "P/L Day",
             "P/L Open",
             "Refreshed",
@@ -83,7 +82,7 @@ class OpenOptionPositionsWidget(Static):
         cursor_row = getattr(table, "cursor_row", 0)
 
         table.clear()
-        refreshed_time = datetime.now().strftime("%H:%M:%S")
+        refreshed_time = get_refreshed_time_str(self.app)
 
         for idx, row in enumerate(data):
             prev_row = prev_rows[idx] if idx < len(prev_rows) else {}
@@ -100,6 +99,7 @@ class OpenOptionPositionsWidget(Static):
                 cell("Qty", row.get("Qty"), prev_row.get("Qty")),
                 cell("Avg Price", row.get("Avg Price"), prev_row.get("Avg Price")),
                 cell("Mark", row.get("Mark"), prev_row.get("Mark")),
+                cell("Extrinsic", row.get("Extrinsic"), prev_row.get("Extrinsic")),
                 cell("P/L Day", row.get("P/L Day"), prev_row.get("P/L Day")),
                 cell("P/L Open", row.get("P/L Open"), prev_row.get("P/L Open")),
                 Text(refreshed_time, justify="left"),

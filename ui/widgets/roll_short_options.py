@@ -1,12 +1,12 @@
 from textual.widgets import DataTable, Static
 from textual import work
-from datetime import datetime
 from .. import logic
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
 from ..utils import style_cell as cell
 from ..utils import _fmt_money as fmt_money
+from ..utils import get_refreshed_time_str
 import asyncio
 # keyboard not used here; avoid global hooks
 from api.order_manager import cancel_order
@@ -377,7 +377,7 @@ class RollShortOptionsWidget(Static):
         table.clear()
         self._row_data_by_key = {}
         self._credit_maps = []
-        refreshed_time = datetime.now().strftime("%H:%M:%S")
+        refreshed_time = get_refreshed_time_str(self.app, getattr(self, "_quote_provider", None))
 
         restore_selected_key = None
         restore_cursor_row = None

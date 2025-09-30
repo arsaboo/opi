@@ -1,10 +1,9 @@
 from textual.widgets import DataTable, Static, Label
 from textual import work
-from datetime import datetime
 from .. import logic
 from ..widgets.status_log import StatusLog
 from rich.text import Text
-from ..utils import style_cell as cell
+from ..utils import style_cell as cell, get_refreshed_time_str
 
 class ViewMarginRequirementsWidget(Static):
     """A widget to display margin requirements."""
@@ -75,7 +74,7 @@ class ViewMarginRequirementsWidget(Static):
 
         table = self.query_one(DataTable)
         table.clear()
-        refreshed_time = datetime.now().strftime("%H:%M:%S")
+        refreshed_time = get_refreshed_time_str(self.app)
 
         total_margin_label = self.query_one("#total_margin_label", Label)
         total_margin_label.update(f"Total Margin Requirement: ${total_margin:,.2f}")

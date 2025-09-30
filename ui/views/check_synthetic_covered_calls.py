@@ -6,7 +6,7 @@ from .. import logic
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
-from ..utils import style_cell as cell, style_ba
+from ..utils import style_cell as cell, style_ba, get_refreshed_time_str
 import asyncio
 import keyboard
 from api.order_manager import handle_cancel, reset_cancel_flag, cancel_order
@@ -114,7 +114,7 @@ class CheckSyntheticCoveredCallsWidget(BaseSpreadView):
         table.clear()
         self._row_data_by_key = {}
         self._ba_maps = []
-        refreshed_time = datetime.now().strftime("%H:%M:%S")
+        refreshed_time = get_refreshed_time_str(self.app, getattr(self, "_quote_provider", None))
         # Status logs removed after debugging; rely on core.common CAGR
 
         def get_cell_style(col, val, prev_val=None):

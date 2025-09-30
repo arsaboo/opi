@@ -1,5 +1,13 @@
+from datetime import datetime
 from rich.text import Text
 from typing import Any, Optional
+
+try:
+    from configuration import stream_quotes
+except Exception:
+    stream_quotes = False
+
+from api.streaming.provider import get_provider
 
 
 PERCENT_FIELDS = {
@@ -263,3 +271,33 @@ def style_cell(field: str, value: Any, prev: Any | None = None) -> Text:
 
     # Fallback
     return Text(display, style=style, justify=justify)
+
+
+def get_refreshed_time_str(app: Any | None = None, provider: Any | None = None) -> str:
+    """Return a formatted refreshed timestamp using the last heartbeat when available."""
+    timestamp: Optional[float] = None
+
+    prov = provider
+    if prov is None and stream_quotes and app is not None:
+        try:
+            connect_client = getattr(getattr(app, "api", None), "connectClient", None)
+            if connect_client is not None:
+                prov = get_provider(connect_client)
+        except Exception:
+            prov = None
+
+    if prov is not None:
+        getter = getattr(prov, "get_last_heartbeat_time", None)
+        if callable(getter):
+            try:
+                timestamp = getter()
+            except Exception:
+                timestamp = None
+
+    if isinstance(timestamp, (int, float)) and timestamp > 0:
+        try:
+            return datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+        except Exception:
+            pass
+
+    return datetime.now().strftime("%H:%M:%S")

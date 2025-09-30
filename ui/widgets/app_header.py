@@ -21,6 +21,7 @@ class AppHeader(Static):
         super().__init__()
         self._provider = None
         self._spx_prev: Optional[float] = None
+        self._spx_last: Optional[float] = None
         self._title: str = "Options Trader"
         self._tick: Optional[Timer] = None
 
@@ -82,6 +83,11 @@ class AppHeader(Static):
                     last = self._provider.get_last(symbol)
                 except Exception:
                     last = None
+            if last is not None:
+                self._spx_last = last if label == "SPX" else self._spx_last
+            else:
+                if label == "SPX" and self._spx_last is not None:
+                    last = self._spx_last
             if last is None:
                 seg = f"{label} —   "
                 left_plain_parts.append(seg)

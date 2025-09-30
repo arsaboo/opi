@@ -353,6 +353,16 @@ async def get_open_option_positions_data(api):
             quote_payload = quotes.get(option_symbol, {}).get("quote", {}) if quotes else {}
             mark = _extract_mark_from_quote(quote_payload)
 
+            extrinsic_value = "N/A"
+            if isinstance(mark, (int, float)) and isinstance(underlying_price, (int, float)) and isinstance(strike_val, (int, float)):
+                intrinsic = (
+                    max(0.0, underlying_price - strike_val)
+                    if option_type == "CALL"
+                    else max(0.0, strike_val - underlying_price)
+                )
+                extrinsic_calc = mark - intrinsic
+                extrinsic_value = round(extrinsic_calc, 2)
+
             avg_price = position.get("averagePrice")
             try:
                 avg_price_val = float(avg_price) if avg_price is not None else None
@@ -393,6 +403,7 @@ async def get_open_option_positions_data(api):
                     "Qty": qty_display,
                     "Avg Price": round(avg_price_val, 2) if isinstance(avg_price_val, (int, float)) else "N/A",
                     "Mark": round(mark, 2) if isinstance(mark, (int, float)) else "N/A",
+                    "Extrinsic": extrinsic_value,
                     "P/L Day": pl_day,
                     "P/L Open": pl_open,
                 }

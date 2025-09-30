@@ -2,14 +2,19 @@ from textual.widgets import DataTable
 from .base_spread_view import BaseSpreadView
 from textual import work
 
-from datetime import datetime
 import asyncio
 import keyboard
 from .. import logic
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
-from ..utils import style_cell as cell, style_ba, style_flags, _fmt_money as fmt_money
+from ..utils import (
+    style_cell as cell,
+    style_ba,
+    style_flags,
+    _fmt_money as fmt_money,
+    get_refreshed_time_str,
+)
 from configuration import stream_quotes
 from api.streaming.subscription_manager import get_subscription_manager
 from api.streaming.provider import get_provider
@@ -311,7 +316,7 @@ class CheckBoxSpreadsWidget(BaseSpreadView):
         # Reset row-key mapping for selection lookup
         self._row_data_by_key = {}
         self._ba_maps = []
-        refreshed_time = datetime.now().strftime("%H:%M:%S")
+        refreshed_time = get_refreshed_time_str(self.app, getattr(self, "_quote_provider", None))
 
         def get_cell_style(col, val, prev_val=None):
             # Color coding logic
