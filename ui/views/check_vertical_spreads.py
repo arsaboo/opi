@@ -1,17 +1,24 @@
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable
+from .base_spread_view import BaseSpreadView
 from textual import work
-from textual.screen import Screen
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
 from .. import logic
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
+from ..utils import style_cell as cell, style_ba, get_refreshed_time_str
 import asyncio
 import keyboard
-from order_utils import handle_cancel, reset_cancel_flag, cancel_order, monitor_order
+from api.order_manager import handle_cancel, reset_cancel_flag, cancel_order
 from configuration import stream_quotes
-from ..quote_provider import get_provider
+from api.streaming.provider import get_provider
+from api.streaming.subscription_manager import get_subscription_manager
+
+# Import the global order monitoring service
+try:
+    from services.order_monitoring_service import order_monitoring_service
+except Exception:
+    order_monitoring_service = None
 
 # Read manual ordering flag from configuration with safe default
 try:
@@ -19,7 +26,7 @@ try:
 except Exception:
     MANUAL_ORDER = False
 
-class CheckVerticalSpreadsWidget(Static):
+class CheckVerticalSpreadsWidget(BaseSpreadView):
     """A widget to display vertical spreads."""
 
     def __init__(self):
@@ -31,6 +38,8 @@ class CheckVerticalSpreadsWidget(Static):
         self._quote_provider = None
         self._col_keys = []
         self._ba_maps = []  # entries: {row_key, col_key, symbol, last_bid, last_ask}
+        self._selected_row_data = None
+        self._row_data_by_key = {}
 
     def compose(self):
         """Create child widgets."""
@@ -83,24 +92,14 @@ class CheckVerticalSpreadsWidget(Static):
         # Add periodic market status check every 30 seconds
         self.set_interval(30, self.check_market_status)
 
-    def check_market_status(self) -> None:
-        """Check and display market status information."""
+    def on_unmount(self) -> None:
         try:
-            exec_window = self.app.api.getOptionExecutionWindow()
-            current_status = "open" if exec_window["open"] else "closed"
-            # Only log if status changed
-            if self._previous_market_status != current_status:
-                if current_status == "open":
-                    self.app.query_one(StatusLog).add_message("Market is now OPEN! Trades can be placed.")
-                else:
-                    from configuration import debugMarketOpen
-                    if not debugMarketOpen:
-                        self.app.query_one(StatusLog).add_message("Market is closed. Data may be delayed.")
-                    else:
-                        self.app.query_one(StatusLog).add_message("Market is closed but running in debug mode.")
-                self._previous_market_status = current_status
-        except Exception as e:
-            self.app.query_one(StatusLog).add_message(f"Error checking market status: {e}")
+            mgr = get_subscription_manager(self.app.api.connectClient)
+            mgr.unregister("vertical_spreads")
+        except Exception:
+            pass
+
+    # check_market_status inherited from BaseSpreadView
 
     @work
     async def run_get_vertical_spreads_data(self) -> None:
@@ -108,8 +107,9 @@ class CheckVerticalSpreadsWidget(Static):
         data = await logic.get_vertical_spreads_data(self.app.api)
         table = self.query_one(DataTable)
         table.clear()
+        self._row_data_by_key = {}
         self._ba_maps = []
-        refreshed_time = datetime.now().strftime("%H:%M:%S")
+        refreshed_time = get_refreshed_time_str(self.app, getattr(self, "_quote_provider", None))
 
         def get_cell_style(col, val, prev_val=None):
             if col in ["cagr", "ann_rom"]:
@@ -248,44 +248,7 @@ class CheckVerticalSpreadsWidget(Static):
 
                 # Handle B|A prices with separate coloring for bid and ask
                 def style_ba_price(bid_col, ask_col):
-                    bid_val = row[bid_col]
-                    ask_val = row[ask_col]
-                    prev_bid_val = prev_row.get(bid_col)
-                    prev_ask_val = prev_row.get(ask_col)
-
-                    # Style for bid (green for increase, red for decrease)
-                    bid_style = ""
-                    if prev_bid_val is not None:
-                        try:
-                            prev_bid_float = float(prev_bid_val)
-                            bid_float = float(bid_val)
-                            if bid_float > prev_bid_float:
-                                bid_style = "green"
-                            elif bid_float < prev_bid_float:
-                                bid_style = "red"
-                        except ValueError:
-                            pass
-
-                    # Style for ask (green for decrease, red for increase - since lower ask is better)
-                    ask_style = ""
-                    if prev_ask_val is not None:
-                        try:
-                            prev_ask_float = float(prev_ask_val)
-                            ask_float = float(ask_val)
-                            if ask_float < prev_ask_float:
-                                ask_style = "green"
-                            elif ask_float > prev_ask_float:
-                                ask_style = "red"
-                        except ValueError:
-                            pass
-
-                    # Create a Text object with separately styled bid and ask
-                    ba_text = Text()
-                    ba_text.append(f"{bid_val:.2f}", style=bid_style)
-                    ba_text.append("|", style="")  # No style for the separator
-                    ba_text.append(f"{ask_val:.2f}", style=ask_style)
-
-                    return ba_text
+                    return style_ba(row[bid_col], row[ask_col], prev_row.get(bid_col), prev_row.get(ask_col))
 
                 call_low_ba = style_ba_price('bid1', 'ask1')
                 call_high_ba = style_ba_price('bid2', 'ask2')
@@ -293,21 +256,22 @@ class CheckVerticalSpreadsWidget(Static):
                 cells = [
                     Text(str(row["asset"]), style="", justify="left"),
                     Text(str(row["expiration"]), style="", justify="left"),
-                    style_cell("strike_low"),
+                    cell("strike_low", row.get("strike_low"), prev_row.get("strike_low")),
                     call_low_ba,  # Styled B|A
-                    style_cell("strike_high"),
+                    cell("strike_high", row.get("strike_high"), prev_row.get("strike_high")),
                     call_high_ba,  # Styled B|A
-                    style_cell("investment"),
-                    style_cell("price"),
-                    style_cell("max_profit"),
-                    style_cell("cagr"),
-                    style_cell("protection"),
-                    style_cell("margin_req"),
-                    style_cell("ann_rom"),
+                    cell("investment", row.get("investment"), prev_row.get("investment")),
+                    cell("price", row.get("price"), prev_row.get("price")),
+                    cell("max_profit", row.get("max_profit"), prev_row.get("max_profit")),
+                    cell("cagr", row.get("cagr"), prev_row.get("cagr")),
+                    cell("protection", row.get("protection"), prev_row.get("protection")),
+                    cell("margin_req", row.get("margin_req"), prev_row.get("margin_req")),
+                    cell("ann_rom", row.get("ann_rom"), prev_row.get("ann_rom")),
                     Text(refreshed_time, style="", justify="left")
                 ]
                 # Add row with styled cells
                 row_key = table.add_row(*cells)
+                self._row_data_by_key[row_key] = row
                 # Use symbols directly from data when available
                 try:
                     sym1 = row.get("symbol1")
@@ -323,20 +287,30 @@ class CheckVerticalSpreadsWidget(Static):
             self._prev_rows = data
         else:
             table.add_row("No vertical spreads found.", "", "", "", "", "", "", "", "", "", "", "", "", refreshed_time)
-        # Subscribe for streaming quotes
-        if stream_quotes and self._quote_provider and self._ba_maps:
+        # Subscribe for streaming quotes via manager
+        if stream_quotes and self._ba_maps:
             try:
-                asyncio.create_task(self._quote_provider.subscribe_options([m["symbol"] for m in self._ba_maps if m.get("symbol")]))
-            except Exception as e:
-                self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
+                mgr = get_subscription_manager(self.app.api.connectClient)
+                mgr.register("vertical_spreads", options=[m["symbol"] for m in self._ba_maps if m.get("symbol")], equities=[])
+            except Exception:
+                pass
 
     def on_data_table_row_selected(self, event) -> None:
         """Handle row selection."""
-        # Get the selected row data
-        row_index = event.cursor_row
-        if hasattr(self, '_vertical_spreads_data') and self._vertical_spreads_data and row_index < len(self._vertical_spreads_data):
-            selected_data = self._vertical_spreads_data[row_index]
-            # Show order confirmation dialog
+        # Prefer row_key mapping for robust selection under sorting/refresh
+        selected_data = None
+        try:
+            row_key = getattr(event, "row_key", None)
+            if row_key is not None:
+                selected_data = self._row_data_by_key.get(row_key)
+        except Exception:
+            selected_data = None
+        if selected_data is None:
+            row_index = getattr(event, "cursor_row", 0)
+            if hasattr(self, '_vertical_spreads_data') and self._vertical_spreads_data and row_index < len(self._vertical_spreads_data):
+                selected_data = self._vertical_spreads_data[row_index]
+        if selected_data:
+            self._selected_row_data = selected_data
             self.show_order_confirmation(selected_data)
 
     def show_order_confirmation(self, vertical_spread_data) -> None:
@@ -384,117 +358,81 @@ class CheckVerticalSpreadsWidget(Static):
     async def place_vertical_spread_order(self) -> None:
         """Place the vertical spread order."""
         try:
-            # Get the selected row data
-            table = self.query_one(DataTable)
-            cursor_row = table.cursor_row
+            # Use persisted selection if available
+            vertical_spread_data = self._selected_row_data
+            if not vertical_spread_data:
+                table = self.query_one(DataTable)
+                cursor_row = table.cursor_row
+                if cursor_row < len(self._vertical_spreads_data):
+                    vertical_spread_data = self._vertical_spreads_data[cursor_row]
 
-            if cursor_row < len(self._vertical_spreads_data):
-                vertical_spread_data = self._vertical_spreads_data[cursor_row]
-
+            if vertical_spread_data:
                 # Extract required data
                 asset = vertical_spread_data.get("asset", "")
                 expiration = datetime.strptime(vertical_spread_data.get("expiration", ""), "%Y-%m-%d").date()
                 strike_low = float(vertical_spread_data.get("strike_low", 0))
                 strike_high = float(vertical_spread_data.get("strike_high", 0))
-                net_debit = float(vertical_spread_data.get("investment", 0)) / 100  # Convert from total to per contract
+                # Convert total investment ($ per contract) back to option price; ensure 2 decimals
+                net_debit = round(float(vertical_spread_data.get("investment", 0)) / 100, 2)
 
-                # Place the order using the api method
-                from strategies import monitor_order
-                from order_utils import handle_cancel, reset_cancel_flag
-                import keyboard
-
-                try:
+                # Manual mode: place once and manage from Order Management
+                if MANUAL_ORDER:
                     # Reset cancel flag and clear keyboard hooks
                     reset_cancel_flag()
                     keyboard.unhook_all()
-                    keyboard.on_press(handle_cancel)
-
-                    # Try prices in sequence, starting with original price
-                    # Use user override if provided; otherwise default to computed net debit
-                    initial_price = self._override_price if self._override_price is not None else net_debit
-                    order_id = None
-                    filled = False
-
-                    attempts = [0] if MANUAL_ORDER else range(0, 76)
-                    for i in attempts:  # 0 = original price, 1-75 = improvements
-                        if not cancel_order:  # Check if cancelled
-                            current_price = (
-                                initial_price if i == 0
-                                else round_to_nearest_five_cents(initial_price + i * 0.05)
-                            )
-
-                            if i > 0:
-                                self.app.query_one(StatusLog).add_message(f"Trying new price: ${current_price} (improvement #{i})")
-
-                            # Place order
-                            order_id = await asyncio.to_thread(
-                                self.app.api.vertical_call_order,
-                                asset,
-                                expiration,
-                                strike_low,
-                                strike_high,
-                                1,  # quantity
-                                price=current_price
-                            )
-
-                            # Check if order was placed (None when debugCanSendOrders is False)
-                            if order_id is None:
-                                self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
-                                self.app.query_one(StatusLog).add_message(f"Asset: {asset}, Expiration: {expiration}, Strike Low: {strike_low}, Strike High: {strike_high}, Price: {current_price}")
-                                break
-
-                            if MANUAL_ORDER:
-                                self.app.query_one(StatusLog).add_message("Manual order placed. Manage from Order Management (U=Update, C=Cancel).")
-                                break
-                            # Monitor with 60s timeout
-                            self.app.query_one(StatusLog).add_message(f"Monitoring order {order_id}...")
-                            result = await self.monitor_order_ui(order_id, timeout=60, manual=False)
-
-                            # Add status update based on result
-                            if result is True:
-                                self.app.query_one(StatusLog).add_message(f"Order {order_id} filled successfully!")
-                            elif result == "cancelled":
-                                self.app.query_one(StatusLog).add_message(f"Order {order_id} cancelled by user.")
-                            elif result == "rejected":
-                                self.app.query_one(StatusLog).add_message(f"Order {order_id} rejected.")
-                            elif result == "timeout":
-                                self.app.query_one(StatusLog).add_message(f"Order {order_id} timed out.")
-
-                            if result is True:  # Order filled
-                                filled = True
-                                break
-                            elif result == "cancelled":  # User cancelled
-                                break
-                            elif result == "rejected":  # Order rejected
-                                if MANUAL_ORDER:
-                                    break
-                                continue  # Try next price
-                            # On timeout, continue to next price improvement
-
-                            # Brief pause between attempts
-                            if i > 0 and not MANUAL_ORDER:
-                                await asyncio.sleep(1)
-                        else:
-                            break
-
-                    if filled:
-                        self.app.query_one(StatusLog).add_message("Vertical spread order filled successfully!")
-                        self._override_price = None  # reset after use
-                    elif cancel_order:
-                        self.app.query_one(StatusLog).add_message("Vertical spread order cancelled by user.")
-                        if order_id:
-                            try:
-                                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
-                                self.app.query_one(StatusLog).add_message("Order cancelled successfully.")
-                            except Exception as e:
-                                self.app.query_one(StatusLog).add_message(f"Error cancelling order: {e}")
+                    
+                    # Place order at chosen price (use edited override if provided)
+                    chosen_price = self._override_price if self._override_price is not None else net_debit
+                    try:
+                        chosen_price = round(float(chosen_price), 2)
+                    except Exception:
+                        pass
+                    from .. import logic as ui_logic
+                    order_id = await ui_logic.vertical_call_order(
+                        self.app.api,
+                        asset,
+                        expiration,
+                        strike_low,
+                        strike_high,
+                        1,
+                        price=chosen_price,
+                    )
+                    
+                    if order_id is None:
+                        self.app.query_one(StatusLog).add_message("Order not placed (debug mode).")
+                        self.app.query_one(StatusLog).add_message(f"Asset: {asset}, Expiration: {expiration}, Strike Low: {strike_low}, Strike High: {strike_high}, Price: {net_debit}")
                     else:
-                        self.app.query_one(StatusLog).add_message("Vertical spread order not filled after all attempts.")
-                except Exception as e:
-                    self.app.query_one(StatusLog).add_message(f"Error placing vertical spread order: {e}")
-                finally:
-                    self._override_price = None  # ensure cleanup
+                        self.app.query_one(StatusLog).add_message("Manual order placed. Manage from Order Management (U=Update, C=Cancel).")
+                    
+                    self._override_price = None
                     keyboard.unhook_all()
+                    return
+
+                # Non-manual: use API's built-in price improvement logic
+                self.app.query_one(StatusLog).add_message(f"Placing vertical spread order with automatic price improvement...")
+                
+                # Use initial price (user override if provided, otherwise computed net debit)
+                initial_price = self._override_price if self._override_price is not None else net_debit
+                
+                # Use the API's place_order method which handles price improvements
+                order_func = self.app.api.vertical_call_order
+                order_params = [asset, expiration, strike_low, strike_high, 1]
+                
+                result = await asyncio.to_thread(
+                    self.app.api.place_order, order_func, order_params, initial_price
+                )
+                
+                if result is True:
+                    self.app.query_one(StatusLog).add_message("Vertical spread order filled successfully!")
+                elif result == "cancelled":
+                    self.app.query_one(StatusLog).add_message("Vertical spread order cancelled by user.")
+                else:
+                    self.app.query_one(StatusLog).add_message("Vertical spread order not filled after all attempts.")
+                    
+                self._override_price = None
+                keyboard.unhook_all()
+                self._selected_row_data = None
+                
             else:
                 self.app.query_one(StatusLog).add_message("Error: No valid row selected for vertical spread order placement.")
         except Exception as e:
@@ -514,7 +452,8 @@ class CheckVerticalSpreadsWidget(Static):
 
             if cancel_order:
                 try:
-                    await asyncio.to_thread(self.app.api.cancelOrder, order_id)
+                    from .. import logic as ui_logic
+                    await ui_logic.cancel_order(self.app.api, order_id)
                     self.app.query_one(StatusLog).add_message("Order cancelled by user.")
                     return "cancelled"
                 except Exception as e:
@@ -523,7 +462,8 @@ class CheckVerticalSpreadsWidget(Static):
 
             try:
                 if current_time - last_status_check >= 1:  # Check every second
-                    order_status = await asyncio.to_thread(self.app.api.checkOrder, order_id)
+                    from .. import logic as ui_logic
+                    order_status = await ui_logic.check_order(self.app.api, order_id)
                     last_status_check = current_time
 
                     if current_time - last_print_time >= print_interval:
@@ -577,8 +517,11 @@ class CheckVerticalSpreadsWidget(Static):
                     continue
                 prev_bid, prev_ask = m.get("last_bid"), m.get("last_ask")
                 m["last_bid"], m["last_ask"] = bid, ask
-                bid_style = ""
-                ask_style = ""
+                # Persist last styles so color remains until a change occurs
+                prev_bid_style = m.get("last_bid_style", "")
+                prev_ask_style = m.get("last_ask_style", "")
+                bid_style = prev_bid_style
+                ask_style = prev_ask_style
                 try:
                     if prev_bid is not None and bid is not None:
                         if float(bid) > float(prev_bid):
@@ -595,6 +538,9 @@ class CheckVerticalSpreadsWidget(Static):
                             ask_style = "red"
                 except Exception:
                     pass
+                # Save styles so they persist on next tick if value unchanged
+                m["last_bid_style"] = bid_style
+                m["last_ask_style"] = ask_style
                 ba_text = Text()
                 ba_text.append(f"{float(bid):.2f}" if bid is not None else "", style=bid_style)
                 ba_text.append("|")

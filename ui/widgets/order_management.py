@@ -1,21 +1,20 @@
-from textual.widgets import DataTable, Static, Label
+from textual.widgets import DataTable, Static
 from textual import work
 from textual.containers import Vertical
 from datetime import datetime
 from ..widgets.status_log import StatusLog
 from ..widgets.order_confirmation import OrderConfirmationScreen
 from rich.text import Text
+from ..utils import style_cell as cell
 import asyncio
 from textual.screen import ModalScreen
-from textual.widgets import Static, Input
+from textual.widgets import Input, Collapsible
 from rich.panel import Panel
-from rich.text import Text
 from rich.table import Table
 from rich.align import Align
-import schwab
-from schwab.utils import Utils
-from configuration import debugCanSendOrders, stream_quotes
-from ..quote_provider import StreamingQuoteProvider
+from configuration import stream_quotes
+from api.streaming.provider import StreamingQuoteProvider
+from typing import Optional
 
 
 class OrderCancellationScreen(ModalScreen):
@@ -218,15 +217,19 @@ class OrderManagementWidget(Static):
                                "filled_header": None, "filled_rows": [], "filled_sep": None,
                                "other_header": None, "other_rows": []}
         self._col_keys = []
-        self._quote_provider: StreamingQuoteProvider | None = None
+        self._quote_provider: Optional[StreamingQuoteProvider] = None
         self._prev_midnat = {}  # orderId -> (mid, nat)
+        self._last_stream_opts: set[str] = set()
 
     def compose(self):
         """Create child widgets."""
         with Vertical():
             streaming_hint = "Streaming: ON" if stream_quotes else "Streaming: OFF"
-            yield Static(Text(f"Hints: U = Update Price, C = Cancel  |  {streaming_hint}", style="bold yellow"))
+            yield Static(Text(f"Hints: U = Update Price, C = Cancel, O = Toggle Other  |  {streaming_hint}", style="bold yellow"))
             yield DataTable(id="order_management_table")
+            # Collapsible section holding a separate table for OTHER orders
+            with Collapsible(title="OTHER ORDERS (Canceled / Expired / Replaced)", collapsed=True, id="other_collapsible"):
+                yield DataTable(id="other_orders_table")
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
@@ -254,7 +257,26 @@ class OrderManagementWidget(Static):
         table.header_style = "bold on blue"
         table.cursor_type = "row"
         table.focus()
+        # Ensure the main table doesn't consume all vertical space so the Collapsible appears directly after
+        try:
+            table.styles.height = "auto"
+        except Exception:
+            pass
         self.run_get_orders_data()
+        # Initialize columns for the OTHER ORDERS table inside the collapsible
+        try:
+            other_tbl = self.query_one("#other_orders_table", DataTable)
+            other_tbl.add_columns(
+                "Order ID", "Status", "Time", "Asset", "Type", "Qty", "Price", "Mid", "Nat"
+            )
+            other_tbl.zebra_stripes = True
+            other_tbl.header_style = "bold on blue"
+            try:
+                other_tbl.styles.height = "auto"
+            except Exception:
+                pass
+        except Exception:
+            pass
         self.set_interval(15, self.run_get_orders_data)
         # Initialize streaming quotes if enabled
         if stream_quotes:
@@ -264,6 +286,17 @@ class OrderManagementWidget(Static):
                 self.set_interval(1, self.refresh_working_quotes)
             except Exception as e:
                 self.app.query_one(StatusLog).add_message(f"Streaming init error: {e}")
+
+    def on_unmount(self) -> None:
+        """Cleanup: unsubscribe any working-order symbols when leaving the screen."""
+        try:
+            if self._quote_provider and getattr(self, "_last_stream_opts", None):
+                syms = list(self._last_stream_opts)
+                if syms:
+                    asyncio.create_task(self._quote_provider.unsubscribe_options(syms))
+                self._last_stream_opts = set()
+        except Exception:
+            pass
 
     def on_key(self, event) -> None:
         """Handle key events for manual order actions."""
@@ -275,6 +308,16 @@ class OrderManagementWidget(Static):
                 event.prevent_default()
         elif key == 'u':
             self.replace_selected_order_price()
+            event.prevent_default()
+        elif key == 'o':
+            # Toggle Collapsible widget for OTHER ORDERS
+            try:
+                col = self.query_one("#other_collapsible", Collapsible)
+                col.collapsed = not col.collapsed
+                hint = "collapsed" if col.collapsed else "expanded"
+                self.app.query_one(StatusLog).add_message(f"Other orders {hint}.")
+            except Exception:
+                pass
             event.prevent_default()
 
     def _get_selected_working_order(self):
@@ -303,20 +346,35 @@ class OrderManagementWidget(Static):
             order_id = formatted.get('order_id')
             current_price = formatted.get('price')
             try:
+                # Remove $ symbol if present and convert to float
+                if isinstance(current_price, str) and current_price.startswith('$'):
+                    current_price = current_price[1:]
                 current_price = float(current_price)
             except Exception:
                 self.app.query_one(StatusLog).add_message("Unable to parse current price for selected order.")
                 return
 
-            # Determine base price at first update
             base = self._base_price.get(order_id, current_price)
             self._base_price[order_id] = base
             step = self._manual_steps.get(order_id, 0) + 1
             self._manual_steps[order_id] = step
 
-            # Compute improved price and round to $0.05
-            def round_to_nearest_five_cents(price):
-                return round(price * 20) / 20
+            # Compute improved price with symbol-aware tick size
+            def _tick_for_symbol(sym: str) -> float:
+                try:
+                    u = str(sym).split()[0].lstrip("$").upper()
+                    return 0.05 if u in {"SPX", "SPXW"} else 0.01
+                except Exception:
+                    return 0.01
+
+            def _round_to_tick(p: float, tick: float) -> float:
+                try:
+                    return round(round(float(p) / tick) * tick, 2)
+                except Exception:
+                    try:
+                        return round(float(p), 2)
+                    except Exception:
+                        return p
 
             # Determine debit vs credit from full order prior to suggestion
             client = self.app.api.connectClient
@@ -327,7 +385,18 @@ class OrderManagementWidget(Static):
             order_type_str = full_order.get("orderType", "NET_DEBIT")
             is_debit = (order_type_str == "NET_DEBIT")
 
-            new_price = round_to_nearest_five_cents(base + step * 0.05) if is_debit else round_to_nearest_five_cents(base - step * 0.05)
+            # Infer underlying from first leg for tick selection
+            tick = 0.01
+            try:
+                legs = full_order.get("orderLegCollection", []) or []
+                first_leg = legs[0] if legs else {}
+                sym = (first_leg.get("instrument") or {}).get("symbol") or ""
+                tick = _tick_for_symbol(sym)
+            except Exception:
+                pass
+
+            raw_price = (base + step * tick) if is_debit else (base - step * tick)
+            new_price = _round_to_tick(raw_price, tick)
 
             # Show confirmation modal with editable price
             details = {
@@ -358,54 +427,8 @@ class OrderManagementWidget(Static):
             order_id = formatted.get('order_id')
             new_price = payload.get('price') if payload.get('price') is not None else suggested_price
 
-            # Build replacement order from existing order legs
-            client = self.app.api.connectClient
-            account_hash = self.app.api.getAccountHash()
-            # Fetch full order details
-            r = await asyncio.to_thread(client.get_order, order_id, account_hash)
-            r.raise_for_status()
-            full_order = r.json()
-
-            # Attempt to cancel existing order first
-            try:
-                await asyncio.to_thread(self.app.api.cancelOrder, order_id)
-            except Exception as e:
-                self.app.query_one(StatusLog).add_message(f"Warning: could not cancel order {order_id}: {e}")
-
-            ob = schwab.orders.generic.OrderBuilder()
-            order_type_str = full_order.get("orderType", "NET_DEBIT")
-            order_type_enum = getattr(schwab.orders.common.OrderType, order_type_str, schwab.orders.common.OrderType.NET_DEBIT)
-            legs = full_order.get("orderLegCollection", [])
-            for leg in legs:
-                instr = leg.get("instrument", {})
-                symbol = instr.get("symbol")
-                qty = leg.get("quantity", 1)
-                instruction_str = leg.get("instruction", "BUY_TO_OPEN")
-                try:
-                    instruction_enum = getattr(schwab.orders.common.OptionInstruction, instruction_str)
-                except Exception:
-                    instruction_enum = schwab.orders.common.OptionInstruction.BUY_TO_OPEN if instruction_str.upper().startswith("BUY") else schwab.orders.common.OptionInstruction.SELL_TO_OPEN
-                ob.add_option_leg(instruction_enum, symbol, qty)
-
-            ob.set_duration(schwab.orders.common.Duration.DAY)
-            ob.set_session(schwab.orders.common.Session.NORMAL)
-            ob.set_price(str(abs(new_price)))
-            ob.set_order_type(order_type_enum)
-            ob.set_order_strategy_type(schwab.orders.common.OrderStrategyType.SINGLE)
-            co = full_order.get("complexOrderStrategyType")
-            if co:
-                try:
-                    co_enum = getattr(schwab.orders.common.ComplexOrderStrategyType, co)
-                    ob.set_complex_order_strategy_type(co_enum)
-                except Exception:
-                    pass
-
-            if not debugCanSendOrders:
-                print("Replacement order (debug): ", ob.build())
-                new_order_id = None
-            else:
-                r2 = await asyncio.to_thread(client.place_order, account_hash, ob)
-                new_order_id = Utils(client, account_hash).extract_order_id(r2)
+            # Use Schwab edit/replace when available
+            new_order_id = await asyncio.to_thread(self.app.api.editOrderPrice, order_id, new_price)
 
             if new_order_id:
                 # Carry over base and step to new order id
@@ -414,10 +437,10 @@ class OrderManagementWidget(Static):
                 # Cleanup old mapping
                 self._base_price.pop(order_id, None)
                 self._manual_steps.pop(order_id, None)
-                self.app.query_one(StatusLog).add_message(f"Placed replacement order {new_order_id} at ${new_price:.2f}.")
+                self.app.query_one(StatusLog).add_message(f"Replaced order {order_id} at ${new_price:.2f} → {new_order_id}.")
                 self.run_get_orders_data()
             else:
-                self.app.query_one(StatusLog).add_message("Failed to replace order.")
+                self.app.query_one(StatusLog).add_message("Failed to replace/edit order.")
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error replacing order: {e}")
 
@@ -434,7 +457,7 @@ class OrderManagementWidget(Static):
         for order in orders or []:
             formatted = self.app.api.formatOrderForDisplay(order)
             status = formatted["status"]
-            if status in ("ACCEPTED", "WORKING"):
+            if status in ("ACCEPTED", "WORKING", "PENDING_ACTIVATION"):
                 working.append((order, formatted))
             elif status == "FILLED":
                 filled.append((order, formatted))
@@ -450,6 +473,7 @@ class OrderManagementWidget(Static):
                     return (None, None)
                 client = self.app.api.connectClient
                 cost_mid = proceeds_mid = cost_nat = proceeds_nat = 0.0
+                valid = True
                 for leg in legs:
                     instr = leg.get("instrument", {})
                     symbol = instr.get("symbol")
@@ -469,30 +493,45 @@ class OrderManagementWidget(Static):
                         qd = q.get(symbol, {}).get("quote", {})
                         bid = bid if bid is not None else qd.get("bidPrice")
                         ask = ask if ask is not None else qd.get("askPrice")
-                    bid = float(bid) if bid is not None else None
-                    ask = float(ask) if ask is not None else None
-                    if bid is not None and ask is not None:
-                        mid = (bid + ask) / 2
-                    elif bid is not None:
+                    try:
+                        bid = float(bid) if bid is not None else None
+                    except Exception:
+                        bid = None
+                    try:
+                        ask = float(ask) if ask is not None else None
+                    except Exception:
+                        ask = None
+                    mid = None
+                    if bid is not None and ask is not None and ask > 0 and bid > 0:
+                        mid = (bid + ask) / 2.0
+                    elif bid is not None and bid > 0:
                         mid = bid
-                    elif ask is not None:
+                    elif ask is not None and ask > 0:
                         mid = ask
-                    else:
-                        mid = 0.0
                     if instruction.startswith("BUY"):
-                        cost_mid += mid
-                        # Natural for BUY is ask if available else use mid (or bid)
-                        cost_nat += (ask if ask is not None else (mid if mid else 0.0))
+                        if mid is None:
+                            valid = False
+                        else:
+                            cost_mid += mid
+                        if ask is not None and ask > 0:
+                            cost_nat += ask
+                        else:
+                            valid = False
                     else:
-                        proceeds_mid += mid
-                        # Natural for SELL is bid if available else use mid (or ask)
-                        proceeds_nat += (bid if bid is not None else (mid if mid else 0.0))
+                        if mid is None:
+                            valid = False
+                        else:
+                            proceeds_mid += mid
+                        if bid is not None and bid > 0:
+                            proceeds_nat += bid
+                        else:
+                            valid = False
                 if order_type == "NET_DEBIT":
-                    net_mid = cost_mid - proceeds_mid
-                    net_nat = cost_nat - proceeds_nat
+                    net_mid = None if not valid else (cost_mid - proceeds_mid)
+                    net_nat = None if not valid else (cost_nat - proceeds_nat)
                 else:
-                    net_mid = proceeds_mid - cost_mid
-                    net_nat = proceeds_nat - cost_nat
+                    net_mid = None if not valid else (proceeds_mid - cost_mid)
+                    net_nat = None if not valid else (proceeds_nat - cost_nat)
                 return (net_mid, net_nat)
             except Exception:
                 return (None, None)
@@ -535,8 +574,8 @@ class OrderManagementWidget(Static):
                     Text(str(formatted["entered_time"])),
                     Text(str(formatted["asset"])),
                     Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
-                    Text(str(formatted["quantity"]), justify="right"),
-                    Text(price, justify="right"),
+                    cell("quantity", formatted.get("quantity"), None),
+                    cell("price", price, None),
                     Text(mid_str, style=mid_style, justify="right"),
                     Text(nat_str, style=nat_style, justify="right"),
                 )
@@ -548,10 +587,33 @@ class OrderManagementWidget(Static):
                     sym = leg.get("instrument", {}).get("symbol")
                     if sym:
                         all_symbols.append(sym)
-            # Subscribe to option symbols via streaming
+            # After working rows are rendered, set default selection immediately
+            try:
+                # Make working orders available for key handlers right away
+                self._working_orders = [o for o, _ in working]
+                if working:
+                    if hasattr(table, "move_cursor"):
+                        table.move_cursor(1, 0)
+                    self._selected_order_id = working[0][0].get("orderId")
+                else:
+                    if hasattr(table, "move_cursor"):
+                        table.move_cursor(0, 0)
+                    self._selected_order_id = None
+            except Exception:
+                pass
+
+            # Subscribe to option symbols via streaming (non-blocking)
             if stream_quotes and self._quote_provider:
                 try:
-                    await self._quote_provider.subscribe_options(all_symbols)
+                    desired = {s for s in all_symbols if s}
+                    removed = self._last_stream_opts - desired
+                    added = desired - self._last_stream_opts
+                    # Do not block UI build while subscribing/unsubscribing
+                    if removed:
+                        asyncio.create_task(self._quote_provider.unsubscribe_options(list(removed)))
+                    if added:
+                        asyncio.create_task(self._quote_provider.subscribe_options(list(added)))
+                    self._last_stream_opts = desired
                 except Exception as e:
                     self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
             # Separator
@@ -572,37 +634,39 @@ class OrderManagementWidget(Static):
                     Text(str(formatted["entered_time"])),
                     Text(str(formatted["asset"])),
                     Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
-                    Text(str(formatted["quantity"]), justify="right"),
-                    Text(price, justify="right"),
+                    cell("quantity", formatted.get("quantity"), None),
+                    cell("price", price, None),
                     Text("", justify="right"),
                     Text("", justify="right"),
                 )
-            # Separator
-            table.add_row(*[Text("") for _ in range(9)])
-            # Other header + rows
-            table.add_row(Text("OTHER ORDERS (Canceled / Expired / Replaced)", style="bold white on dark_blue"), *[Text("") for _ in range(8)])
-            for order, formatted in other:
-                order_type = formatted["order_type"]
-                price = formatted["price"]
-                try:
-                    price = f"{float(price):.2f}"
-                except (ValueError, TypeError):
-                    price = str(price)
-                status_color = {"CANCELED": "gray", "EXPIRED": "yellow", "REPLACED": "magenta"}.get(formatted["status"], "")
-                table.add_row(
-                    Text(str(formatted["order_id"])),
-                    Text(str(formatted["status"]), style=status_color),
-                    Text(str(formatted["entered_time"])),
-                    Text(str(formatted["asset"])),
-                    Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
-                    Text(str(formatted["quantity"]), justify="right"),
-                    Text(price, justify="right"),
-                    Text("", justify="right"),
-                    Text("", justify="right"),
-                )
+            # Populate OTHER ORDERS in a separate table inside the collapsible
+            try:
+                other_tbl = self.query_one("#other_orders_table", DataTable)
+                other_tbl.clear()
+                for order, formatted in other:
+                    order_type = formatted["order_type"]
+                    price = formatted["price"]
+                    try:
+                        price = f"{float(price):.2f}"
+                    except (ValueError, TypeError):
+                        price = str(price)
+                    status_color = {"CANCELED": "gray", "EXPIRED": "yellow", "REPLACED": "magenta"}.get(formatted["status"], "")
+                    other_tbl.add_row(
+                        Text(str(formatted["order_id"])),
+                        Text(str(formatted["status"]), style=status_color),
+                        Text(str(formatted["entered_time"])),
+                        Text(str(formatted["asset"])),
+                        Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")),
+                        cell("quantity", formatted.get("quantity"), None),
+                        cell("price", price, None),
+                        Text("", justify="right"),
+                        Text("", justify="right"),
+                    )
+            except Exception:
+                pass
 
             # Update internal lists
-            self._working_orders = [o for o, _ in working]
+            # _working_orders already set earlier to enable immediate key handling
             self._filled_orders = [o for o, _ in filled]
             self._other_orders = [o for o, _ in other]
             self._initialized = True
@@ -636,7 +700,7 @@ class OrderManagementWidget(Static):
                 except (ValueError, TypeError):
                     price = str(price)
                 status = formatted["status"]
-                status_color = "cyan" if status == "WORKING" else ""
+                status_color = "cyan" if status == "WORKING" else ("yellow" if status == "PENDING_ACTIVATION" else "")
                 mid_val, nat_val = await compute_mid_nat(order)
                 mid_str = f"{mid_val:.2f}" if mid_val is not None else ""
                 nat_str = f"{nat_val:.2f}" if nat_val is not None else ""
@@ -659,8 +723,8 @@ class OrderManagementWidget(Static):
                 table.update_cell(row_key, ck[2], Text(str(formatted["entered_time"])))
                 table.update_cell(row_key, ck[3], Text(str(formatted["asset"])))
                 table.update_cell(row_key, ck[4], Text(str(order_type), style=("red" if "SELL" in order_type.upper() else "green" if "BUY" in order_type.upper() else "")))
-                table.update_cell(row_key, ck[5], Text(str(formatted["quantity"]), justify="right"))
-                table.update_cell(row_key, ck[6], Text(price, justify="right"))
+                table.update_cell(row_key, ck[5], cell("quantity", formatted.get("quantity"), None))
+                table.update_cell(row_key, ck[6], cell("price", price, None))
                 table.update_cell(row_key, ck[7], Text(mid_str, style=mid_style, justify="right"))
                 table.update_cell(row_key, ck[8], Text(nat_str, style=nat_style, justify="right"))
                 if mid_val is not None and nat_val is not None and oid is not None:
@@ -671,7 +735,14 @@ class OrderManagementWidget(Static):
                         all_symbols.append(sym)
             if stream_quotes and self._quote_provider:
                 try:
-                    await self._quote_provider.subscribe_options(all_symbols)
+                    desired = {s for s in all_symbols if s}
+                    removed = self._last_stream_opts - desired
+                    added = desired - self._last_stream_opts
+                    if removed:
+                        await self._quote_provider.unsubscribe_options(list(removed))
+                    if added:
+                        await self._quote_provider.subscribe_options(list(added))
+                    self._last_stream_opts = desired
                 except Exception as e:
                     self.app.query_one(StatusLog).add_message(f"Streaming subscribe error: {e}")
             return
@@ -696,27 +767,43 @@ class OrderManagementWidget(Static):
             def mid_nat_from_cache(order) -> tuple[float | None, float | None]:
                 legs = order.get("orderLegCollection", [])
                 cost_mid = proceeds_mid = cost_nat = proceeds_nat = 0.0
+                valid = True
                 for leg in legs:
                     instr = leg.get("instrument", {})
                     symbol = instr.get("symbol")
                     if not symbol:
                         continue
                     bid, ask = self._quote_provider.get_bid_ask(symbol)
-                    # Build mid even if one side missing
-                    if bid is not None and ask is not None:
-                        mid = (bid + ask) / 2
-                    elif bid is not None:
-                        mid = bid
-                    elif ask is not None:
-                        mid = ask
-                    else:
-                        mid = 0.0
+                    # Compute mid only if we have at least one side; never use 0.0 as a placeholder
+                    mid = None
+                    if bid is not None and ask is not None and ask > 0 and bid > 0:
+                        mid = (bid + ask) / 2.0
+                    elif bid is not None and bid > 0:
+                        mid = float(bid)
+                    elif ask is not None and ask > 0:
+                        mid = float(ask)
+
                     if leg.get("instruction", "").upper().startswith("BUY"):
-                        cost_mid += mid
-                        cost_nat += (ask if ask is not None else (mid if mid else 0.0))
+                        if mid is None:
+                            valid = False
+                        else:
+                            cost_mid += mid
+                        if ask is not None and ask > 0:
+                            cost_nat += float(ask)
+                        else:
+                            valid = False
                     else:
-                        proceeds_mid += mid
-                        proceeds_nat += (bid if bid is not None else (mid if mid else 0.0))
+                        if mid is None:
+                            valid = False
+                        else:
+                            proceeds_mid += mid
+                        if bid is not None and bid > 0:
+                            proceeds_nat += float(bid)
+                        else:
+                            valid = False
+
+                if not valid:
+                    return (None, None)
                 if order.get("orderType") == "NET_DEBIT":
                     net_mid = cost_mid - proceeds_mid
                     net_nat = cost_nat - proceeds_nat
@@ -816,5 +903,3 @@ class OrderManagementWidget(Static):
         main_container = self.app.query_one("#main_container")
         main_container.remove_children()
         main_container.mount(Static("Welcome to Options Trader! Use the footer menu to navigate between features.", id="welcome_message"))
-
-

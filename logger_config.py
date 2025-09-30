@@ -1,22 +1,39 @@
 import logging
+import os
+from logging.handlers import RotatingFileHandler
 from configuration import loggingLevel
 
 def get_logger():
-    """Configure and return a logger instance"""
-    logger = logging.getLogger(__name__)
+    """Configure and return a logger instance that does not write to stdout.
 
-    # Check if handlers already exist to avoid duplicate handlers
-    if not logger.handlers:
-        # Create console handler and set level
-        handler = logging.StreamHandler()
-        handler.setLevel(loggingLevel)
+    Logs are written to logs/app.log with rotation to avoid interfering with the
+    Textual TUI rendering. Use the Status Log pane for user-facing messages.
+    """
+    logger = logging.getLogger("opi")
 
-        # Create formatter
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
+    if logger.handlers:
+        return logger
 
-        # Add handler to logger
-        logger.addHandler(handler)
-        logger.setLevel(loggingLevel)
+    logger.setLevel(loggingLevel)
+
+    # Ensure logs directory exists
+    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except Exception:
+        # Fallback to current directory if we can't create logs/
+        log_dir = os.getcwd()
+
+    log_path = os.path.join(log_dir, "app.log")
+
+    # Rotating file handler (5 MB, keep 3 backups)
+    file_handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3)
+    file_handler.setLevel(loggingLevel)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # Avoid propagating to root to prevent duplicate console output
+    logger.propagate = False
 
     return logger

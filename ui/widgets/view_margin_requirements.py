@@ -1,9 +1,9 @@
 from textual.widgets import DataTable, Static, Label
 from textual import work
-from datetime import datetime
 from .. import logic
 from ..widgets.status_log import StatusLog
 from rich.text import Text
+from ..utils import style_cell as cell, get_refreshed_time_str
 
 class ViewMarginRequirementsWidget(Static):
     """A widget to display margin requirements."""
@@ -74,78 +74,19 @@ class ViewMarginRequirementsWidget(Static):
 
         table = self.query_one(DataTable)
         table.clear()
-        refreshed_time = datetime.now().strftime("%H:%M:%S")
+        refreshed_time = get_refreshed_time_str(self.app)
 
         total_margin_label = self.query_one("#total_margin_label", Label)
         total_margin_label.update(f"Total Margin Requirement: ${total_margin:,.2f}")
 
-        def get_cell_style(col, val, prev_val=None):
-            if col == "Margin":
-                try:
-                    v = float(str(val).replace("$", "").replace(",", ""))
-                    pv = float(str(prev_val).replace("$", "").replace(",", "")) if prev_val is not None else None
-                    # Base style - color based on value (low/high)
-                    if v < 5000:
-                        style = "green"  # Good (low)
-                    elif v < 10000:
-                        style = "yellow"  # Warning (medium)
-                    else:
-                        style = "red"   # Bad (high)
-                    # Highlight changes - override with bold colors for increase/decrease
-                    if pv is not None:
-                        if v > pv:
-                            style = "bold red"    # Bold red for increase (worse)
-                        elif v < pv:
-                            style = "bold green"  # Bold green for decrease (better)
-                    return style
-                except:
-                    return ""
-            if col == "strike":
-                try:
-                    v = float(val)
-                    pv = float(prev_val) if prev_val is not None else None
-                    # Base style - no specific color for base value
-                    style = ""
-                    # Highlight changes - color based on increase/decrease
-                    if pv is not None:
-                        if v > pv:
-                            style = "bold"  # Bold for increase
-                        elif v < pv:
-                            style = "bold"  # Bold for decrease
-                    return style
-                except:
-                    pass
-            if col == "count":
-                try:
-                    v = float(val)
-                    pv = float(prev_val) if prev_val is not None else None
-                    # Base style - no specific color for base value
-                    style = ""
-                    # Highlight changes - color based on increase/decrease
-                    if pv is not None:
-                        if v > pv:
-                            style = "bold"  # Bold for increase
-                        elif v < pv:
-                            style = "bold"  # Bold for decrease
-                    return style
-                except:
-                    pass
-            return ""
-
+        # Using shared cell styling from ui.utils
         if margin_data:
             prev_rows = self._prev_rows or []
             for idx, row in enumerate(margin_data):
                 prev_row = prev_rows[idx] if idx < len(prev_rows) else {}
 
-                # Function to style a cell value
                 def style_cell(col_name):
-                    val = str(row[col_name])
-                    prev_val = prev_row.get(col_name)
-                    style = get_cell_style(col_name, val, prev_val)
-                    # Justify numerical columns to the right
-                    right_justify_cols = {"strike", "count", "margin"}
-                    justify = "right" if col_name in right_justify_cols else "left"
-                    return Text(val, style=style, justify=justify)
+                    return cell(col_name, row.get(col_name), prev_row.get(col_name))
 
                 cells = [
                     Text(str(row["symbol"]), style="", justify="left"),
@@ -161,3 +102,4 @@ class ViewMarginRequirementsWidget(Static):
             self._prev_rows = margin_data
         else:
             table.add_row("No margin requirements found.", "", "", "", "", "", refreshed_time)
+

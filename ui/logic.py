@@ -1,16 +1,62 @@
 import asyncio
 import json
-import math
 from datetime import datetime, timedelta
 from configuration import configuration, spreads
-from cc import find_best_rollover, get_median_price
-from optionChain import OptionChain
-from strategies import calculate_box_spread_wrapper, calculate_spread
-from margin_utils import calculate_margin_requirement, calculate_annualized_return_on_margin
+from status import notify_exception
+from core.covered_calls import find_best_rollover
+from core.common import get_median_price, classify_status, threshold_points
+from api.option_chain import OptionChain
+from core.box_spreads import calculate_box_spread as core_calc_box
+from core.vertical_spreads import bull_call_spread as core_bull_call
+from core.synthetic_covered_calls import synthetic_covered_call_spread as core_synth_cc
+# margin functions are calculated in core; UI doesn’t need them here
 
 
-# Note: We're using the existing functions from cc.py and strategies.py for order placement
-# rather than implementing new ones here.
+# Helpers for using core calculators from UI
+def calculate_box_spread_wrapper(spread, calls, puts):
+    # Sell-only box spread calculation
+    sell_result = core_calc_box(spread, json.dumps(calls), json.dumps(puts))
+    return [
+        (sell_result, spread, "Sell"),
+    ]
+
+# Async wrappers for long-running API calls used by widgets
+async def roll_over(api, old_symbol: str, new_symbol: str, amount: int, price: float):
+    return await asyncio.to_thread(api.rollOver, old_symbol, new_symbol, amount, price)
+
+async def cancel_order(api, order_id):
+    return await asyncio.to_thread(api.cancelOrder, order_id)
+
+async def check_order(api, order_id):
+    return await asyncio.to_thread(api.checkOrder, order_id)
+
+async def vertical_call_order(api, asset, expiration, strike_low, strike_high, quantity, price: float):
+    return await asyncio.to_thread(
+        api.vertical_call_order,
+        asset,
+        expiration,
+        strike_low,
+        strike_high,
+        quantity,
+        price=price,
+    )
+
+async def synthetic_covered_call_order(api, asset, expiration, strike_low, strike_high, quantity, price: float):
+    return await asyncio.to_thread(
+        api.synthetic_covered_call_order,
+        asset,
+        expiration,
+        strike_low,
+        strike_high,
+        quantity,
+        price=price,
+    )
+
+def _compute_spread(api, asset, spread, days, downsideProtection, price_method, synthetic):
+    if synthetic:
+        return asset, core_synth_cc(api, asset, spread, days, downsideProtection, price_method)
+    else:
+        return asset, core_bull_call(api, asset, spread, days, downsideProtection, price_method)
 
 async def get_expiring_shorts_data(api):
     """
@@ -36,7 +82,7 @@ async def get_expiring_shorts_data(api):
         return [res for res in results if res]
 
     except Exception as e:
-        print(f"Error in get_expiring_shorts_data: {e}")
+        notify_exception(e, prefix="get_expiring_shorts_data")
         return []
 
 async def process_short_position(api, short):
@@ -51,22 +97,22 @@ async def process_short_position(api, short):
 
         # Get underlying price
         underlying_price = await asyncio.to_thread(api.getATMPrice, stock_symbol)
-        # Determine status
-        value = round(current_strike - underlying_price, 2)
+        # Determine status (centralized)
         ITMLimit = configuration.get(stock_symbol, {}).get("ITMLimit", 25)
         deepITMLimit = configuration.get(stock_symbol, {}).get("deepITMLimit", 50)
         deepOTMLimit = configuration.get(stock_symbol, {}).get("deepOTMLimit", 10)
-        if value > 0:
-            status = "OTM"
-        elif value < 0:
-            if abs(value) > deepITMLimit:
-                status = "Deep ITM"
-            elif abs(value) > ITMLimit:
-                status = "ITM"
-            else:
-                status = "Just ITM"
-        else:
-            status = "ATM"
+        status_map = {
+            "deep_OTM": "OTM",
+            "OTM": "OTM",
+            "just_ITM": "Just ITM",
+            "ITM": "ITM",
+            "deep_ITM": "Deep ITM",
+        }
+        status_key = classify_status(current_strike, underlying_price,
+                                     itm_limit=ITMLimit,
+                                     deep_itm_limit=deepITMLimit,
+                                     deep_otm_limit=deepOTMLimit)
+        status = status_map.get(status_key, "ATM")
 
         new_strike = "N/A"
         new_expiration = "N/A"
@@ -116,6 +162,10 @@ async def process_short_position(api, short):
         cr_day = "N/A"
         extrinsic_left = "N/A"
         cr_day_per_pt = "N/A"
+        # P/L metrics
+        pl_day_raw = short.get("currentDayProfitLoss")
+        pl_day = round(float(pl_day_raw), 2) if pl_day_raw is not None else "N/A"
+        pl_open = "N/A"
         if credit != "N/A" and roll_out_days != "N/A" and roll_out_days > 0:
             cr_day = round(credit / roll_out_days, 2)
             # Calculate CrDayPerPt (normalized per point of roll-up, in cash dollars)
@@ -128,15 +178,26 @@ async def process_short_position(api, short):
         if prem_short_contract is not None:
             intrinsic_value = max(0, underlying_price - current_strike)
             extrinsic_left = round(prem_short_contract - intrinsic_value, 2)
+            # Compute P/L Open using current mark vs avg price for a SHORT position
+            try:
+                avg_price = float(short.get("receivedPremium", 0) or 0)
+                qty = int(short.get("count", 0) or 0)
+                mark = float(prem_short_contract)
+                pl_open_val = (avg_price - mark) * 100 * qty
+                pl_open = round(pl_open_val, 2)
+            except Exception:
+                pl_open = "N/A"
 
         return {
             "Ticker": stock_symbol,
             "Current Strike": current_strike,
             "Expiration": str(short_expiration_date),
             "DTE": dte,
-            "Underlying Price": round(underlying_price, 2),
+            "Underlying": round(underlying_price, 2),
             "Status": status,
-            "Quantity": int(short.get("count", 0)),
+            "Qty": int(short.get("count", 0)),
+            "P/L Day": pl_day,
+            "P/L Open": pl_open,
             "New Strike": new_strike,
             "New Expiration": new_expiration,
             "Roll Out (Days)": roll_out_days,
@@ -148,14 +209,226 @@ async def process_short_position(api, short):
             "Config Status": config_status,
             "optionSymbol": short["optionSymbol"],  # Add for rollOver
             "New Option Symbol": new_option_symbol,  # Add for rollOver
+            "receivedPremium": short.get("receivedPremium"),
         }
     except Exception as e:
-        print(f"Error processing position {short.get('optionSymbol', 'N/A')}: {e}")
+        prefix = f"process_short_position {short.get('optionSymbol', 'N/A')}"
+        notify_exception(e, prefix=prefix)
         return None
+
+def _extract_mark_from_quote(quote):
+    """Return best-effort mark price from a Schwab quote payload."""
+    if not isinstance(quote, dict):
+        return None
+    for key in ("mark", "markPrice", "lastPrice"):
+        val = quote.get(key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                continue
+    bid = quote.get("bid")
+    ask = quote.get("ask")
+    try:
+        if bid is not None and ask is not None:
+            return (float(bid) + float(ask)) / 2
+        if bid is not None:
+            return float(bid)
+        if ask is not None:
+            return float(ask)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _classify_option_status(strike, underlying_price, option_type, *, itm_limit, deep_itm_limit, deep_otm_limit):
+    try:
+        strike_val = float(strike)
+        under_val = float(underlying_price)
+    except (TypeError, ValueError):
+        return None
+
+    itm_pts = threshold_points(itm_limit, under_val)
+    deep_itm_pts = threshold_points(deep_itm_limit, under_val)
+    deep_otm_pts = threshold_points(deep_otm_limit, under_val)
+
+    opt_type = (option_type or "CALL").upper()
+    diff = strike_val - under_val if opt_type != "PUT" else under_val - strike_val
+
+    if diff > deep_otm_pts:
+        return "deep_OTM"
+    if diff > 0:
+        return "OTM"
+    if diff + itm_pts > 0:
+        return "just_ITM"
+    if diff + deep_itm_pts > 0:
+        return "ITM"
+    return "deep_ITM"
+
+
+async def get_open_option_positions_data(api):
+    """Fetch all open option positions for display."""
+    try:
+        positions = await asyncio.to_thread(api.getAllOptionPositions)
+        if not positions:
+            return []
+
+        option_symbols = sorted({p.get("optionSymbol") for p in positions if p.get("optionSymbol")})
+        quotes = {}
+        if option_symbols:
+            try:
+                response = await asyncio.to_thread(api.connectClient.get_quotes, option_symbols)
+                response.raise_for_status()
+                quotes = response.json()
+            except Exception as e:
+                notify_exception(e, prefix="get_open_option_positions_data:get_quotes")
+                quotes = {}
+
+        today = datetime.now().date()
+        underlying_cache = {}
+        results = []
+
+        status_map = {
+            "deep_OTM": "Deep OTM",
+            "OTM": "OTM",
+            "just_ITM": "Just ITM",
+            "ITM": "ITM",
+            "deep_ITM": "Deep ITM",
+        }
+
+        for position in positions:
+            option_symbol = position.get("optionSymbol")
+            underlying = position.get("stockSymbol")
+            if not option_symbol or not underlying:
+                continue
+
+            expiration_str = position.get("expiration")
+            expiration_date = None
+            dte_value = "N/A"
+            if expiration_str:
+                try:
+                    expiration_date = datetime.strptime(expiration_str, "%Y-%m-%d").date()
+                    dte_value = (expiration_date - today).days
+                except Exception:
+                    expiration_date = None
+                    dte_value = "N/A"
+
+            strike = position.get("strike")
+            try:
+                strike_val = float(strike) if strike is not None else None
+            except (TypeError, ValueError):
+                strike_val = None
+
+            if underlying not in underlying_cache:
+                underlying_cache[underlying] = await asyncio.to_thread(api.getATMPrice, underlying)
+            underlying_price = underlying_cache.get(underlying)
+
+            cfg = configuration.get(underlying, {})
+            option_type = (position.get("putCall") or "CALL").upper()
+            status = "Unknown"
+            if strike_val is not None and underlying_price is not None:
+                status_key = _classify_option_status(
+                    strike_val,
+                    underlying_price,
+                    option_type,
+                    itm_limit=cfg.get("ITMLimit", 25),
+                    deep_itm_limit=cfg.get("deepITMLimit", 50),
+                    deep_otm_limit=cfg.get("deepOTMLimit", 10),
+                )
+                if status_key:
+                    status = status_map.get(status_key, status_key)
+
+            long_qty = float(position.get("longQuantity") or 0)
+            short_qty = float(position.get("shortQuantity") or 0)
+            net_qty = long_qty - short_qty
+            if abs(net_qty) < 1e-6:
+                continue
+
+            abs_qty = abs(net_qty)
+            if abs(abs_qty - round(abs_qty)) < 1e-6:
+                qty_display = int(round(net_qty))
+            else:
+                qty_display = round(net_qty, 2)
+
+            quote_payload = quotes.get(option_symbol, {}).get("quote", {}) if quotes else {}
+            mark = _extract_mark_from_quote(quote_payload)
+
+            extrinsic_value = "N/A"
+            if isinstance(mark, (int, float)) and isinstance(underlying_price, (int, float)) and isinstance(strike_val, (int, float)):
+                intrinsic = (
+                    max(0.0, underlying_price - strike_val)
+                    if option_type == "CALL"
+                    else max(0.0, strike_val - underlying_price)
+                )
+                extrinsic_calc = mark - intrinsic
+                extrinsic_value = round(extrinsic_calc, 2)
+
+            avg_price = position.get("averagePrice")
+            try:
+                avg_price_val = float(avg_price) if avg_price is not None else None
+            except (TypeError, ValueError):
+                avg_price_val = None
+
+            pl_open = "N/A"
+            if avg_price_val is not None and mark is not None:
+                pl_calc = (mark - avg_price_val) * 100 * abs_qty if net_qty > 0 else (avg_price_val - mark) * 100 * abs_qty
+                pl_open = round(pl_calc, 2)
+
+            pl_day = position.get("currentDayProfitLoss")
+            if pl_day is not None:
+                try:
+                    pl_day = round(float(pl_day), 2)
+                except (TypeError, ValueError):
+                    pl_day = "N/A"
+            else:
+                pl_day = "N/A"
+
+            if isinstance(underlying_price, (int, float)):
+                underlying_display = round(underlying_price, 2)
+            else:
+                underlying_display = "N/A"
+
+            results.append(
+                {
+                    "Ticker": underlying,
+                    "Option Symbol": option_symbol,
+                    "Side": "Long" if net_qty > 0 else "Short",
+                    "Type": option_type,
+                    "Current Strike": strike_val,
+                    "Expiration": expiration_str,
+                    "_sort_expiration": expiration_date,
+                    "DTE": dte_value,
+                    "Underlying": underlying_display,
+                    "Status": status,
+                    "Qty": qty_display,
+                    "Avg Price": round(avg_price_val, 2) if isinstance(avg_price_val, (int, float)) else "N/A",
+                    "Mark": round(mark, 2) if isinstance(mark, (int, float)) else "N/A",
+                    "Extrinsic": extrinsic_value,
+                    "P/L Day": pl_day,
+                    "P/L Open": pl_open,
+                }
+            )
+
+        results.sort(
+            key=lambda row: (
+                row.get("_sort_expiration") or datetime.max.date(),
+                row.get("Option Symbol") or "",
+            )
+        )
+
+        for row in results:
+            row.pop("_sort_expiration", None)
+
+        return results
+
+    except Exception as e:
+        notify_exception(e, prefix="get_open_option_positions_data")
+        return []
 
 async def get_box_spreads_data(api, asset="$SPX"):
     """
-    Fetches both buy and sell box spread data, showing only the best buy (lowest cost) and best sell (highest return) per expiry.
+    Fetch sell box spread data only, keeping the best sell (highest annualized return)
+    per expiry across spread widths.
     """
     try:
         days = spreads[asset].get("days", 2000)
@@ -180,24 +453,18 @@ async def get_box_spreads_data(api, asset="$SPX"):
         spread_ranges = range(100, 500, 50)
         results = []
         for spread in spread_ranges:
-            buy_result = await asyncio.to_thread(calculate_box_spread_wrapper, spread, calls, puts)
-            for result, _, direction in buy_result:
+            wrapped = await asyncio.to_thread(calculate_box_spread_wrapper, spread, calls, puts)
+            for result, _, _ in wrapped:
                 if result is not None:
                     results.append(result)
 
-        # Group by expiry date and direction, keep only best buy (lowest cost) and best sell (highest return)
+        # Group by expiry date only, keep best SELL per expiry (lowest cost)
         best_spreads = {}
         for spread in results:
-            key = (spread["date"], spread["direction"])
-            ann_return_val = float(spread["ann_rom"]) if spread["ann_rom"] is not None else 0
-            if spread["direction"] == "Buy":
-                # For buy, keep the highest annualized return
-                if key not in best_spreads or ann_return_val > float(best_spreads[key]["ann_rom"] or 0):
-                    best_spreads[key] = spread
-            else:
-                # For sell, keep the highest annualized return (most negative is worst, least negative is best)
-                if key not in best_spreads or ann_return_val > float(best_spreads[key]["ann_rom"] or 0):
-                    best_spreads[key] = spread
+            key = spread["date"]
+            ann_return_val = float(spread["ann_rom"]) if spread["ann_rom"] is not None else float("inf")
+            if key not in best_spreads or ann_return_val < float(best_spreads[key]["ann_rom"] or float("inf")):
+                best_spreads[key] = spread
 
         box_spreads = []
         for spread in best_spreads.values():
@@ -241,6 +508,22 @@ async def get_box_spreads_data(api, asset="$SPX"):
                     if high_put_ask < high_put_bid:
                         flags.append("High Put Negative Spread")
 
+                # Additional sanity flags
+                try:
+                    mid_upfront = spread.get("mid_upfront_amount")
+                    nat_net = spread.get("nat_net_price")
+                    mid_net = spread.get("mid_net_price")
+                    fv = spread.get("face_value")
+                    if isinstance(mid_upfront, (int, float)) and isinstance(fv, (int, float)):
+                        if mid_upfront >= fv:
+                            flags.append("Credit>Face")
+                    if isinstance(nat_net, (int, float)) and nat_net <= 0:
+                        flags.append("Nat<=0")
+                    if isinstance(mid_net, (int, float)) and mid_net <= 0:
+                        flags.append("Mid<=0")
+                except Exception:
+                    pass
+
                 box_spreads.append({
                     "direction": spread["direction"],
                     "date": spread["date"],
@@ -266,9 +549,9 @@ async def get_box_spreads_data(api, asset="$SPX"):
                     "face_value": spread.get("face_value", ""),
                     # Backward compatibility fields (using mid-based values)
                     "net_price": spread.get("net_price", ""),
-                    "investment": spread.get("investment", ""),
+                    "investment": None,
                     "borrowed": spread.get("borrowed", ""),
-                    "repayment": spread.get("repayment", ""),
+                    "repayment": None,
                     "repayment_sell": spread.get("repayment_sell", ""),
                     "ann_cost_return": spread.get("ann_rom", ""),
                     "days_to_expiry": spread.get("days_to_expiry", ""),
@@ -276,7 +559,7 @@ async def get_box_spreads_data(api, asset="$SPX"):
                     "flags": ", ".join(flags) if flags else ""
                 })
             except Exception as e:
-                print(f"Error processing spread data: {e}")
+                notify_exception(e, prefix="process box spread row")
                 # Add a basic entry even if there's an error
                 box_spreads.append({
                     "direction": spread.get("direction", ""),
@@ -309,7 +592,7 @@ async def get_box_spreads_data(api, asset="$SPX"):
         return box_spreads
 
     except Exception as e:
-        print(f"Error in get_box_spreads_data: {e}")
+        notify_exception(e, prefix="get_box_spreads_data")
         return []
 
 async def get_vertical_spreads_data(api, synthetic=False):
@@ -320,16 +603,16 @@ async def get_vertical_spreads_data(api, synthetic=False):
         spread_results = []
         tasks = []
         for asset in spreads:
-            spread = spreads[asset]["spread"]
+            spread_w = spreads[asset]["spread"]
             days = spreads[asset]["days"]
             downsideProtection = spreads[asset]["downsideProtection"]
             price_method = spreads[asset].get("price", "mid")
             tasks.append(
                 asyncio.to_thread(
-                    calculate_spread,
+                    _compute_spread,
                     api,
                     asset,
-                    spread,
+                    spread_w,
                     days,
                     downsideProtection,
                     price_method,
@@ -339,11 +622,8 @@ async def get_vertical_spreads_data(api, synthetic=False):
 
         results = await asyncio.gather(*tasks)
 
-        print(f"Vertical spreads results: {results}")  # Debug print
-
         for asset, best_spread in results:
             if best_spread:
-                print(f"Best spread for {asset}: {best_spread}")  # Debug print
                 row = {
                     "asset": asset,
                     "expiration": best_spread["date"],
@@ -358,7 +638,8 @@ async def get_vertical_spreads_data(api, synthetic=False):
                     # Ensure these are floats for UI logic
                     "investment": float(best_spread['total_investment']),
                     "max_profit": float(best_spread['total_return']),
-                    "cagr": float(best_spread['cagr_percentage']) / 100.0,
+                    # Provide CAGR as a true percent value (e.g., 199.0 for 199%) to display correctly even when >100%
+                    "cagr": float(best_spread['cagr_percentage']),
                     "protection": float(best_spread['downside_protection']) / 100.0,
                     "margin_req": float(best_spread['margin_requirement']),
                     "ann_rom": float(best_spread['return_on_margin']) / 100.0,
@@ -371,11 +652,11 @@ async def get_vertical_spreads_data(api, synthetic=False):
                 spread_results.append(row)
 
         spread_results.sort(key=lambda x: x["ann_rom"], reverse=True)
-        print(f"Final spread results: {spread_results}")  # Debug print
         return spread_results
 
     except Exception as e:
-        print(f"Error in get_vertical_spreads_data: {e}")
+        from status import notify_exception
+        notify_exception(e, prefix="get_vertical_spreads_data")
         return []
 
 async def get_margin_requirements_data(api):
@@ -418,5 +699,5 @@ async def get_margin_requirements_data(api):
         return margin_data, total_margin
 
     except Exception as e:
-        print(f"Error in get_margin_requirements_data: {e}")
+        notify_exception(e, prefix="get_margin_requirements_data")
         return [], 0

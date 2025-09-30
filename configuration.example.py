@@ -1,16 +1,9 @@
-# Schwab API settings
-apiKey = ''  # create an app on https://developer.schwab.com/ to get one
-apiRedirectUri = 'https://localhost'
-SchwabAccountID = ''
-appSecret = ''
-
 # Google Sheets settings
 SPREADSHEET_ID = ''  # ID from your Google Sheets URL
 USE_SHEETS = True    # Set to True to use Google Sheets instead of Schwab API
 
 # General settings
 dbName = 'db.json'
-botAlert = 'console'  # console, email
 loggingLevel = 'ERROR'  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 AutoTrade = False
 
@@ -64,12 +57,14 @@ configuration = {
         # minimum premium desired for writing the cc's
         "minPremium": 5,
         "desiredDelta": 0.25,
-        # If our short strike is below current asset price - this value, we consider it ITM and want to rollup for minPremium
-        "ITMLimit": 75,
-        # If our strike is below current asset price - this value, we consider it deep ITM and want to rollup without credit
-        "deepITMLimit": 150,
-        # If our strike is above current asset price + this value, we consider it deep OTM and don't want to rollup
-        "deepOTMLimit": 10,
+        # Percent-based moneyness thresholds (use decimals for percent, e.g. 0.018 = 1.8%).
+        # If value >= 1 it is treated as points for backward compatibility.
+        # If our short strike is below current asset price - this percent, we consider it ITM and want to rollup for minPremium
+        "ITMLimit": 0.018,
+        # If our strike is below current asset price - this percent, we consider it deep ITM and want to rollup without credit
+        "deepITMLimit": 0.035,
+        # If our strike is above current asset price + this percent, we consider it deep OTM and don't want to rollup
+        "deepOTMLimit": 0.004,
     },
     'QQQ': {
         "minRollupGap": 25,
@@ -78,21 +73,14 @@ configuration = {
         "minRollOutWindow": 30,
         "idealPremium": 5,
         "minPremium": 2.5,
-        "ITMLimit": 25,
-        "deepITMLimit": 50,
-        "deepOTMLimit": 5,
+        # Percent-based moneyness thresholds (use decimals for percent)
+        "ITMLimit": 0.018,
+        "deepITMLimit": 0.035,
+        "deepOTMLimit": 0.004,
     }
 }
 
-# Required for 'botAlert' email
-mailConfig = {
-    'smtp': None,
-    'port': 587,
-    'from': None,
-    'to': None,
-    'username': None,
-    'password': None,
-}
+
 
 # DEBUG MODES
 debugMarketOpen = True
