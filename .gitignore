@@ -1,8 +1,17 @@
 __pycache__
 .idea
 configuration.py
+## Persisted streaming state per account
+state-*.json
 *.json
 *.csv
 .aider*
 *.pickle
-*.env
+.env
+
+# ML data, labels, and analysis results
+ml_data/
+logs/
+
+# Keep the example file
+!.env.example

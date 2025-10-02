@@ -2,7 +2,7 @@ from statistics import median
 
 import alert
 from logger_config import get_logger
-from support import validDateFormat
+from core.common import validDateFormat
 
 logger = get_logger()
 
