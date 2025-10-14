@@ -110,28 +110,6 @@ def main() -> int:
             return 2
         if Bot is None:
             print("python-telegram-bot is not installed. Please install requirements.")
-"""
-Telegram notification test helper
----------------------------------
-
-Usage examples:
-
-1) Discover chat IDs (after you send a message to your bot or a group with your bot):
-   python scripts/telegram_test_send.py list
-
-   If you see "No updates found":
-   - Open Telegram, DM your bot and send "hi" (or in a group, mention the bot or send /start@YourBot)
-   - If a webhook is configured, delete it then retry:
-     python scripts/telegram_test_send.py delete-webhook
-
-2) Send a test message (uses TELEGRAM_DEFAULT_CHAT_ID from .env, or override):
-   python scripts/telegram_test_send.py send --text "Hello" --level warning
-   python scripts/telegram_test_send.py send --text "Hello" --level warning --chat-id -100123...
-
-Requires .env with TELEGRAM_BOT_TOKEN. For send, also set TELEGRAM_ENABLED=true
-and TELEGRAM_DEFAULT_CHAT_ID (unless you pass --chat-id).
-"""
-
             return 2
         import asyncio
         async def _run() -> int:
