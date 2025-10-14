@@ -3,7 +3,6 @@ import os
 import time
 from datetime import datetime, timedelta
 from operator import itemgetter
-from statistics import median
 
 import pytz
 import requests
@@ -15,7 +14,6 @@ from core.common import round_to_nearest_five_cents, extract_date, extract_strik
 from configuration import debugCanSendOrders
 from logger_config import get_logger
 from api.order_manager import OrderManager
-import os
 
 # Get SchwabAccountID from environment variables
 SchwabAccountID = os.getenv("SCHWAB_ACCOUNT_ID")
@@ -112,7 +110,6 @@ class Api:
         Delete the stored token files to force re-authentication.
         This is useful when token authentication errors occur.
         """
-        import os
         from logger_config import get_logger
 
         logger = get_logger()
@@ -172,84 +169,46 @@ class Api:
         if price is not None:
             return price
         # As a last resort, attempt a direct REST single-quote call
-        r = self.connectClient.get_quote(asset)
+        return self._get_price_rest(asset)
+
+    def _getOptionChain(self, asset, strikes, date, daysLessAllowed, contract_type):
+        """Private method to get option chain with specified contract type."""
+        fromDate = date - timedelta(days=daysLessAllowed)
+        toDate = date
+
+        r = self.connectClient.get_option_chain(
+            asset,
+            contract_type=contract_type,
+            strike_count=strikes,
+            strategy=self.connectClient.Options.Strategy.SINGLE,
+            interval=None,
+            strike=None,
+            strike_range=None,
+            from_date=fromDate,
+            to_date=toDate,
+            volatility=None,
+            underlying_price=None,
+            interest_rate=None,
+            days_to_expiration=None,
+            exp_month=None,
+            option_type=None,
+        )
+
         if r.status_code != 200:
             try:
                 r.raise_for_status()
             except Exception as e:
-                publish_exception(e, prefix="get_quote")
+                prefix = "get_option_chain CALL" if contract_type == self.connectClient.Options.ContractType.CALL else "get_option_chain PUT"
+                publish_exception(e, prefix=prefix)
             raise
-        try:
-            data = r.json()
-            q = data.get(asset, {}).get("quote", {})
-            lp = q.get("lastPrice")
-            if lp is not None:
-                return float(lp)
-        except Exception:
-            pass
-        return None
+
+        return r.json()
 
     def getOptionChain(self, asset, strikes, date, daysLessAllowed):
-        fromDate = date - timedelta(days=daysLessAllowed)
-        toDate = date
-
-        r = self.connectClient.get_option_chain(
-            asset,
-            contract_type=self.connectClient.Options.ContractType.CALL,
-            strike_count=strikes,
-            strategy=self.connectClient.Options.Strategy.SINGLE,
-            interval=None,
-            strike=None,
-            strike_range=None,
-            from_date=fromDate,
-            to_date=toDate,
-            volatility=None,
-            underlying_price=None,
-            interest_rate=None,
-            days_to_expiration=None,
-            exp_month=None,
-            option_type=None,
-        )
-
-        if r.status_code != 200:
-            try:
-                r.raise_for_status()
-            except Exception as e:
-                publish_exception(e, prefix="get_option_chain CALL")
-            raise
-
-        return r.json()
+        return self._getOptionChain(asset, strikes, date, daysLessAllowed, self.connectClient.Options.ContractType.CALL)
 
     def getPutOptionChain(self, asset, strikes, date, daysLessAllowed):
-        fromDate = date - timedelta(days=daysLessAllowed)
-        toDate = date
-
-        r = self.connectClient.get_option_chain(
-            asset,
-            contract_type=self.connectClient.Options.ContractType.PUT,
-            strike_count=strikes,
-            strategy=self.connectClient.Options.Strategy.SINGLE,
-            interval=None,
-            strike=None,
-            strike_range=None,
-            from_date=fromDate,
-            to_date=toDate,
-            volatility=None,
-            underlying_price=None,
-            interest_rate=None,
-            days_to_expiration=None,
-            exp_month=None,
-            option_type=None,
-        )
-
-        if r.status_code != 200:
-            try:
-                r.raise_for_status()
-            except Exception as e:
-                publish_exception(e, prefix="get_option_chain PUT")
-            raise
-
-        return r.json()
+        return self._getOptionChain(asset, strikes, date, daysLessAllowed, self.connectClient.Options.ContractType.PUT)
 
     def getOptionExecutionWindow(self):
         now = datetime.now(pytz.UTC)
@@ -504,6 +463,25 @@ class Api:
 
         except KeyError:
             return False
+
+    def _get_price_rest(self, asset):
+        """Helper method to get price via REST API call."""
+        r = self.connectClient.get_quote(asset)
+        if r.status_code != 200:
+            try:
+                r.raise_for_status()
+            except Exception as e:
+                publish_exception(e, prefix="get_quote")
+            raise
+        try:
+            data = r.json()
+            q = data.get(asset, {}).get("quote", {})
+            lp = q.get("lastPrice")
+            if lp is not None:
+                return float(lp)
+        except Exception:
+            pass
+        return None
 
     def get_quote(self, asset):
         r = self.connectClient.get_quotes([asset])
