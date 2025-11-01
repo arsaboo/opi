@@ -4,7 +4,10 @@ from typing import Dict, Iterable, Optional, Tuple
 
 from schwab.streaming import StreamClient
 from status import publish, publish_exception
+from logger_config import get_logger
 import alert
+
+logger = get_logger()
 
 
 class StreamingQuoteProvider:
@@ -179,7 +182,14 @@ class StreamingQuoteProvider:
                     publish_exception(re, prefix="Streaming restart failed")
                     await asyncio.sleep(1)
             except Exception as e:
-                # Generic, transient issue; small pause
+                # Only log significant errors, not normal WebSocket closures or connection state issues
+                error_str = str(e).lower()
+                # Don't log normal WebSocket closure codes (1000 is OK, 1001 is going away)
+                # Don't log expected connection state issues during restarts
+                if not ("1000" in error_str and "ok" in error_str) and "1001" not in error_str:
+                    # Check if this is a connection state error during restart
+                    if not ("socket not open" in error_str and "forget to call login" in error_str):
+                        publish_exception(e, prefix="Streaming message handling error")
                 await asyncio.sleep(0.5)
 
     async def _restart_stream(self) -> None:
@@ -200,24 +210,30 @@ class StreamingQuoteProvider:
                 self.stream = None
 
             # Rebuild stream and handlers, then login
-            self.stream = StreamClient(self.client, account_id=self.account_id)
-            self.stream.add_level_one_option_handler(self._on_level_one_option)
             try:
-                self.stream.add_level_one_equity_handler(self._on_level_one_equity)
-            except Exception:
-                pass
-            await self.stream.login()
-            # Resubscribe existing symbol sets
-            try:
-                if self._opt_subs:
-                    await self.stream.level_one_option_subs(list(self._opt_subs))
-            except Exception:
-                pass
-            try:
-                if self._eq_subs:
-                    await self.stream.level_one_equity_subs(list(self._eq_subs))
-            except Exception:
-                pass
+                self.stream = StreamClient(self.client, account_id=self.account_id)
+                self.stream.add_level_one_option_handler(self._on_level_one_option)
+                try:
+                    self.stream.add_level_one_equity_handler(self._on_level_one_equity)
+                except Exception:
+                    pass
+                await self.stream.login()
+                # Resubscribe existing symbol sets
+                try:
+                    if self._opt_subs:
+                        await self.stream.level_one_option_subs(list(self._opt_subs))
+                except Exception:
+                    pass
+                try:
+                    if self._eq_subs:
+                        await self.stream.level_one_equity_subs(list(self._eq_subs))
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.error(f"Error during stream restart: {e}")
+                # Ensure stream is None if restart fails
+                self.stream = None
+                raise
             # Reset heartbeat timing on successful restart
             self._last_message_time = time.time()
             self._watchdog_last_restart = self._last_message_time
@@ -227,10 +243,16 @@ class StreamingQuoteProvider:
         # Reset the error streak for heartbeat timeouts to avoid exponential backoff
         # since this is a different type of failure
         self._error_streak = 0
-        await self._restart_stream()
-        # Update last message time on successful restart to prevent immediate restart cycle
-        self._last_message_time = time.time()
-        self._watchdog_last_restart = self._last_message_time
+        try:
+            await self._restart_stream()
+            # Update last message time on successful restart to prevent immediate restart cycle
+            self._last_message_time = time.time()
+            self._watchdog_last_restart = self._last_message_time
+        except Exception as e:
+            logger.error(f"Error during heartbeat timeout restart: {e}")
+            # Update timing anyway to potentially allow another restart attempt
+            self._last_message_time = time.time()
+            self._watchdog_last_restart = time.time()
 
     async def _heartbeat_watchdog(self) -> None:
         """Monitor the heartbeat independently of the pump and trigger restarts when stale."""

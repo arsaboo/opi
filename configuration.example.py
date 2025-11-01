@@ -1,9 +1,4 @@
-# Google Sheets settings
-SPREADSHEET_ID = ''  # ID from your Google Sheets URL
-USE_SHEETS = True    # Set to True to use Google Sheets instead of Schwab API
-
 # General settings
-dbName = 'db.json'
 loggingLevel = 'ERROR'  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 AutoTrade = False
 

@@ -52,11 +52,15 @@ def sanitize_exception_message(exc: Exception) -> str:
     - Strips MDN links commonly present in httpx HTTPStatusError messages
     - Extracts status codes when possible
     - Truncates overly long details
+    - Sanitizes potential sensitive information
     """
     text = str(exc)
 
     # Remove MDN docs URL fragments like .../HTTP/Status/400
     text = re.sub(r"https?://developer\.mozilla\.org[^\s]+", "", text).strip()
+
+    # Remove potential sensitive information (API keys, tokens, etc.)
+    text = _sanitize_text_for_display(text)
 
     # Try to surface an HTTP status code if present
     m = re.search(r"\b(\d{3})\b", text)
@@ -89,6 +93,21 @@ def sanitize_exception_message(exc: Exception) -> str:
     if len(text) > 220:
         text = text[:217] + "..."
 
+    return text
+
+def _sanitize_text_for_display(text: str) -> str:
+    """Remove potential sensitive information from text before displaying."""
+    import re
+    
+    # Remove potential API keys (generic pattern)
+    text = re.sub(r'[A-Z0-9]{20,}', '[REDACTED]', text)
+    
+    # Remove potential tokens
+    text = re.sub(r'token[^a-z\s][^,\s]+', '[REDACTED]', text, flags=re.IGNORECASE)
+    
+    # Remove potential credentials in URLs
+    text = re.sub(r'://[^:]+:[^@]+@', '://[CREDENTIALS_REMOVED]@', text)
+    
     return text
 
 

@@ -127,7 +127,17 @@ def main():
         try:
             prov = get_provider(api.connectClient)
             if prov:
-                asyncio.run(prov.stop())
+                # Use run_coroutine_threadsafe if we're not in the event loop
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(prov.stop(), loop)
+                    else:
+                        # If we're in main thread but not in an event loop, create one
+                        asyncio.run(prov.stop())
+                except RuntimeError:
+                    # No event loop running in current thread, run it
+                    asyncio.run(prov.stop())
         except Exception:
             pass
         # Force terminate to avoid occasional hang
@@ -137,7 +147,17 @@ def main():
         try:
             prov = get_provider(api.connectClient)
             if prov:
-                asyncio.run(prov.stop())
+                # Use run_coroutine_threadsafe if we're not in the event loop
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(prov.stop(), loop)
+                    else:
+                        # If we're in main thread but not in an event loop, create one
+                        asyncio.run(prov.stop())
+                except RuntimeError:
+                    # No event loop running in current thread, run it
+                    asyncio.run(prov.stop())
         except Exception:
             pass
         sys.exit(1)

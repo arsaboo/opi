@@ -69,7 +69,7 @@ class Api:
                 return
             except Exception as e:
                 logger.error(f"Error while setting up the api: {e}")
-                if "refresh token invalid" in str(e):
+                if "refresh token invalid" in str(e).lower():
                     self._handle_auth_error()
                     return
                 attempt += 1
@@ -155,13 +155,19 @@ class Api:
                 r.raise_for_status()
             except Exception as e:
                 publish_exception(e, prefix="get_account_numbers")
-            raise
+                raise
         data = r.json()
         try:
             self._account_hash = self.get_hash_value(SchwabAccountID, data)
+            if self._account_hash is None:
+                raise ValueError(f"Account hash not found for account ID: {SchwabAccountID}")
             return self._account_hash
-        except KeyError:
+        except KeyError as e:
+            logger.error(f"KeyError while getting account hash: {e}")
             return alert.botFailed(None, "Error while getting account hash value")
+        except ValueError as e:
+            logger.error(f"ValueError while getting account hash: {e}")
+            return alert.botFailed(None, str(e))
 
     def getATMPrice(self, asset):
         # Prefer streaming price when available; fall back to REST
@@ -176,23 +182,27 @@ class Api:
         fromDate = date - timedelta(days=daysLessAllowed)
         toDate = date
 
-        r = self.connectClient.get_option_chain(
-            asset,
-            contract_type=contract_type,
-            strike_count=strikes,
-            strategy=self.connectClient.Options.Strategy.SINGLE,
-            interval=None,
-            strike=None,
-            strike_range=None,
-            from_date=fromDate,
-            to_date=toDate,
-            volatility=None,
-            underlying_price=None,
-            interest_rate=None,
-            days_to_expiration=None,
-            exp_month=None,
-            option_type=None,
-        )
+        try:
+            r = self.connectClient.get_option_chain(
+                asset,
+                contract_type=contract_type,
+                strike_count=strikes,
+                strategy=self.connectClient.Options.Strategy.SINGLE,
+                interval=None,
+                strike=None,
+                strike_range=None,
+                from_date=fromDate,
+                to_date=toDate,
+                volatility=None,
+                underlying_price=None,
+                interest_rate=None,
+                days_to_expiration=None,
+                exp_month=None,
+                option_type=None,
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error calling get_option_chain for {asset}: {e}")
+            raise
 
         if r.status_code != 200:
             try:
@@ -200,9 +210,12 @@ class Api:
             except Exception as e:
                 prefix = "get_option_chain CALL" if contract_type == self.connectClient.Options.ContractType.CALL else "get_option_chain PUT"
                 publish_exception(e, prefix=prefix)
+                raise
+        try:
+            return r.json()
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Error decoding JSON response for {asset}: {e}")
             raise
-
-        return r.json()
 
     def getOptionChain(self, asset, strikes, date, daysLessAllowed):
         return self._getOptionChain(asset, strikes, date, daysLessAllowed, self.connectClient.Options.ContractType.CALL)
@@ -555,21 +568,33 @@ class Api:
             except Exception as e:
                 publish_exception(e, prefix="get_quotes single")
             raise
-        data = r.json()
         try:
-            year = str(data[asset]["reference"]["expirationYear"])
-            month = str(data[asset]["reference"]["expirationMonth"]).zfill(2)
-            day = str(data[asset]["reference"]["expirationDay"]).zfill(2)
+            data = r.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON response for {asset}: {e}")
+            raise
+        try:
+            asset_data = data[asset]  # First, get the asset-specific data
+            reference = asset_data["reference"]
+            quote = asset_data.get("quote", {})
+            
+            year = str(reference["expirationYear"])
+            month = str(reference["expirationMonth"]).zfill(2)
+            day = str(reference["expirationDay"]).zfill(2)
             expiration = year + "-" + month + "-" + day
             if not validDateFormat(expiration):
                 return alert.botFailed(asset, "Incorrect date format from api: " + expiration)
             return {
-                "strike": data[asset]["reference"]["strikePrice"],
+                "strike": reference["strikePrice"],
                 "expiration": expiration,
-                "delta": data[asset]["quote"].get("delta"),
+                "delta": quote.get("delta"),
             }
-        except KeyError:
-            return alert.botFailed(asset, "Wrong data from api when getting option expiry data")
+        except KeyError as e:
+            logger.error(f"Missing key in API response for {asset}: {e}")
+            return alert.botFailed(asset, f"Missing data in API response: {e}")
+        except TypeError as e:
+            logger.error(f"Type error when processing API response for {asset}: {e}")
+            return alert.botFailed(asset, f"Invalid data format from API: {e}")
 
     def updateShortPosition(self):
         # get account positions

@@ -1,7 +1,16 @@
 import time
 import datetime
+import os
 from tzlocal import get_localzone
-from configuration import debugCanSendOrders
+
+# Import configuration with fallback to default values
+try:
+    from configuration import debugCanSendOrders, AutoTrade
+except ImportError:
+    # If configuration.py doesn't exist, use safe defaults
+    debugCanSendOrders = True  # Default to debug mode
+    AutoTrade = True  # Default to auto mode for backward compatibility
+
 from status import notify, notify_exception
 from logger_config import get_logger
 from schwab.orders.options import OptionSymbol
@@ -53,10 +62,10 @@ class OrderManager:
             tick = 0.05 if u in {"SPX", "SPXW"} else 0.01
             # Round to nearest tick, then to 2 decimals for API
             return round(round(float(price) / tick) * tick, 2)
-        except Exception:
+        except (TypeError, ValueError):
             try:
                 return round(float(price), 2)
-            except Exception:
+            except (TypeError, ValueError):
                 return price
 
     def _get_account_hash(self):
@@ -84,7 +93,7 @@ class OrderManager:
                     if v is not None:
                         price = f"${float(v):.2f}"
                         break
-                except Exception:
+                except (TypeError, ValueError):
                     pass
             legs = od.get("orderLegCollection", []) or []
             qty = legs[0].get("quantity") if legs else "?"
@@ -351,7 +360,10 @@ class OrderManager:
                 r.raise_for_status()
             except Exception as e:
                 notify_exception(e, prefix="cancel_order")
-            raise
+                raise  # Reraise the caught exception
+            # If r.raise_for_status() doesn't raise an exception but status code is not 200, 
+            # we should still raise an exception to indicate failure
+            raise Exception(f"Order cancellation failed with status code: {r.status_code}")
 
     def edit_order_price(self, order_id, new_price):
         try:
@@ -476,6 +488,12 @@ class OrderManager:
             return None
 
     def place_order_with_improvement(self, order_func, order_params, price):
+        """
+        Place an order with automatic price improvements if not filled, 
+        but respect AutoTrade setting for automatic vs manual control.
+        If AutoTrade is True, automatically improves prices as before.
+        If AutoTrade is False, only places the initial order without automatic improvements.
+        """
         max_retries = 75
         initial_price = price
 
@@ -513,50 +531,86 @@ class OrderManager:
         else:
             order_timeout = 60
 
-        is_debit_order = price > 0
+        # Determine if this is a debit (buy) or credit (sell) order
+        # This needs to be determined from the order parameters or order type
+        # rather than just the price sign, because sell orders can have positive prices
+        # For now, assume that negative prices indicate credit orders, positive indicate debit
+        # This may need more sophisticated logic based on order type from order_func
+        # Determine if this is a debit (buy) or credit (sell) order based on function name
+        # For sell orders (like short call writing), we want to decrease price to improve
+        # For buy orders, we want to increase price to improve  
+        function_name = getattr(order_func, "__name__", "").lower()
+        
+        # Check if this is a function for placing sell orders (writing to open)
+        # Be specific to avoid affecting other order types
+        is_sell_order = any(op in function_name for op in ['write', 'sell', 'roll']) and not any(op in function_name for op in ['buy', 'long'])
+        
+        if is_sell_order:
+            # For sell orders, to improve chances of fill, decrease the price (offer cheaper)
+            should_increase_price = False
+        else:
+            # For buy orders and other types, use original logic: increase for positive, decrease for negative
+            should_increase_price = price > 0
 
-        for retry in range(max_retries):
-            if is_debit_order:
-                current_price = self._round_price_for_symbol(base_symbol or "", initial_price + retry * tick_size)
-            else:
-                current_price = self._round_price_for_symbol(base_symbol or "", initial_price - retry * tick_size)
+        # If AutoTrade is False, only place the initial order without automatic improvements
+        if not AutoTrade:
+            # Place order at initial price only
+            current_price = self._round_price_for_symbol(base_symbol or "", initial_price)
+            
+            order_id = order_func(*order_params, price=current_price)
 
-            if retry > 0:
-                if is_debit_order:
-                    notify(f"Attempt {retry + 1}/{max_retries}")
-                    notify(f"Improving price by +${retry * tick_size:.2f} to {current_price}")
-                else:
-                    notify(f"Attempt {retry + 1}/{max_retries}")
-                    notify(f"Improving price by -${retry * tick_size:.2f} to {current_price}")
-
-            try:
-                order_id = order_func(*order_params, price=current_price)
-
-                if not order_id:
-                    notify("Failed to place order", level="error")
-                    return False
-
-                result = self.monitor_order(order_id, timeout=order_timeout)
-
-                if result is True:
-                    return True
-                elif result == "cancelled":
-                    return False
-                elif result == "timeout":
-                    try:
-                        self.cancel_order(order_id)
-                    except Exception as e:
-                        notify_exception(e, prefix="Error cancelling order (continuing with next price improvement)")
-                    continue
-                else:
-                    return False
-
-            except Exception as e:
-                notify_exception(e, prefix="Error during order placement")
+            if not order_id:
+                notify("Failed to place order", level="error")
                 return False
 
-        notify("Failed to fill order after all price improvement attempts", level="warning")
-        return False
+            # For manual mode, just place the order and return immediately
+            # Don't monitor for timeout since user will manage manually via UI
+            notify("Order placed successfully. Update via Order Management screen if desired.")
+            return True  # Return True to indicate successful placement
+        else:
+            # If AutoTrade is True, use automatic price improvement as before
+            for retry in range(max_retries):
+                if should_increase_price:
+                    current_price = self._round_price_for_symbol(base_symbol or "", initial_price + retry * tick_size)
+                else:
+                    current_price = self._round_price_for_symbol(base_symbol or "", initial_price - retry * tick_size)
+
+                if retry > 0:
+                    if should_increase_price:
+                        notify(f"Attempt {retry + 1}/{max_retries}")
+                        notify(f"Improving price by +${retry * tick_size:.2f} to {current_price}")
+                    else:
+                        notify(f"Attempt {retry + 1}/{max_retries}")
+                        notify(f"Improving price by -${retry * tick_size:.2f} to {current_price}")
+
+                try:
+                    order_id = order_func(*order_params, price=current_price)
+
+                    if not order_id:
+                        notify("Failed to place order", level="error")
+                        return False
+
+                    result = self.monitor_order(order_id, timeout=order_timeout)
+
+                    if result is True:
+                        return True
+                    elif result == "cancelled":
+                        return False
+                    elif result == "timeout":
+                        try:
+                            self.cancel_order(order_id)
+                        except Exception as e:
+                            notify_exception(e, prefix="Error cancelling order (continuing with next price improvement)")
+                        continue
+                    else:
+                        return False
+
+                except Exception as e:
+                    notify_exception(e, prefix="Error during order placement")
+                    return False
+
+            notify("Failed to fill order after all price improvement attempts", level="warning")
+            return False
 
     def monitor_order(self, order_id, timeout=60):
         global cancel_order
