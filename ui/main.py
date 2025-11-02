@@ -389,8 +389,15 @@ class OpiApp(App):
         try:
             prov = get_provider(self.api.connectClient)
             if prov is not None:
-                import asyncio as _asyncio
-                _asyncio.create_task(prov.stop())
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    future = asyncio.run_coroutine_threadsafe(prov.stop(), loop)
+                    try:
+                        future.result(timeout=5)
+                    except Exception:
+                        pass
+                else:
+                    loop.run_until_complete(prov.stop())
         except Exception:
             pass
 
