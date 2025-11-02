@@ -1,6 +1,6 @@
 import time
 import datetime
-import os
+
 from tzlocal import get_localzone
 
 # Import configuration with fallback to default values
@@ -94,7 +94,8 @@ class OrderManager:
                         price = f"${float(v):.2f}"
                         break
                 except (TypeError, ValueError):
-                    pass
+                    # Ignore if value is not convertible to float; try next key
+                    logger.debug(f"Could not convert value for key '{k}' to float: {od.get(k)!r}")
             legs = od.get("orderLegCollection", []) or []
             qty = legs[0].get("quantity") if legs else "?"
             instr = (legs[0].get("instrument") or {}) if legs else {}
@@ -361,7 +362,7 @@ class OrderManager:
             except Exception as e:
                 notify_exception(e, prefix="cancel_order")
                 raise  # Reraise the caught exception
-            # If r.raise_for_status() doesn't raise an exception but status code is not 200, 
+            # If r.raise_for_status() doesn't raise an exception but status code is not 200,
             # we should still raise an exception to indicate failure
             raise Exception(f"Order cancellation failed with status code: {r.status_code}")
 
@@ -489,7 +490,7 @@ class OrderManager:
 
     def place_order_with_improvement(self, order_func, order_params, price):
         """
-        Place an order with automatic price improvements if not filled, 
+        Place an order with automatic price improvements if not filled,
         but respect AutoTrade setting for automatic vs manual control.
         If AutoTrade is True, automatically improves prices as before.
         If AutoTrade is False, only places the initial order without automatic improvements.
@@ -538,13 +539,13 @@ class OrderManager:
         # This may need more sophisticated logic based on order type from order_func
         # Determine if this is a debit (buy) or credit (sell) order based on function name
         # For sell orders (like short call writing), we want to decrease price to improve
-        # For buy orders, we want to increase price to improve  
+        # For buy orders, we want to increase price to improve
         function_name = getattr(order_func, "__name__", "").lower()
-        
+
         # Check if this is a function for placing sell orders (writing to open)
         # Be specific to avoid affecting other order types
         is_sell_order = any(op in function_name for op in ['write', 'sell', 'roll']) and not any(op in function_name for op in ['buy', 'long'])
-        
+
         if is_sell_order:
             # For sell orders, to improve chances of fill, decrease the price (offer cheaper)
             should_increase_price = False
@@ -556,7 +557,7 @@ class OrderManager:
         if not AutoTrade:
             # Place order at initial price only
             current_price = self._round_price_for_symbol(base_symbol or "", initial_price)
-            
+
             order_id = order_func(*order_params, price=current_price)
 
             if not order_id:

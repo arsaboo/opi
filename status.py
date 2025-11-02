@@ -97,8 +97,8 @@ def sanitize_exception_message(exc: Exception) -> str:
 
 def _sanitize_text_for_display(text: str) -> str:
     """Remove potential sensitive information from text before displaying."""
-    import re
-    
+
+
     # Remove potential API keys (specific patterns)
     # Stripe secret keys
     text = re.sub(r'sk_live_[0-9a-zA-Z]{24,}', '[REDACTED]', text)
@@ -110,13 +110,13 @@ def _sanitize_text_for_display(text: str) -> str:
     text = re.sub(r'xox[baprs]-[0-9A-Za-z-]{10,}', '[REDACTED]', text)
     # Generic Bearer tokens (JWT-like)
     text = re.sub(r'eyJ[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}', '[REDACTED]', text)
-    
+
     # Remove potential tokens
     text = re.sub(r'token[^a-z\s][^,\s]+', '[REDACTED]', text, flags=re.IGNORECASE)
-    
+
     # Remove potential credentials in URLs
     text = re.sub(r'://[^:]+:[^@]+@', '://[CREDENTIALS_REMOVED]@', text)
-    
+
     return text
 
 

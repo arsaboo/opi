@@ -427,11 +427,11 @@ class OrderManagementWidget(Static):
         try:
             formatted = self.app.api.formatOrderForDisplay(order)
             order_id = formatted.get('order_id')
-            
+
             # First, reset the step counter to what it was before the "U" press
             # This ensures that if we don't confirm, step is not left incremented
             self._manual_steps[order_id] = original_step
-            
+
             if not payload or not payload.get('confirmed'):
                 self.app.query_one(StatusLog).add_message("Replacement cancelled.")
                 return
@@ -461,7 +461,7 @@ class OrderManagementWidget(Static):
         """Calculate the suggested price based on base price and step."""
         try:
             # Determine if debit or credit order
-            client = self.app.api.connectClient
+
             account_hash = self.app.api.getAccountHash()
             r = self.app.api.connectClient.get_order(order.get('orderId'), account_hash)
             r.raise_for_status()

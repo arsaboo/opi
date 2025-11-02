@@ -122,11 +122,7 @@ class SectorAllocationView(BaseSpreadView):
             if self._current_report
             else 0.0
         )
-        gross_value = (
-            self._current_report.get("gross_market_value", 0.0)
-            if self._current_report
-            else 0.0
-        )
+
 
         table = Table(
             expand=False,
@@ -170,12 +166,5 @@ class SectorAllocationView(BaseSpreadView):
         )
 
         updated_symbols = sorted(self._updated_symbols)
-        updated_hint = (
-            f"Refreshed symbols: {', '.join(updated_symbols)}"
-            if updated_symbols
-            else "No symbol-level updates in this request."
-        )
-        timestamp = (
-            self._current_report.get("as_of", "N/A") if self._current_report else "N/A"
-        )
         return table
+
