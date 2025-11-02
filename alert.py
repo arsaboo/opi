@@ -64,9 +64,13 @@ def _sanitize_message(message: str) -> str:
     
     # Remove potential API keys (typically have specific patterns)
     import re
-    # Remove potential API keys that look like long alphanumeric strings
-    sanitized = re.sub(r'[A-Z0-9]{20,}', '[REDACTED_API_KEY]', sanitized)
-    
+    # Remove specific API key formats (e.g., Stripe, AWS, etc.)
+    sanitized = re.sub(r'sk_live_[0-9a-zA-Z]{24,}', '[REDACTED_STRIPE_KEY]', sanitized)
+    sanitized = re.sub(r'AKIA[0-9A-Z]{16}', '[REDACTED_AWS_KEY]', sanitized)
+    # Remove JWTs (JSON Web Tokens)
+    sanitized = re.sub(r'eyJ[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}', '[REDACTED_JWT]', sanitized)
+    # Remove Bearer tokens
+    sanitized = re.sub(r'Bearer\s+[A-Za-z0-9\-_\.=]+', '[REDACTED_BEARER_TOKEN]', sanitized, flags=re.IGNORECASE)
     # Remove potential tokens (generic pattern)
     sanitized = re.sub(r'token[^a-z\s][^,\s]+', '[REDACTED_TOKEN]', sanitized, flags=re.IGNORECASE)
     
