@@ -87,6 +87,55 @@ if 'status' not in sys.modules:
     st.notify_exception = notify_exception
     sys.modules['status'] = st
 
+# Mock configuration to enable AutoTrade for tests to maintain original behavior
+import sys
+import types
+
+# Create configuration module with required values to prevent import errors
+if 'configuration' not in sys.modules:
+    config_module = types.ModuleType('configuration')
+    # Basic configuration values
+    config_module.debugCanSendOrders = True
+    config_module.AutoTrade = True  # Enable AutoTrade to preserve original test behavior
+    config_module.loggingLevel = 'ERROR'  # Required by logger_config
+    config_module.spreads = {
+        "$SPX": {
+            "spread": 200, "days": 2500, "minDays": 120, 
+            "downsideProtection": 0.30, 'price': 'mid', 'type': 'broad_based_index'
+        },
+        "SPY": {
+            "spread": 100, "days": 2000, "minDays": 90, 
+            "downsideProtection": 0.25, 'price': 'mid', 'type': 'etf'
+        },
+        "QQQ": {
+            "spread": 100, "days": 2000, "minDays": 90, 
+            "downsideProtection": 0.30, 'price': 'mid', 'type': 'etf'
+        }
+    }
+    config_module.configuration = {
+        '$SPX': {
+            "minRollupGap": 50, "minStrike": 5000, "maxRollOutWindow": 30,
+            "minRollOutWindow": 7, "idealPremium": 10, "minPremium": 5,
+            "desiredDelta": 0.25, "ITMLimit": 0.018, "deepITMLimit": 0.035, 
+            "deepOTMLimit": 0.004
+        },
+        'QQQ': {
+            "minRollupGap": 25, "minStrike": 350, "maxRollOutWindow": 120,
+            "minRollOutWindow": 30, "idealPremium": 5, "minPremium": 2.5,
+            "ITMLimit": 0.018, "deepITMLimit": 0.035, "deepOTMLimit": 0.004
+        }
+    }
+    config_module.margin_rules = {
+        "spreads": {
+            "credit": lambda strike_diff, contracts: strike_diff * 100 * contracts,
+            "debit": lambda cost: cost
+        }
+    }
+    config_module.debugMarketOpen = True  # Required by UI
+    config_module.stream_quotes = []  # Required by UI components
+
+    sys.modules['configuration'] = config_module
+
 from api.order_manager import OrderManager
 
 

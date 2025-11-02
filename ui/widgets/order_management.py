@@ -356,7 +356,10 @@ class OrderManagementWidget(Static):
 
             base = self._base_price.get(order_id, current_price)
             self._base_price[order_id] = base
-            step = self._manual_steps.get(order_id, 0) + 1
+            current_step = self._manual_steps.get(order_id, 0)
+            step = current_step + 1
+            # Temporarily update the step count to calculate price suggestion
+            # Will be properly set after user confirms or reset if cancelled
             self._manual_steps[order_id] = step
 
             # Compute improved price with symbol-aware tick size
@@ -411,21 +414,31 @@ class OrderManagementWidget(Static):
 
             def _cb(payload):
                 import asyncio as _asyncio
-                _asyncio.create_task(self._handle_replace_confirmation(payload, order, base, step, new_price))
+                _asyncio.create_task(self._handle_replace_confirmation(payload, order, base, current_step, step))
 
             self.app.push_screen(screen, callback=_cb)
         except Exception as e:
+            # If there's an error, ensure step isn't left incremented
+            if 'order_id' in locals():  # Only reset if order_id was defined
+                self._manual_steps[order_id] = current_step
             self.app.query_one(StatusLog).add_message(f"Error replacing order: {e}")
 
-    async def _handle_replace_confirmation(self, payload, order, base, step, suggested_price):
+    async def _handle_replace_confirmation(self, payload, order, base, original_step, intended_step):
         try:
+            formatted = self.app.api.formatOrderForDisplay(order)
+            order_id = formatted.get('order_id')
+
+            # First, reset the step counter to what it was before the "U" press
+            # This ensures that if we don't confirm, step is not left incremented
+            self._manual_steps[order_id] = original_step
+
             if not payload or not payload.get('confirmed'):
                 self.app.query_one(StatusLog).add_message("Replacement cancelled.")
                 return
 
-            formatted = self.app.api.formatOrderForDisplay(order)
-            order_id = formatted.get('order_id')
-            new_price = payload.get('price') if payload.get('price') is not None else suggested_price
+            # Only if confirmed, proceed with the replacement using the intended step
+            suggested_price = payload.get('price')
+            new_price = suggested_price if suggested_price is not None else self._calculate_suggested_price(order, base, intended_step)
 
             # Use Schwab edit/replace when available
             new_order_id = await asyncio.to_thread(self.app.api.editOrderPrice, order_id, new_price)
@@ -433,7 +446,7 @@ class OrderManagementWidget(Static):
             if new_order_id:
                 # Carry over base and step to new order id
                 self._base_price[new_order_id] = base
-                self._manual_steps[new_order_id] = step
+                self._manual_steps[new_order_id] = intended_step
                 # Cleanup old mapping
                 self._base_price.pop(order_id, None)
                 self._manual_steps.pop(order_id, None)
@@ -443,6 +456,51 @@ class OrderManagementWidget(Static):
                 self.app.query_one(StatusLog).add_message("Failed to replace/edit order.")
         except Exception as e:
             self.app.query_one(StatusLog).add_message(f"Error replacing order: {e}")
+
+    def _calculate_suggested_price(self, order, base_price, step):
+        """Calculate the suggested price based on base price and step."""
+        try:
+            # Determine if debit or credit order
+
+            account_hash = self.app.api.getAccountHash()
+            r = self.app.api.connectClient.get_order(order.get('orderId'), account_hash)
+            r.raise_for_status()
+            full_order = r.json()
+            order_type_str = full_order.get("orderType", "NET_DEBIT")
+            is_debit = (order_type_str == "NET_DEBIT")
+
+            # Determine tick size
+            def _tick_for_symbol(sym: str) -> float:
+                try:
+                    u = str(sym).split()[0].lstrip("$").upper()
+                    return 0.05 if u in {"SPX", "SPXW"} else 0.01
+                except Exception:
+                    return 0.01
+
+            def _round_to_tick(p: float, tick: float) -> float:
+                try:
+                    return round(round(float(p) / tick) * tick, 2)
+                except Exception:
+                    try:
+                        return round(float(p), 2)
+                    except Exception:
+                        return p
+
+            # Infer underlying from first leg for tick selection
+            tick = 0.01
+            try:
+                legs = full_order.get("orderLegCollection", []) or []
+                first_leg = legs[0] if legs else {}
+                sym = (first_leg.get("instrument") or {}).get("symbol") or ""
+                tick = _tick_for_symbol(sym)
+            except Exception:
+                pass
+
+            raw_price = (base_price + step * tick) if is_debit else (base_price - step * tick)
+            return _round_to_tick(raw_price, tick)
+        except Exception:
+            # Fallback to original price if calculation fails
+            return base_price
 
     @work
     async def run_get_orders_data(self) -> None:

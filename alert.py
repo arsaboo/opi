@@ -19,6 +19,9 @@ def alert(asset, message, isError: bool = False):
     """
     level = "error" if isError else "info"
 
+    # Sanitize message to prevent exposing sensitive information
+    safe_message = _sanitize_message(str(message))
+    
     # Log locally to console/UI
     if asset:
         try:
@@ -27,9 +30,9 @@ def alert(asset, message, isError: bool = False):
             print(f"Asset: {asset}")
 
     try:
-        notify(str(message), level=level)
+        notify(safe_message, level=level)
     except Exception:
-        print(str(message))
+        print(safe_message)
 
     # Send to Telegram if available, but avoid duplicate sends when
     # status.notify is already routing this level.
@@ -44,14 +47,34 @@ def alert(asset, message, isError: bool = False):
                 parts = []
                 if asset:
                     parts.append(f"<b>Asset:</b> {asset}")
-                parts.append(str(message))
+                parts.append(safe_message)
                 notifier.send("\n".join(parts), level=level)
     except Exception:
         # Best-effort; ignore notifier issues
         pass
 
     if isError:
-        raise BotFailedError(str(message))
+        raise BotFailedError(safe_message)
+
+def _sanitize_message(message: str) -> str:
+    """Sanitize alert messages to prevent exposure of sensitive information."""
+    # Remove potential environment variable values or API keys from messages
+    # This is a basic implementation - could be enhanced based on specific needs
+    sanitized = message
+    
+    # Remove potential API keys (typically have specific patterns)
+    import re
+    # Remove specific API key formats (e.g., Stripe, AWS, etc.)
+    sanitized = re.sub(r'sk_live_[0-9a-zA-Z]{24,}', '[REDACTED_STRIPE_KEY]', sanitized)
+    sanitized = re.sub(r'AKIA[0-9A-Z]{16}', '[REDACTED_AWS_KEY]', sanitized)
+    # Remove JWTs (JSON Web Tokens)
+    sanitized = re.sub(r'eyJ[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}', '[REDACTED_JWT]', sanitized)
+    # Remove Bearer tokens
+    sanitized = re.sub(r'Bearer\s+[A-Za-z0-9\-_\.=]+', '[REDACTED_BEARER_TOKEN]', sanitized, flags=re.IGNORECASE)
+    # Remove potential tokens (generic pattern)
+    sanitized = re.sub(r'token[^a-z\s][^,\s]+', '[REDACTED_TOKEN]', sanitized, flags=re.IGNORECASE)
+    
+    return sanitized
 
 
 def botFailed(asset, message):

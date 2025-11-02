@@ -52,11 +52,15 @@ def sanitize_exception_message(exc: Exception) -> str:
     - Strips MDN links commonly present in httpx HTTPStatusError messages
     - Extracts status codes when possible
     - Truncates overly long details
+    - Sanitizes potential sensitive information
     """
     text = str(exc)
 
     # Remove MDN docs URL fragments like .../HTTP/Status/400
     text = re.sub(r"https?://developer\.mozilla\.org[^\s]+", "", text).strip()
+
+    # Remove potential sensitive information (API keys, tokens, etc.)
+    text = _sanitize_text_for_display(text)
 
     # Try to surface an HTTP status code if present
     m = re.search(r"\b(\d{3})\b", text)
@@ -88,6 +92,30 @@ def sanitize_exception_message(exc: Exception) -> str:
     # Truncate very long messages to keep the status bar readable
     if len(text) > 220:
         text = text[:217] + "..."
+
+    return text
+
+def _sanitize_text_for_display(text: str) -> str:
+    """Remove potential sensitive information from text before displaying."""
+
+
+    # Remove potential API keys (specific patterns)
+    # Stripe secret keys
+    text = re.sub(r'sk_live_[0-9a-zA-Z]{24,}', '[REDACTED]', text)
+    # AWS Access Key ID
+    text = re.sub(r'AKIA[0-9A-Z]{16}', '[REDACTED]', text)
+    # GitHub personal access tokens
+    text = re.sub(r'gh[pousr]_[0-9A-Za-z]{36,255}', '[REDACTED]', text)
+    # Slack tokens
+    text = re.sub(r'xox[baprs]-[0-9A-Za-z-]{10,}', '[REDACTED]', text)
+    # Generic Bearer tokens (JWT-like)
+    text = re.sub(r'eyJ[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}', '[REDACTED]', text)
+
+    # Remove potential tokens
+    text = re.sub(r'token[^a-z\s][^,\s]+', '[REDACTED]', text, flags=re.IGNORECASE)
+
+    # Remove potential credentials in URLs
+    text = re.sub(r'://[^:]+:[^@]+@', '://[CREDENTIALS_REMOVED]@', text)
 
     return text
 

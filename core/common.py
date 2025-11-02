@@ -16,11 +16,11 @@ def threshold_points(limit_value: float, underlying_price: float) -> float:
             return 0.0
         val = float(limit_value)
         return underlying_price * val if val < 1 else val
-    except Exception:
+    except (TypeError, ValueError):
         return 0.0
 
 
-def classify_status(short_strike: float, underlying_price: float, *, itm_limit, deep_itm_limit, deep_otm_limit) -> str:
+def classify_status(short_strike: float, underlying_price: float, *, itm_limit: float, deep_itm_limit: float, deep_otm_limit: float) -> str:
     """
     Classify covered-call moneyness using percent-aware thresholds.
     Returns one of: deep_OTM, OTM, just_ITM, ITM, deep_ITM
@@ -46,7 +46,11 @@ def get_median_price(symbol: str, data) -> Optional[float]:
             if contract["symbol"] == symbol:
                 bid = contract["bid"]
                 ask = contract["ask"]
-                return (bid + ask) / 2
+                if bid is not None and ask is not None:
+                    try:
+                        return (float(bid) + float(ask)) / 2
+                    except (TypeError, ValueError):
+                        return None
     return None
 
 
@@ -54,7 +58,12 @@ def get_option_delta(symbol: str, data) -> Optional[float]:
     for entry in data:
         for contract in entry["contracts"]:
             if contract["symbol"] == symbol:
-                return contract.get("delta")
+                delta = contract.get("delta")
+                if delta is not None:
+                    try:
+                        return float(delta)
+                    except (TypeError, ValueError):
+                        return None
     return None
 
 

@@ -47,11 +47,11 @@ def load_symbols(account_id: str | int) -> List[str]:
             data = json.load(fh)
         syms = data.get("symbols", []) if isinstance(data, dict) else []
         return _normalize_symbols(syms)
-    except Exception:
+    except (json.JSONDecodeError, FileNotFoundError, UnicodeDecodeError):
         # Corrupt or unreadable; delete and start fresh
         try:
             os.remove(p)
-        except Exception:
+        except (OSError, PermissionError):
             pass
         return []
 
@@ -71,11 +71,11 @@ def save_symbols(account_id: str | int, symbols: Iterable[str]) -> None:
     # Replace atomically if possible
     try:
         os.replace(tmp, p)
-    except Exception:
+    except OSError:
         # Best-effort fallback
         try:
             os.remove(p)
-        except Exception:
+        except (OSError, FileNotFoundError):
             pass
         os.rename(tmp, p)
 

@@ -20,7 +20,7 @@ def get_logger():
     log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
     try:
         os.makedirs(log_dir, exist_ok=True)
-    except Exception:
+    except (OSError, PermissionError):
         # Fallback to current directory if we can't create logs/
         log_dir = os.getcwd()
 

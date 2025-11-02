@@ -6,21 +6,23 @@ It launches the Textual UI which provides a terminal-based graphical interface
 for all the bot's functionality.
 """
 
-import sys
 import argparse
-import os
-import atexit
 import asyncio
-import alert
+import atexit
+import os
+import sys
+
 from dotenv import load_dotenv
+
+import alert
 
 # Load environment variables from .env file
 load_dotenv()
 
 from api import Api
-from ui.main import OpiApp
 from api.streaming.provider import get_provider
 from state_manager import save_symbols
+from ui.main import OpiApp
 
 # Get API credentials from environment variables
 apiKey = os.getenv("SCHWAB_API_KEY")
@@ -127,7 +129,17 @@ def main():
         try:
             prov = get_provider(api.connectClient)
             if prov:
-                asyncio.run(prov.stop())
+                # Use run_coroutine_threadsafe if we're not in the event loop
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(prov.stop(), loop)
+                    else:
+                        # If we're in main thread but not in an event loop, create one
+                        asyncio.run(prov.stop())
+                except RuntimeError:
+                    # No event loop running in current thread, run it
+                    asyncio.run(prov.stop())
         except Exception:
             pass
         # Force terminate to avoid occasional hang
@@ -137,7 +149,17 @@ def main():
         try:
             prov = get_provider(api.connectClient)
             if prov:
-                asyncio.run(prov.stop())
+                # Use run_coroutine_threadsafe if we're not in the event loop
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(prov.stop(), loop)
+                    else:
+                        # If we're in main thread but not in an event loop, create one
+                        asyncio.run(prov.stop())
+                except RuntimeError:
+                    # No event loop running in current thread, run it
+                    asyncio.run(prov.stop())
         except Exception:
             pass
         sys.exit(1)
