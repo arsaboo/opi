@@ -30,14 +30,20 @@ The codebase is organized with clear separation of concerns:
 
 ### Core Modules
 - `main.py`: The entry point of the application. It launches the Textual UI application.
-- `api.py`: Handles all interactions with the Schwab API, including authentication, fetching quotes, option chains, account data, market hours, and placing/cancelling orders. It also contains logic for calculating margin requirements.
-- `cc.py` (Call Control/Rolling): Contains the core logic for finding and executing rolls for short call positions (`RollCalls`, `RollSPX`). It uses data from `optionChain.py` and configuration from `configuration.py`.
-- `optionChain.py`: Processes and standardizes raw option chain data fetched from the Schwab API.
-- `strategies.py`: Implements the logic for analyzing and placing various spread strategies (Box Spreads, Bull Call Spreads, Synthetic Covered Calls).
-- `margin_utils.py`: Dedicated module for calculating margin requirements and annualized returns for different strategies and assets.
-- `order_utils.py`: Contains utilities for monitoring order status and handling user-initiated order cancellations.
+- `api/client.py`: Handles all interactions with the Schwab API, including authentication, fetching quotes, option chains, account data, market hours, and placing/cancelling orders. It also contains logic for calculating margin requirements.
+- `api/option_chain.py`: Processes and standardizes raw option chain data fetched from the Schwab API.
+- `api/order_manager.py`: Manages order building, sending, monitoring, cancellation, and editing.
+- `api/streaming/`: Provides live quote provider and subscription coordination for real-time UI updates.
+- `core/box_spreads.py`: Implements the logic for analyzing and evaluating box spread opportunities.
+- `core/vertical_spreads.py`: Implements the logic for analyzing and evaluating bull call spreads (verticals).
+- `core/synthetic_covered_calls.py`: Implements the logic for synthetic covered call strategies analysis.
+- `core/covered_calls.py`: Implements the logic for covered call strategies analysis.
+- `core/margin.py`: Dedicated module for calculating margin requirements and annualized returns for different strategies and assets.
+- `core/spreads_common.py`: Contains common helper functions for spread analysis.
+- `core/common.py`: Shared utility functions for dates, moneyness calculations, and rounding.
 - `alert.py`: Handles error reporting and notifications (console + Telegram).
-- `support.py`: Contains helper functions and utilities.
+- `status.py`: UI-aware status/exception publishing for TUI status log.
+- `state_manager.py`: Persistence of tracked symbols between application runs.
 - `logger_config.py`: Configures application logging.
 
 ### Configuration Files
@@ -46,10 +52,21 @@ The codebase is organized with clear separation of concerns:
 - `.env`: Environment variables for sensitive data (API keys, account info).
 - `.env.example`: Example environment file template.
 
+### Services
+- `services/`: Contains business logic services that coordinate between different modules
+
+### Utilities
+- `utils/`: General utility functions shared across the application
+
+### Integrations
+- `integrations/`: External service integrations
+  - `integrations/telegram/`: Telegram notification system for alerts and status updates
+
 ### User Interface
 - `ui/`: Contains the Textual-based Terminal User Interface (TUI) implementation.
   - `ui/main.py`: Entry point for the TUI application (`OpiApp`).
-  - `ui/logic.py`: Asynchronous data fetching and processing logic for the UI widgets.
+  - `ui/logic.py`: Asynchronous data fetching and processing logic for the UI widgets with streaming integration.
+  - `ui/utils.py`: Utility functions for UI components
   - `ui/widgets/`: Contains individual UI components for different functionalities:
     - `roll_short_options.py`: Widget for rolling short options positions.
     - `box_spreads.py`: Widget for analyzing box spread opportunities.
@@ -59,6 +76,7 @@ The codebase is organized with clear separation of concerns:
     - `positions.py`: Widget for current positions overview.
     - `orders.py`: Widget for order management and monitoring.
   - `ui/screens/`: Full-screen dedicated views (currently minimal implementation).
+  - `ui/services/`: UI-specific service layers for data handling
 
 ## Setup and Configuration
 
@@ -196,7 +214,7 @@ Use the keyboard shortcuts shown in the footer to navigate between different fea
 - Automatic retry mechanisms with exponential backoff
 
 ### Margin Calculations
-- Margin logic is centralized in `margin_utils.py` and `api.py`
+- Margin logic is centralized in `margin.py` and `api.py`
 - Supports different asset types (indexes, ETFs, leveraged ETFs)
 - Strategy-specific margin calculations
 - Real-time margin impact analysis
@@ -222,32 +240,50 @@ Use the keyboard shortcuts shown in the footer to navigate between different fea
 ```
 opi_2/
 ├── main.py                     # Application entry point
-├── api.py                      # Schwab API integration (includes streaming quotes)
-├── cc.py                       # Call rolling logic
-├── strategies.py               # Spread strategy implementations
-├── optionChain.py             # Option chain data processing
-├── margin_utils.py            # Margin calculation utilities
-├── order_utils.py             # Order management utilities
-├── alert.py                   # Error reporting and notifications
-├── support.py                 # Helper functions
-├── logger_config.py           # Logging configuration
-├── configuration.py           # User configuration (created from example)
-├── configuration.example.py   # Configuration template
-├── .env                       # Environment variables (created from example)
-├── .env.example              # Environment template
-├── requirements.txt          # Python dependencies
-└── ui/                       # User interface components
-    ├── main.py               # TUI application entry
-    ├── logic.py              # Async data processing (streaming integration)
-    ├── widgets/              # UI components
-    │   ├── roll_short_options.py
-    │   ├── box_spreads.py
-    │   ├── bull_call_spreads.py
-    │   ├── synthetic_covered_calls.py
-    │   ├── accounts.py
-    │   ├── positions.py
-    │   └── orders.py
-    └── screens/              # Full-screen views
+├── alert.py                    # Error reporting and notifications
+├── status.py                   # UI-aware status/exception publishing
+├── state_manager.py            # Persistence of tracked symbols
+├── logger_config.py            # Logging configuration
+├── configuration.py            # User configuration (created from example)
+├── configuration.example.py    # Configuration template
+├── .env                        # Environment variables (created from example)
+├── .env.example               # Environment template
+├── requirements.txt           # Python dependencies
+├── api/                       # Schwab API integration
+│   ├── client.py              # Main API client
+│   ├── option_chain.py        # Option chain processing
+│   ├── order_manager.py       # Order management
+│   └── streaming/             # Streaming quotes integration
+├── core/                      # Core trading logic
+│   ├── box_spreads.py         # Box spread strategies
+│   ├── vertical_spreads.py    # Vertical spread strategies
+│   ├── synthetic_covered_calls.py # Synthetic covered calls
+│   ├── covered_calls.py       # Covered call strategies
+│   ├── margin.py              # Margin calculations
+│   ├── spreads_common.py      # Common spread utilities
+│   └── common.py              # Common utilities
+├── ui/                        # User interface components
+│   ├── main.py                # TUI application entry
+│   ├── logic.py               # Async data processing (streaming integration)
+│   ├── utils.py               # UI utility functions
+│   ├── widgets/               # UI components
+│   │   ├── roll_short_options.py
+│   │   ├── box_spreads.py
+│   │   ├── bull_call_spreads.py
+│   │   ├── synthetic_covered_calls.py
+│   │   ├── accounts.py
+│   │   ├── positions.py
+│   │   └── orders.py
+│   ├── views/                 # View components
+│   └── services/              # UI-specific services
+├── integrations/              # External integrations
+│   └── telegram/              # Telegram notifications
+├── services/                  # Business logic services
+├── utils/                     # General utilities
+├── scripts/                   # Helper scripts
+├── tests/                     # Test files
+├── logs/                      # Log files (git-ignored)
+└── frontend/                  # (If applicable)
 ```
 
 ## VSCode Development Tips

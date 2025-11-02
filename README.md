@@ -33,6 +33,13 @@ SCHWAB_REDIRECT_URI=your_redirect_uri_here
 SCHWAB_ACCOUNT_ID=your_account_id_here
 ```
 
+### AlphaVantage API Setup (Optional)
+1. Sign up at https://www.alphavantage.co/support/#api-key to get a free API key
+2. Add your AlphaVantage key to the `.env` file if you want enhanced market data:
+```env
+ALPHAVANTAGE_API_KEY=your_alphavantage_key_here
+```
+
 ## Architecture
 
 The codebase is organized with clear separation of concerns:
@@ -43,13 +50,24 @@ The codebase is organized with clear separation of concerns:
   - `api/streaming/`: live quote provider and subscription coordination for UI
 - `core/`: computation utilities (spreads, pricing, date helpers)
   - `core/box_spreads.py`: box spread evaluation
+  - `core/vertical_spreads.py`: vertical spread analysis
+  - `core/synthetic_covered_calls.py`: synthetic covered call strategies
+  - `core/covered_calls.py`: covered call strategies
+  - `core/margin.py`: margin calculation logic
   - `core/spreads_common.py`: common helpers for spreads
   - `core/common.py`: shared utils (dates, moneyness, rounding)
 - `ui/`: Textual TUI (widgets, views, layout)
   - `ui/main.py`: application shell and navigation
   - `ui/widgets/`, `ui/views/`: feature screens and components
+  - `ui/logic.py`: asynchronous data fetching for UI components
+  - `ui/utils.py`: utility functions for UI
+- `integrations/`: external service integrations
+  - `integrations/telegram/`: Telegram notification system
+- `services/`: business logic services
+- `utils/`: general utility functions
 - `status.py`: UI-aware status/exception publishing
 - `state_manager.py`: persistence of tracked symbols between runs
+- `alert.py`: error reporting and notifications
 - `main.py`: CLI entry point to launch the TUI
 
 ## Usage
@@ -78,11 +96,16 @@ All logs and status messages are displayed within the Textual UI status log pane
 - Check sell box spreads with annualized cost view
 - Analyze vertical spreads with sorting and filtering
 - Check synthetic covered calls with detailed views
+- Monitor open positions and performance
+- Comprehensive margin analysis and requirements
 - View margin requirements with comprehensive breakdowns
 - Real-time status updates and logging
 - Keyboard shortcuts for quick navigation
 - Color-coded data for better visualization
 - Automatic data refresh for live updates
+- Support for multiple asset types (indexes, ETFs, leveraged ETFs)
+- Configurable trading parameters per asset
+- Debug modes for testing outside market hours
 
 ## Configuration
 
