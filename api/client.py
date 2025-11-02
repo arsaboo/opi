@@ -678,6 +678,50 @@ class Api:
         option_positions.sort(key=lambda p: (p.get("expiration") or "", p.get("optionSymbol") or ""))
         return option_positions
 
+    def get_account_positions(self):
+        """Return all positions from the brokerage account."""
+        response = self.connectClient.get_account(
+            self.getAccountHash(), fields=self.connectClient.Account.Fields.POSITIONS
+        )
+        return self.map_account_positions(response.text)
+
+    def map_account_positions(self, data):
+        payload = json.loads(data)
+        positions = payload["securitiesAccount"].get("positions", [])
+        mapped_positions = []
+
+        for position in positions:
+            instrument = position.get("instrument", {})
+            asset_type = instrument.get("assetType")
+            symbol = instrument.get("symbol")
+            base_symbol = instrument.get("underlyingSymbol") if asset_type == "OPTION" else symbol
+            if not base_symbol:
+                base_symbol = symbol
+
+            def _as_float(value, default=0.0):
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    return default
+
+            long_qty = _as_float(position.get("longQuantity"))
+            short_qty = _as_float(position.get("shortQuantity"))
+            market_value = _as_float(position.get("marketValue"))
+            mapped_positions.append(
+                {
+                    "symbol": symbol,
+                    "baseSymbol": base_symbol,
+                    "assetType": asset_type,
+                    "longQuantity": long_qty,
+                    "shortQuantity": short_qty,
+                    "marketValue": market_value,
+                    "description": instrument.get("description"),
+                    "instrument": instrument,
+                }
+            )
+
+        return mapped_positions
+
     def rollOver(self, oldSymbol, newSymbol, amount, price):
         return self.order_manager.roll_over(oldSymbol, newSymbol, amount, price)
 
