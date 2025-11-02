@@ -9,7 +9,31 @@ from api.option_chain import OptionChain
 from core.box_spreads import calculate_box_spread as core_calc_box
 from core.vertical_spreads import bull_call_spread as core_bull_call
 from core.synthetic_covered_calls import synthetic_covered_call_spread as core_synth_cc
-# margin functions are calculated in core; UI doesn’t need them here
+from services.sector_allocation_service import SectorDataProvider, PortfolioSectorAnalyzer, RateLimitError
+# margin functions are calculated in core; UI doesn't need them here
+
+
+# Sector Allocation Functions
+async def get_sector_allocation_from_api(api, force_refresh=False):
+    """Async wrapper to get sector allocation from API."""
+    return await asyncio.to_thread(_get_sector_allocation_sync, api, force_refresh)
+
+def _get_sector_allocation_sync(api, force_refresh=False):
+    """Synchronous function that replicates sector_report.py logic."""
+    provider = SectorDataProvider()
+    analyzer = PortfolioSectorAnalyzer(provider)
+    
+    provider.clear_updated_symbols()
+    
+    # This mirrors the main() function logic in sector_report.py
+    try:
+        # Perform analysis from API (like --from-api option in script)
+        report = analyzer.analyze_from_api(api, force_refresh=force_refresh)
+        
+        # Return report and updated symbols
+        return report, provider.updated_symbols
+    except RateLimitError as exc:
+        raise exc
 
 
 # Helpers for using core calculators from UI

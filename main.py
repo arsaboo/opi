@@ -6,21 +6,23 @@ It launches the Textual UI which provides a terminal-based graphical interface
 for all the bot's functionality.
 """
 
-import sys
 import argparse
-import os
-import atexit
 import asyncio
-import alert
+import atexit
+import os
+import sys
+
 from dotenv import load_dotenv
+
+import alert
 
 # Load environment variables from .env file
 load_dotenv()
 
 from api import Api
-from ui.main import OpiApp
 from api.streaming.provider import get_provider
 from state_manager import save_symbols
+from ui.main import OpiApp
 
 # Get API credentials from environment variables
 apiKey = os.getenv("SCHWAB_API_KEY")

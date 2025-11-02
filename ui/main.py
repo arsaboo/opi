@@ -10,6 +10,7 @@ from .views.check_box_spreads import CheckBoxSpreadsWidget
 from .views.check_vertical_spreads import CheckVerticalSpreadsWidget
 from .views.check_synthetic_covered_calls import CheckSyntheticCoveredCallsWidget
 from .widgets.view_margin_requirements import ViewMarginRequirementsWidget
+from .views.sector_allocation_view import SectorAllocationView
 from api.streaming.provider import ensure_provider, get_provider
 from state_manager import load_symbols, save_symbols
 import os
@@ -244,6 +245,7 @@ class OpiApp(App):
         ("5", "view_margin_requirements", "View Margin"),
         ("6", "order_management", "Order Management"),
         ("7", "open_option_positions", "Open Positions"),
+        ("8", "view_sector_allocation", "Sector Allocation"),
         ("d", "toggle_dark", "Toggle dark mode"),
         ("q", "quit", "Quit"),
     ]
@@ -434,6 +436,16 @@ class OpiApp(App):
         widget._previous_market_status = self._previous_market_status
         main_container.mount(widget)
         self.query_one(StatusLog).add_message("Open Option Positions selected.")
+
+    def action_view_sector_allocation(self) -> None:
+        """Action to view sector allocation."""
+        self.update_header("Options Trader - Sector Allocation")
+        main_container = self.query_one("#main_container")
+        main_container.remove_children()
+        widget = SectorAllocationView()
+        widget._previous_market_status = self._previous_market_status
+        main_container.mount(widget)
+        self.query_one(StatusLog).add_message("Sector Allocation selected.")
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
