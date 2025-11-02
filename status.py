@@ -99,8 +99,17 @@ def _sanitize_text_for_display(text: str) -> str:
     """Remove potential sensitive information from text before displaying."""
     import re
     
-    # Remove potential API keys (generic pattern)
-    text = re.sub(r'[A-Z0-9]{20,}', '[REDACTED]', text)
+    # Remove potential API keys (specific patterns)
+    # Stripe secret keys
+    text = re.sub(r'sk_live_[0-9a-zA-Z]{24,}', '[REDACTED]', text)
+    # AWS Access Key ID
+    text = re.sub(r'AKIA[0-9A-Z]{16}', '[REDACTED]', text)
+    # GitHub personal access tokens
+    text = re.sub(r'gh[pousr]_[0-9A-Za-z]{36,255}', '[REDACTED]', text)
+    # Slack tokens
+    text = re.sub(r'xox[baprs]-[0-9A-Za-z-]{10,}', '[REDACTED]', text)
+    # Generic Bearer tokens (JWT-like)
+    text = re.sub(r'eyJ[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}\.[a-zA-Z0-9\-_]{10,}', '[REDACTED]', text)
     
     # Remove potential tokens
     text = re.sub(r'token[^a-z\s][^,\s]+', '[REDACTED]', text, flags=re.IGNORECASE)
