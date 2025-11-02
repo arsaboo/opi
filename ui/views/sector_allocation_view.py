@@ -29,22 +29,16 @@ class SectorAllocationView(BaseSpreadView):
     def compose(self) -> ComposeResult:
         """Create child widgets."""
         yield Vertical(
-            Static("Sector Allocation Dashboard", id="sector_header", classes="title"),
             Container(
                 Static("Loading sector allocation data...", id="sector_chart_display"),
                 id="sector_chart_container",
             ),
             Static("Status: Loading...", id="status_text"),
-            id="main_container",
+            id="sector_view_root",
         )
 
     def on_mount(self) -> None:
         """Called when the widget is mounted."""
-        self.app.update_header("Options Trader - Sector Allocation")
-
-        chart_container = self.query_one("#sector_chart_container")
-        chart_container.border_title = "Sector Allocation"
-
         self.focus()
 
         self.load_sector_data()
@@ -184,9 +178,4 @@ class SectorAllocationView(BaseSpreadView):
         timestamp = (
             self._current_report.get("as_of", "N/A") if self._current_report else "N/A"
         )
-        table.caption = Text(
-            f"Gross exposure: ${gross_value:,.2f} | As of {timestamp} | {updated_hint}",
-            style="dim",
-        )
-
         return table

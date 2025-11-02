@@ -5,12 +5,10 @@ from textual.containers import Container
 from textual.widgets import Footer, Static
 from .widgets.status_log import StatusLog
 from .widgets.roll_short_options import RollShortOptionsWidget
-from .widgets.open_option_positions import OpenOptionPositionsWidget
 from .views.check_box_spreads import CheckBoxSpreadsWidget
 from .views.check_vertical_spreads import CheckVerticalSpreadsWidget
 from .views.check_synthetic_covered_calls import CheckSyntheticCoveredCallsWidget
-from .widgets.view_margin_requirements import ViewMarginRequirementsWidget
-from .views.sector_allocation_view import SectorAllocationView
+from .views.portfolio_dashboard_view import PortfolioDashboardView
 from api.streaming.provider import ensure_provider, get_provider
 from state_manager import load_symbols, save_symbols
 import os
@@ -242,10 +240,8 @@ class OpiApp(App):
         ("2", "check_box_spreads", "Box Spreads"),
         ("3", "check_vertical_spreads", "Vertical Spreads"),
         ("4", "check_synthetic_covered_calls", "Synth Cov Calls"),
-        ("5", "view_margin_requirements", "View Margin"),
+        ("5", "portfolio_dashboard", "Portfolio Dashboard"),
         ("6", "order_management", "Order Management"),
-        ("7", "open_option_positions", "Open Positions"),
-        ("8", "view_sector_allocation", "Sector Allocation"),
         ("d", "toggle_dark", "Toggle dark mode"),
         ("q", "quit", "Quit"),
     ]
@@ -408,16 +404,6 @@ class OpiApp(App):
         main_container.mount(widget)
         self.query_one(StatusLog).add_message("Check Synthetic Covered Calls selected.")
 
-    def action_view_margin_requirements(self) -> None:
-        """Action to view margin requirements."""
-        self.update_header("Options Trader - Margin Requirements")
-        main_container = self.query_one("#main_container")
-        main_container.remove_children()
-        widget = ViewMarginRequirementsWidget()
-        widget._previous_market_status = self._previous_market_status  # Pass status
-        main_container.mount(widget)
-        self.query_one(StatusLog).add_message("View Margin Requirements selected.")
-
     def action_order_management(self) -> None:
         """Action to manage orders."""
         self.update_header("Options Trader - Order Management")
@@ -427,25 +413,16 @@ class OpiApp(App):
         main_container.mount(OrderManagementWidget())
         self.query_one(StatusLog).add_message("Order Management selected.")
 
-    def action_open_option_positions(self) -> None:
-        """Action to view all open option positions."""
-        self.update_header("Options Trader - Open Option Positions")
+    def action_portfolio_dashboard(self) -> None:
+        """Open the consolidated portfolio dashboard."""
         main_container = self.query_one("#main_container")
         main_container.remove_children()
-        widget = OpenOptionPositionsWidget()
+        widget = PortfolioDashboardView()
         widget._previous_market_status = self._previous_market_status
         main_container.mount(widget)
-        self.query_one(StatusLog).add_message("Open Option Positions selected.")
-
-    def action_view_sector_allocation(self) -> None:
-        """Action to view sector allocation."""
-        self.update_header("Options Trader - Sector Allocation")
-        main_container = self.query_one("#main_container")
-        main_container.remove_children()
-        widget = SectorAllocationView()
-        widget._previous_market_status = self._previous_market_status
-        main_container.mount(widget)
-        self.query_one(StatusLog).add_message("Sector Allocation selected.")
+        self.query_one(StatusLog).add_message(
+            "Portfolio Dashboard selected. Use tab headers or [r] to refresh sector data."
+        )
 
     def check_market_status(self) -> None:
         """Check and display market status information."""
